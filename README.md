@@ -5,6 +5,8 @@
   <br>
 </div>
 
+> **Fork notice**: This is a personal fork of [WebAssembly/binaryen](https://github.com/WebAssembly/binaryen) maintained at [jrmarcum/binaryen-ts](https://github.com/jrmarcum/binaryen-ts). See [CLAUDE.md](CLAUDE.md) for project context and developer notes.
+
 [![CI](https://github.com/WebAssembly/binaryen/actions/workflows/ci.yml/badge.svg?branch=main&event=push)](https://github.com/WebAssembly/binaryen/actions/workflows/ci.yml?branch=main&event=push)
 
 # Binaryen
