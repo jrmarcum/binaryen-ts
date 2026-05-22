@@ -3,7 +3,7 @@
  *
  * Unit tests for the WAT tokenizer.
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1";

@@ -19,7 +19,7 @@
  * runner.addDefaultOptimizationPasses().run();
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 export {

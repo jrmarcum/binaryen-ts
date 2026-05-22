@@ -37,7 +37,9 @@ binaryen-ts/
 ├── upstream/     Upstream Binaryen C++ source (git submodule, read-only reference)
 ├── wabt-ts/      Sibling project — wabt TypeScript port (git submodule, read-only reference)
 ├── CLAUDE.md     Project context for Claude Code (this file)
-└── LICENSE       Apache-2.0
+├── LICENSE       Dual-license notice (MIT OR Apache-2.0)
+├── LICENSE-MIT   MIT license text
+└── LICENSE-APACHE  Apache License 2.0 text (copied from upstream)
 ```
 
 The upstream C++ binaryen source lives entirely in `upstream/` and is not built.

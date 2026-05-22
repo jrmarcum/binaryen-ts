@@ -3,7 +3,7 @@
  *
  * Integration tests for the WAT → WasmModule IR parser.
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { assertEquals, assertThrows } from "jsr:@std/assert@^1";

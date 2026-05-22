@@ -20,7 +20,7 @@
  *   .build();
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { Expression } from "./expressions.ts";

@@ -16,7 +16,7 @@
  * deno run --allow-read --allow-write --allow-run main.ts wasm-opt input.wasm -o output.wasm -Oz
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { BinaryenInterop } from "../interop/binaryen-js.ts";

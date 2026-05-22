@@ -1,9 +1,11 @@
 {
   "name": "@jrmarcum/binaryen-ts",
   "version": "0.1.0",
+  "license": "MIT OR Apache-2.0",
   "exports": {
     ".": "./main.ts",
     "./ir": "./src/ir/index.ts",
+    "./binary": "./src/binary/index.ts",
     "./passes": "./src/passes/index.ts",
     "./api": "./src/api/index.ts",
     "./interop": "./src/interop/binaryen-js.ts",
@@ -23,7 +25,9 @@
       "src/**/*.ts",
       "tests/**/*.ts",
       "README.md",
-      "LICENSE"
+      "LICENSE",
+      "LICENSE-MIT",
+      "LICENSE-APACHE"
     ],
     "exclude": [
       "tests/fixtures/**"

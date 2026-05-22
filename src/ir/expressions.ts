@@ -21,7 +21,7 @@
  * );
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { None, Type, Unreachable, ValType } from "./types.ts";
@@ -656,6 +656,110 @@ export function makeNop(): NopExpr {
 /** Creates an `unreachable` expression. */
 export function makeUnreachable(): UnreachableExpr {
   return { kind: ExpressionKind.Unreachable, type: Unreachable };
+}
+
+/** Creates a `loop` expression. */
+export function makeLoop(name: string, body: Expression, resultType: Type = None): LoopExpr {
+  return { kind: ExpressionKind.Loop, type: resultType, name, body };
+}
+
+/** Creates a `br` or `br_if` expression. */
+export function makeBreak(
+  name: string,
+  condition: Expression | null = null,
+  value: Expression | null = null,
+): BreakExpr {
+  return { kind: ExpressionKind.Break, type: None, name, condition, value };
+}
+
+/** Creates a `br_table` expression. */
+export function makeSwitch(
+  targets: string[],
+  defaultTarget: string,
+  condition: Expression,
+  value: Expression | null = null,
+): SwitchExpr {
+  return { kind: ExpressionKind.Switch, type: None, targets, defaultTarget, condition, value };
+}
+
+/** Creates a `select` expression. */
+export function makeSelect(
+  ifTrue: Expression,
+  ifFalse: Expression,
+  condition: Expression,
+): SelectExpr {
+  return { kind: ExpressionKind.Select, type: ifTrue.type, ifTrue, ifFalse, condition };
+}
+
+/** Creates a `call_indirect` expression. */
+export function makeCallIndirect(
+  table: string,
+  target: Expression,
+  operands: Expression[],
+  params: ValType[],
+  results: ValType[],
+  isReturn = false,
+): CallIndirectExpr {
+  const type: Type = results.length > 0 ? results[0] : None;
+  return { kind: ExpressionKind.CallIndirect, type, table, target, operands, params, results, isReturn };
+}
+
+/** Creates a memory load expression. */
+export function makeLoad(
+  bytes: 1 | 2 | 4 | 8 | 16,
+  signed: boolean,
+  offset: number,
+  align: number,
+  ptr: Expression,
+  resultType: ValType,
+): LoadExpr {
+  return { kind: ExpressionKind.Load, type: resultType, bytes, signed, offset, align, ptr };
+}
+
+/** Creates a memory store expression. */
+export function makeStore(
+  bytes: 1 | 2 | 4 | 8 | 16,
+  offset: number,
+  align: number,
+  ptr: Expression,
+  value: Expression,
+): StoreExpr {
+  return { kind: ExpressionKind.Store, type: None, bytes, offset, align, ptr, value };
+}
+
+/** Creates a `memory.size` expression. */
+export function makeMemorySize(): MemorySizeExpr {
+  return { kind: ExpressionKind.MemorySize, type: ValType.I32 };
+}
+
+/** Creates a `memory.grow` expression. */
+export function makeMemoryGrow(delta: Expression): MemoryGrowExpr {
+  return { kind: ExpressionKind.MemoryGrow, type: ValType.I32, delta };
+}
+
+/** Creates a `memory.copy` expression. */
+export function makeMemoryCopy(dest: Expression, source: Expression, size: Expression): MemoryCopyExpr {
+  return { kind: ExpressionKind.MemoryCopy, type: None, dest, source, size };
+}
+
+/** Creates a `memory.fill` expression. */
+export function makeMemoryFill(dest: Expression, value: Expression, size: Expression): MemoryFillExpr {
+  return { kind: ExpressionKind.MemoryFill, type: None, dest, value, size };
+}
+
+/** Creates a `ref.null` expression. */
+export function makeRefNull(type: ValType): RefNullExpr {
+  return { kind: ExpressionKind.RefNull, type };
+}
+
+/** Creates a `ref.func` expression. */
+export function makeRefFunc(func: string, type: ValType = ValType.FuncRef): RefFuncExpr {
+  return { kind: ExpressionKind.RefFunc, type, func };
+}
+
+/** Creates a `ref.is_null` expression. */
+export function makeRefIsNull(value: Expression): RefIsNullExpr {
+  return { kind: ExpressionKind.RefIsNull, type: ValType.I32, value };
 }
 
 // ---------------------------------------------------------------------------

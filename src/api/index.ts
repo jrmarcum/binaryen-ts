@@ -26,7 +26,7 @@
  * await Deno.writeFile("add.wasm", wasm);
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import {

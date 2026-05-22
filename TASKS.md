@@ -52,7 +52,7 @@ Two-phase design: tokenizer → S-expr tree → IR (chosen over porting the C++ 
 
 ---
 
-## Phase 2 — WASM Binary Parser (binary → IR) 🚧 ACTIVE
+## Phase 2 — WASM Binary Parser (binary → IR) ✅ COMPLETE
 
 Reference: `upstream/src/wasm-binary.h`, `upstream/src/parsing.h`
 
@@ -61,42 +61,54 @@ path for the optimizer — WAT text ingestion is handled by wabt-ts.
 
 Implementation files: `src/binary/reader.ts` (LEB128 + raw reads), `src/binary/wasm-parser.ts` (section + instruction decoder)
 
-- [ ] Binary reader (`src/binary/reader.ts`)
-  - [ ] `BinaryReader` class wrapping a `Uint8Array` with a position cursor
-  - [ ] LEB128 unsigned (`readU32`, `readU64`)
-  - [ ] LEB128 signed (`readI32`, `readI64`)
-  - [ ] Raw reads: `readU8`, `readU16`, `readBytes(n)`, `readUTF8(n)`
-  - [ ] EOF and bounds checking with descriptive errors
-- [ ] Section parser (`src/binary/wasm-parser.ts`)
-  - [ ] Magic + version header check (`\0asm`, version 1)
-  - [ ] Section dispatch loop (id → handler)
-  - [ ] Type section — function type signatures → `FuncType[]`
-  - [ ] Import section — func/table/memory/global imports → `WasmImport[]`
-  - [ ] Function section — type index per function
-  - [ ] Table section — `WasmTable[]`
-  - [ ] Memory section — `WasmMemory[]`
-  - [ ] Global section — type + mutability + init expr → `WasmGlobal[]`
-  - [ ] Export section — name + kind + index → `WasmExport[]`
-  - [ ] Code section — local decls + instruction stream → function bodies
-  - [ ] Data section — active (memory index + offset) and passive segments
-  - [ ] Element section — function reference segments
-  - [ ] Custom sections — skip gracefully (preserve name section if present)
-- [ ] Instruction decoder — opcode byte(s) → `Expression` node
-  - [ ] All MVP opcodes (control flow, numeric, memory, parametric)
-  - [ ] Multi-byte opcodes: `0xFC` prefix (bulk memory, saturating trunc)
-  - [ ] SIMD: `0xFD` prefix — stub as `nop` for now (Phase 9)
-  - [ ] GC: `0xFB` prefix — stub as `nop` for now (Phase 7)
-  - [ ] EH: `0x06`/`0x19` prefix — stub as `nop` for now (Phase 8)
-- [ ] `parseWasm(bytes: Uint8Array): WasmModule` — public entry point
-- [ ] Tests (`tests/binary/wasm_parser_test.ts`)
-  - [ ] Parse magic/version rejection
-  - [ ] Parse a minimal hand-crafted `.wasm` (add function)
-  - [ ] Parse a `.wasm` produced by wasmtk or wabt-ts `wat2wasm`
-  - [ ] Round-trip: WAT → `wat2wasm` (wabt-ts) → `parseWasm` → check IR shape
+- [x] Binary reader (`src/binary/reader.ts`)
+  - [x] `BinaryReader` class wrapping a `Uint8Array` with a position cursor
+  - [x] LEB128 unsigned (`readU32`, `readU64`)
+  - [x] LEB128 signed (`readI32`, `readI64`)
+  - [x] Raw reads: `readU8`, `readU16`, `readBytes(n)`, `readUTF8(n)`
+  - [x] EOF and bounds checking with descriptive errors
+- [x] Section parser (`src/binary/wasm-parser.ts`)
+  - [x] Magic + version header check (`\0asm`, version 1)
+  - [x] Section dispatch loop (id → handler)
+  - [x] Type section — function type signatures → `FuncType[]`
+  - [x] Import section — func/table/memory/global imports → `WasmImport[]`
+  - [x] Function section — type index per function
+  - [x] Table section — `WasmTable[]`
+  - [x] Memory section — `WasmMemory[]`
+  - [x] Global section — type + mutability + init expr → `WasmGlobal[]`
+  - [x] Export section — name + kind + index → `WasmExport[]`
+  - [x] Code section — local decls + instruction stream → function bodies
+  - [x] Data section — active (memory index + offset) and passive segments
+  - [x] Element section — function reference segments (kind 0; others skipped)
+  - [x] Custom sections — skip gracefully; name section parsed for function name recovery
+- [x] Instruction decoder — opcode byte(s) → `Expression` node
+  - [x] All MVP opcodes (control flow, numeric, memory, parametric)
+  - [x] Multi-byte opcodes: `0xFC` prefix (bulk memory, saturating trunc)
+  - [x] SIMD: `0xFD` prefix — stubbed as `nop` (Phase 9)
+  - [x] Atomics: `0xFE` prefix — stubbed as `nop` (future)
+  - [x] GC: `0xFB` prefix — stubbed as `nop` (Phase 7)
+- [x] `parseWasm(bytes: Uint8Array, filename?: string): WasmModule` — public entry point
+- [x] `src/binary/index.ts` — re-exports `parseWasm`, `WasmBinaryError`, `BinaryReader`
+- [x] `"./binary"` export added to `deno.json`
+- [x] Tests (`tests/binary/wasm_parser_test.ts`) — 9 tests, all passing
+  - [x] Reject wrong magic bytes
+  - [x] Reject wrong version
+  - [x] Reject truncated header
+  - [x] Empty module produces empty IR collections
+  - [x] `add(i32,i32)->i32` function signature, export, and body shape
+  - [x] Mutable i32 global with const init
+  - [x] Function body containing `global.get`
+
+**Known gaps for future phases**:
+
+- `table.get` / `table.set` stubbed as `nop` (table instructions)
+- EH opcodes not yet decoded (Phase 8)
+- GC struct/array opcodes not yet decoded (Phase 7)
+- Round-trip test (parse binary → IR → encode binary → re-parse → compare) deferred to Phase 3
 
 ---
 
-## Phase 3 — WASM Binary Encoder (IR → binary)
+## Phase 3 — WASM Binary Encoder (IR → binary) 🚧 NEXT
 
 Reference: `upstream/src/wasm-binary.h`
 

@@ -23,7 +23,7 @@
  * console.log(typeToString(tuple)); // "(i32 f64)"
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 // ---------------------------------------------------------------------------

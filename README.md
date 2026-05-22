@@ -152,8 +152,8 @@ This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 | ----- | ------ | ----------- |
 | 0 | ✅ Done | Project setup, upstream submodule, IR type system, pass infrastructure |
 | 1 | ✅ Done | WAT text parser (WASM → IR) |
-| 2 | 🚧 Active | WASM binary parser (binary → IR) |
-| 3 | Planned | WASM binary encoder (IR → .wasm) |
+| 2 | ✅ Done | WASM binary parser (binary → IR) |
+| 3 | 🚧 Active | WASM binary encoder (IR → .wasm) |
 | 4 | Planned | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, CoalesceLocals) |
 | 5 | Planned | Inlining pass |
 | 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |

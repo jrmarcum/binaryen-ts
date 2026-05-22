@@ -26,7 +26,7 @@
  * console.log(listHead(root)); // "module"
  * ```
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { Token, TokenKind, TextPos, WatTokenizeError } from "./tokenizer.ts";

@@ -10,7 +10,7 @@
  * This mirrors the `DeadCodeElimination` pass in `src/passes/DeadCodeElimination.cpp`
  * in the upstream Binaryen C++ library.
  *
- * @license Apache-2.0
+ * @license MIT OR Apache-2.0
  */
 
 import { Expression, ExpressionKind } from "../ir/expressions.ts";
