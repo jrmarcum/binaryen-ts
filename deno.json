@@ -6,6 +6,7 @@
     ".": "./main.ts",
     "./ir": "./src/ir/index.ts",
     "./binary": "./src/binary/index.ts",
+    "./encoder": "./src/encoder/index.ts",
     "./passes": "./src/passes/index.ts",
     "./api": "./src/api/index.ts",
     "./interop": "./src/interop/binaryen-js.ts",

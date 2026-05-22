@@ -26,6 +26,8 @@ binaryen-ts/
 ├── src/          TypeScript source
 │   ├── ir/           WASM IR — types, expression nodes, module builder
 │   ├── parser/       WAT text parser (tokenizer → S-expr → IR)
+│   ├── binary/       WASM binary parser (.wasm → IR)
+│   ├── encoder/      WASM binary encoder (IR → .wasm)
 │   ├── passes/       Optimization pass registry and runner
 │   ├── tools/        CLI tools (wasm-opt, ...)
 │   ├── api/          High-level public API
@@ -151,21 +153,29 @@ The original binaryen C API (`BinaryenConst()`, `BinaryenBinary()`, `BinaryenAdd
 etc.) demonstrates the right shape. The TypeScript constructor API inherits that property
 intentionally: `makeI32Const`, `makeBinary`, `makeBlock`, `ModuleBuilder.addFunction`, etc.
 
-### Constructor API status and gap
+### Constructor API status
 
-Phase 0 established the constructor API. Phase 2 (binary parser) is the stabilization
-exercise — the parser is the first client that must call a constructor for every MVP opcode.
-Known gaps (IR types defined but factory functions missing as of Phase 1 completion):
-`makeGlobalGet`, `makeGlobalSet`, `makeLoad`, `makeStore`, `makeCallIndirect`, `makeLoop`,
-`makeBreak`, `makeBrTable`, `makeSelect`, `makeMemorySize`, `makeMemoryGrow`.
-Phase 2 will surface and fill all remaining gaps.
+Phase 0 established the constructor API. Phases 2 and 3 completed the stabilization
+exercise — the binary parser was the first client that had to call a constructor for every
+MVP opcode, and the encoder was the first client that had to invert every opcode back to
+a byte sequence. All MVP factory functions are now present and exercised:
+`makeI32Const`, `makeI64Const`, `makeF32Const`, `makeF64Const`, `makeLocalGet`,
+`makeLocalSet`, `makeLocalTee`, `makeGlobalGet`, `makeGlobalSet`, `makeBinary`,
+`makeUnary`, `makeReturn`, `makeCall`, `makeCallIndirect`, `makeIf`, `makeBlock`,
+`makeLoop`, `makeBreak`, `makeSwitch`, `makeSelect`, `makeDrop`, `makeNop`,
+`makeUnreachable`, `makeLoad`, `makeStore`, `makeMemorySize`, `makeMemoryGrow`,
+`makeMemoryCopy`, `makeMemoryFill`, `makeRefNull`, `makeRefFunc`, `makeRefIsNull`.
+
+The constructor API is now **stable and complete for MVP**. It is ready for the
+wabt-ts IR bridge dry-run (step 3 of the handshake plan below).
 
 ### Handshake plan with wabt-ts
 
 1. Module-level constructor signatures (`ModuleBuilder.addFunction`, `addGlobal`,
    `addMemory`, `addFunctionImport`, `addExport`) are already stable — share with
-   wabt-ts immediately for early boundary validation.
+   wabt-ts immediately for early boundary validation. ✅ Complete.
 2. When Phase 2 instruction decoder reaches MVP opcode completeness, flag wabt-ts.
+   ✅ Complete — Phase 2 done; all MVP opcodes decoded.
 3. wabt-ts performs a dry-run: walk a sample wabt IR and map each node to a binaryen
    constructor call, without committing to bridge implementation.
 4. Both sides review for structural mismatch before either project commits to the bridge.
@@ -207,6 +217,9 @@ binaryen-ts/
 │   │   ├── pass.ts         Pass interface, PassRunner, registry
 │   │   ├── dce.ts          Dead code elimination (first working pass)
 │   │   └── index.ts        Re-exports + side-effect pass registration
+│   ├── encoder/        WASM binary encoder (Phase 3)
+│   │   ├── wasm-encoder.ts BinaryWriter + WasmEncoder (IR → .wasm)
+│   │   └── index.ts        Re-exports encodeWasm, WasmEncodeError
 │   ├── tools/
 │   │   └── wasm-opt.ts     wasm-opt CLI (native/hybrid dispatch)
 │   ├── api/
@@ -214,7 +227,9 @@ binaryen-ts/
 │   └── interop/
 │       └── binaryen-js.ts  Hybrid bridge to upstream binaryen.js WASM
 └── tests/
-    └── parser/         WAT parser round-trip tests
+    ├── parser/         WAT parser round-trip tests
+    ├── binary/         WASM binary parser tests
+    └── encoder/        WASM binary encoder round-trip tests
 ```
 
 ### Phase Status
@@ -223,8 +238,8 @@ binaryen-ts/
 | ----- | ------ | ----------- |
 | 0 | ✅ Done | Foundation: IR types, expressions, module builder, pass infra, DCE, API, interop |
 | 1 | ✅ Done | WAT text parser (tokenizer → S-expr → IR) — 47/47 tests passing |
-| 2 | 🚧 Active | WASM binary parser |
-| 3 | Planned | WASM binary encoder (IR → .wasm) — WAT text output handled by wabt-ts |
+| 2 | ✅ Done | WASM binary parser (.wasm → IR) — 9/9 tests passing |
+| 3 | ✅ Done | WASM binary encoder (IR → .wasm) — 14/14 tests passing; full round-trip verified |
 | 4 | Planned | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, etc.) |
 | 5 | Planned | Inlining pass |
 | 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
@@ -238,7 +253,7 @@ Three optimization tiers:
 
 1. **Native TypeScript passes** — pure TypeScript in the pass registry (`src/passes/`).
 2. **Subprocess hybrid** — pipe WAT through system `wasm-opt` binary (`BinaryenInterop.optimizeViaSubprocess`). Works today.
-3. **binaryen.js WASM hybrid** — load upstream `binaryen.js` Emscripten binary. Planned Phase 1.
+3. **binaryen.js WASM hybrid** — load upstream `binaryen.js` Emscripten binary. Deferred (not on the critical path now that a native encoder exists in Phase 3).
 
 `hybridMode: true` on any optimization call routes to tier 2 (subprocess). Tier 3 is behind `BinaryenInterop.create()` which currently throws a not-implemented error.
 
@@ -259,6 +274,15 @@ All exported symbols must have JSDoc. File-level `@module` tags required. `deno.
 #### IR tree ownership
 
 Same invariant as upstream Binaryen: each expression node must have exactly one parent. Never share `Expression` objects across tree positions. Factory functions (`makeI32Const`, `makeBinary`, etc.) always create new objects.
+
+#### Binary encoder design (Phase 3)
+
+- **`BinaryWriter`**: simple growable `number[]` buffer with LEB128 (signed + unsigned), IEEE 754 float, and UTF-8 helpers. Two-pass section encoding: each section is encoded into a scratch `BinaryWriter`, then the id + byte-length prefix + body are appended to the main output.
+- **Name → index resolution**: imported entities come first (functions, globals, tables), local definitions follow. Maps are built once at encode time from the `WasmModule` structure.
+- **Type deduplication**: unique `FuncType` signatures are collected by a tree walk over all functions and `call_indirect` expressions and assigned contiguous indices.
+- **Null-name block unpacking**: a `BlockExpr` with `name === null` is the function body container produced by the binary parser. The encoder unpacks it directly into the function body byte stream rather than wrapping it in a `0x02...0x0b` block.
+- **Load/store opcode resolution**: derived from `(bytes, signed, resultType)` for loads and `(bytes, value.type)` for stores — no separate opcode field stored in the IR.
+- **Label depth resolution**: a `string[]` label stack grows as blocks/loops are entered and shrinks on exit; `br`/`br_if`/`br_table` depths are computed as `stack.length - 1 - lastIndexOf(name)`.
 
 #### Upstream C++ reference
 

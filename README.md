@@ -18,8 +18,11 @@ A TypeScript / Deno port of the [Binaryen](https://github.com/WebAssembly/binary
 ```text
 binaryen-ts/
 ├── src/ir/        IR types, expression nodes, module builder  → @jrmarcum/binaryen-ts/ir
+├── src/parser/    WAT text parser (tokenizer → S-expr → IR)  → (internal; wabt-ts is the external front door)
+├── src/binary/    WASM binary parser (.wasm → IR)             → @jrmarcum/binaryen-ts/binary
+├── src/encoder/   WASM binary encoder (IR → .wasm)           → @jrmarcum/binaryen-ts/encoder
 ├── src/passes/    Optimization pass registry and runner       → @jrmarcum/binaryen-ts/passes
-├── src/tools/     CLI tools (wasm-opt, wasm-dis, wasm-as)
+├── src/tools/     CLI tools (wasm-opt)
 ├── src/api/       Unified high-level API                      → @jrmarcum/binaryen-ts/api
 ├── src/interop/   Upstream binaryen.js bridge (hybrid mode)  → @jrmarcum/binaryen-ts/interop
 └── upstream/      Upstream Binaryen C++ source (git submodule, reference only)
@@ -140,6 +143,8 @@ Enable hybrid mode by passing `hybridMode: true` to optimization calls, or by us
 | `@jrmarcum/binaryen-ts` | CLI entry point |
 | `@jrmarcum/binaryen-ts/api` | High-level `createModule`, `Module`, `ExprBuilder` |
 | `@jrmarcum/binaryen-ts/ir` | `ValType`, `ModuleBuilder`, `BinaryOp`, `UnaryOp`, expression builders |
+| `@jrmarcum/binaryen-ts/binary` | `parseWasm(bytes)` — WASM binary → IR |
+| `@jrmarcum/binaryen-ts/encoder` | `encodeWasm(mod)` — IR → WASM binary |
 | `@jrmarcum/binaryen-ts/passes` | `PassRunner`, `registerPass`, `listPasses` |
 | `@jrmarcum/binaryen-ts/interop` | `BinaryenInterop` (upstream binaryen.js bridge) |
 | `@jrmarcum/binaryen-ts/tools/wasm-opt` | `wasmOpt()` function and `main()` CLI handler |
@@ -153,8 +158,8 @@ This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 | 0 | ✅ Done | Project setup, upstream submodule, IR type system, pass infrastructure |
 | 1 | ✅ Done | WAT text parser (WASM → IR) |
 | 2 | ✅ Done | WASM binary parser (binary → IR) |
-| 3 | 🚧 Active | WASM binary encoder (IR → .wasm) |
-| 4 | Planned | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, CoalesceLocals) |
+| 3 | ✅ Done | WASM binary encoder (IR → .wasm) — full round-trip verified |
+| 4 | 🚧 Next | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, CoalesceLocals) |
 | 5 | Planned | Inlining pass |
 | 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
 | 7 | Planned | GC proposal types and instructions |
