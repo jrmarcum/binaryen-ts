@@ -174,6 +174,15 @@ Phase 2 will surface and fill all remaining gaps.
 
 All project context for Claude Code lives in this file (`CLAUDE.md`) to keep the project fully portable across machines. Do not store project-specific knowledge in machine-local Claude memory.
 
+When something needs to be remembered for future sessions, write it into the appropriate project file — not into machine-local memory. Use the table below to decide where:
+
+| What changed | Record it in |
+| ------------ | ------------ |
+| Architecture decision, cross-project agreement, design constraint, license, ecosystem context | `CLAUDE.md` — permanent project knowledge |
+| Phase task added, completed, deferred, or re-scoped | `TASKS.md` — phase-by-phase work tracking |
+| Phase status visible to users / external contributors | `README.md` — phase table and feature list |
+| All three touch points (e.g. completing a phase) | Update all three files consistently |
+
 ---
 
 ## TypeScript Port — binaryen-ts
