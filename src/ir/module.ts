@@ -74,10 +74,18 @@ export interface WasmImport {
   params?: ValType[];
   /** For function imports: result types. */
   results?: ValType[];
-  /** For global imports: value type. */
+  /** For global imports: value type. For table imports: element type (FuncRef | ExternRef). */
   type?: ValType;
   /** For global imports: whether the global is mutable. */
   mutable?: boolean;
+  /** For table/memory imports: minimum size (elements or pages). */
+  initial?: number;
+  /** For table/memory imports: maximum size, or null for unbounded. */
+  max?: number | null;
+  /** For memory imports: whether the memory is shared (threads proposal). */
+  shared?: boolean;
+  /** For memory imports: whether the memory uses 64-bit addressing. */
+  is64?: boolean;
 }
 
 /**
@@ -368,9 +376,19 @@ export class ModuleBuilder {
    * @param internalName - Name used inside the module to reference this table.
    * @param module - External module name.
    * @param base - External table name.
+   * @param type - Element type (`FuncRef` or `ExternRef`).
+   * @param initial - Minimum element count.
+   * @param max - Maximum element count, or `null` for unbounded.
    */
-  addTableImport(internalName: string, module: string, base: string): this {
-    this._imports.push({ kind: "table", name: internalName, module, base });
+  addTableImport(
+    internalName: string,
+    module: string,
+    base: string,
+    type: ValType = ValType.FuncRef,
+    initial = 0,
+    max: number | null = null,
+  ): this {
+    this._imports.push({ kind: "table", name: internalName, module, base, type, initial, max });
     return this;
   }
 
@@ -380,9 +398,21 @@ export class ModuleBuilder {
    * @param internalName - Name used inside the module to reference this memory.
    * @param module - External module name.
    * @param base - External memory name.
+   * @param initial - Minimum size in 64 KiB pages.
+   * @param max - Maximum pages, or `null` for unbounded.
+   * @param shared - Whether the memory is shared (threads proposal).
+   * @param is64 - Whether the memory uses 64-bit addressing (memory64 proposal).
    */
-  addMemoryImport(internalName: string, module: string, base: string): this {
-    this._imports.push({ kind: "memory", name: internalName, module, base });
+  addMemoryImport(
+    internalName: string,
+    module: string,
+    base: string,
+    initial: number,
+    max: number | null = null,
+    shared = false,
+    is64 = false,
+  ): this {
+    this._imports.push({ kind: "memory", name: internalName, module, base, initial, max, shared, is64 });
     return this;
   }
 
