@@ -334,14 +334,43 @@ export class ModuleBuilder {
     params: ValType[],
     results: ValType[],
   ): this {
-    this._imports.push({
-      kind: "function",
-      name: internalName,
-      module,
-      base,
-      params,
-      results,
-    });
+    this._imports.push({ kind: "function", name: internalName, module, base, params, results });
+    return this;
+  }
+
+  /**
+   * Adds a global import.
+   *
+   * @param internalName - Name used inside the module to reference this global.
+   * @param module - External module name.
+   * @param base - External global name.
+   */
+  addGlobalImport(internalName: string, module: string, base: string): this {
+    this._imports.push({ kind: "global", name: internalName, module, base });
+    return this;
+  }
+
+  /**
+   * Adds a table import.
+   *
+   * @param internalName - Name used inside the module to reference this table.
+   * @param module - External module name.
+   * @param base - External table name.
+   */
+  addTableImport(internalName: string, module: string, base: string): this {
+    this._imports.push({ kind: "table", name: internalName, module, base });
+    return this;
+  }
+
+  /**
+   * Adds a memory import.
+   *
+   * @param internalName - Name used inside the module to reference this memory.
+   * @param module - External module name.
+   * @param base - External memory name.
+   */
+  addMemoryImport(internalName: string, module: string, base: string): this {
+    this._imports.push({ kind: "memory", name: internalName, module, base });
     return this;
   }
 

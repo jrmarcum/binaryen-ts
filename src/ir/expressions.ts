@@ -565,6 +565,16 @@ export function makeF64Const(value: number): ConstExpr {
   return { kind: ExpressionKind.Const, type: ValType.F64, value: { f64: value } };
 }
 
+/** Creates a `global.get` expression. */
+export function makeGlobalGet(name: string, type: ValType): GlobalGetExpr {
+  return { kind: ExpressionKind.GlobalGet, type, name };
+}
+
+/** Creates a `global.set` expression (result type is `none`). */
+export function makeGlobalSet(name: string, value: Expression): GlobalSetExpr {
+  return { kind: ExpressionKind.GlobalSet, type: None, name, value };
+}
+
 /** Creates a `local.get` expression. */
 export function makeLocalGet(index: number, type: ValType): LocalGetExpr {
   return { kind: ExpressionKind.LocalGet, type, index };
