@@ -35,12 +35,16 @@ binaryen-ts/
 ├── deno.json     Deno config, JSR exports, provenance publishing
 ├── TASKS.md      Phase-by-phase port task list
 ├── upstream/     Upstream Binaryen C++ source (git submodule, read-only reference)
+├── wabt-ts/      Sibling project — wabt TypeScript port (git submodule, read-only reference)
 ├── CLAUDE.md     Project context for Claude Code (this file)
 └── LICENSE       Apache-2.0
 ```
 
 The upstream C++ binaryen source lives entirely in `upstream/` and is not built.
 Consult it when porting passes or parsing logic to TypeScript.
+
+`wabt-ts/` is tracked for cross-project coordination — particularly the IR bridge
+handshake and Phase 2 IR design alignment. Read-only reference; do not modify.
 
 ## Key Upstream Reference Files
 
@@ -63,6 +67,106 @@ deno task check   # type-check all files
 deno task test    # run test suite
 deno task fmt     # format
 ```
+
+## Ecosystem Context
+
+binaryen-ts is one of three projects in the toolchain. Understanding the division of labor
+is important when deciding whether to port a component here or defer to a sibling project.
+
+| Project | Role | JSR |
+| ------- | ---- | --- |
+| wasmtk | WASM compiler, bundler (`wasmbundler`), `wasic` compiler | `@jrmarcum/wasmtk` |
+| wabt-ts | Format tools: `wat2wasm`, `wasm2wat`, `wasm-validate`, `wasm-objdump`, `wasm-strip`, `wasm2ts` | `@jrmarcum/wabt-ts` |
+| binaryen-ts | Optimizer: IR, optimization passes, `wasm-opt` | `@jrmarcum/binaryen-ts` |
+
+**Planned merger**: All three projects will eventually merge into a single project called
+**`binaryang`**. Design decisions should keep the package boundaries clean to make that
+merge straightforward.
+
+### What is NOT in scope for binaryen-ts (handled elsewhere)
+
+| Component | Reason |
+| --------- | ------ |
+| WAT printer / `wasm-dis` | wabt-ts (`wasm2wat`) |
+| `wasm-as` | wabt-ts (`wat2wasm`) |
+| Validation | wabt-ts (`wasm-validate`) |
+| `wasm2js` | Deno/Bun run wasm natively |
+| `wasm-shell` / interpreter | Deno/Bun have native wasm JIT |
+| `wasm-merge` | wasmtk covers via wasmbundler |
+| `wasm-ctor-eval` | Not in toolchain critical path |
+| `wasm-reduce` | C++ dev tooling only |
+| Relooper | Not needed for the pass set being ported |
+| `wasm2c` | wabt-ts `wasm2ts` replaces it |
+| Python scripts | All dev/CI tooling; no functional role in the optimizer |
+
+## Cross-Project Architecture (binaryen-ts ↔ wabt-ts coordination)
+
+These decisions were agreed between binaryen-ts and wabt-ts and must be respected
+in both projects. The eventual merger target is **binaryang**.
+
+### Agreed pipeline
+
+```text
+WAT / .wasm input
+    ↓  wabt-ts parser         → wabt format IR (tree-shaped, post-order traversable)
+    ↓  IR bridge              → binaryen optimization IR   ← the architectural join
+    ↓  binaryen-ts passes     → optimized binaryen IR
+    ↓  binaryen-ts encoder    → .wasm output
+    ↓  wasmtime               → native execution
+    ↓  canonical ABI          → component boundary (wasmtk's concern)
+```
+
+There is also a **direct path** for pure optimization (no prior wabt-ts processing):
+
+```text
+.wasm binary → binaryen-ts parseWasm() → binaryen optimization IR → passes → encoder
+```
+
+Both paths are first-class. The bridge path is the production route when wabt-ts tools
+(validate, strip, etc.) have already processed the module. Re-serializing to binary
+between wabt-ts and binaryen-ts steps just to use the direct path is wasteful and wrong.
+
+### Five agreed decisions
+
+| Decision | Resolution |
+| -------- | ---------- |
+| Binary encoder ownership | binaryen-ts encoder = canonical output for optimized wasm; wabt-ts encoder = format tools and round-trip fidelity only |
+| WAT parser front door | wabt-ts WAT parser = front door for all external input (user-authored .wat, wasmtk source); binaryen-ts WAT parser = internal IR construction, tests, and pass development only |
+| Bridge architecture | Bridge = wabt-ts calling binaryen-ts constructor API directly; not a separate translation layer |
+| wabt-ts IR shape | Tree-shaped (not flat stack-machine list); post-order traversable; no parent context required to resolve a child node; no upward references |
+| binaryang merger | All three projects (wasmtk, wabt-ts, binaryen-ts) eventually merge into binaryang; design package boundaries to make that merge clean |
+
+### IR bridge design constraints
+
+The bridge reduces to a single recursive post-order walk over the wabt format IR,
+calling binaryen constructor functions at each node. For this to work:
+
+- wabt-ts expression nodes must be resolvable bottom-up (children before parents)
+- No node may require parent context to be constructed
+- binaryen-ts constructor API must be flat, stable, and complete for all MVP opcodes
+
+The original binaryen C API (`BinaryenConst()`, `BinaryenBinary()`, `BinaryenAddFunction()`,
+etc.) demonstrates the right shape. The TypeScript constructor API inherits that property
+intentionally: `makeI32Const`, `makeBinary`, `makeBlock`, `ModuleBuilder.addFunction`, etc.
+
+### Constructor API status and gap
+
+Phase 0 established the constructor API. Phase 2 (binary parser) is the stabilization
+exercise — the parser is the first client that must call a constructor for every MVP opcode.
+Known gaps (IR types defined but factory functions missing as of Phase 1 completion):
+`makeGlobalGet`, `makeGlobalSet`, `makeLoad`, `makeStore`, `makeCallIndirect`, `makeLoop`,
+`makeBreak`, `makeBrTable`, `makeSelect`, `makeMemorySize`, `makeMemoryGrow`.
+Phase 2 will surface and fill all remaining gaps.
+
+### Handshake plan with wabt-ts
+
+1. Module-level constructor signatures (`ModuleBuilder.addFunction`, `addGlobal`,
+   `addMemory`, `addFunctionImport`, `addExport`) are already stable — share with
+   wabt-ts immediately for early boundary validation.
+2. When Phase 2 instruction decoder reaches MVP opcode completeness, flag wabt-ts.
+3. wabt-ts performs a dry-run: walk a sample wabt IR and map each node to a binaryen
+   constructor call, without committing to bridge implementation.
+4. Both sides review for structural mismatch before either project commits to the bridge.
 
 ## Portability Note
 
@@ -108,11 +212,11 @@ binaryen-ts/
 | ----- | ------ | ----------- |
 | 0 | ✅ Done | Foundation: IR types, expressions, module builder, pass infra, DCE, API, interop |
 | 1 | ✅ Done | WAT text parser (tokenizer → S-expr → IR) — 47/47 tests passing |
-| 2 | Planned | WASM binary parser |
-| 3 | Planned | WAT/WASM serializer (IR → text / binary) |
+| 2 | 🚧 Active | WASM binary parser |
+| 3 | Planned | WASM binary encoder (IR → .wasm) — WAT text output handled by wabt-ts |
 | 4 | Planned | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, etc.) |
 | 5 | Planned | Inlining pass |
-| 6 | Planned | `wasm-dis` / `wasm-as` CLI tools |
+| 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
 | 7+ | Planned | GC, EH, SIMD, wasic compilation |
 
 ### Key Design Decisions

@@ -52,48 +52,63 @@ Two-phase design: tokenizer → S-expr tree → IR (chosen over porting the C++ 
 
 ---
 
-## Phase 2 — WASM Binary Parser (binary → IR)
+## Phase 2 — WASM Binary Parser (binary → IR) 🚧 ACTIVE
 
-Reference: `upstream/src/parsing.h`, `upstream/src/wasm-binary.h`
+Reference: `upstream/src/wasm-binary.h`, `upstream/src/parsing.h`
 
-**Goal**: Read a `.wasm` binary file into the TypeScript IR.
+**Goal**: Read a `.wasm` binary file into the TypeScript IR. This is the primary input
+path for the optimizer — WAT text ingestion is handled by wabt-ts.
 
-- [ ] LEB128 reader (signed + unsigned)
-- [ ] Binary format section parser
-  - [ ] Type section (function signatures)
-  - [ ] Import section
-  - [ ] Function section (type indices)
-  - [ ] Table section
-  - [ ] Memory section
-  - [ ] Global section
-  - [ ] Export section
-  - [ ] Code section (function bodies + local decls)
-  - [ ] Data section
-  - [ ] Element section
-- [ ] Instruction decoder — opcode → `Expression` node
-- [ ] Validation: check type stack consistency during decode
-- [ ] Round-trip test: compile a known `.ts` with wasmtk → decode → re-encode → compare bytes
+Implementation files: `src/binary/reader.ts` (LEB128 + raw reads), `src/binary/wasm-parser.ts` (section + instruction decoder)
+
+- [ ] Binary reader (`src/binary/reader.ts`)
+  - [ ] `BinaryReader` class wrapping a `Uint8Array` with a position cursor
+  - [ ] LEB128 unsigned (`readU32`, `readU64`)
+  - [ ] LEB128 signed (`readI32`, `readI64`)
+  - [ ] Raw reads: `readU8`, `readU16`, `readBytes(n)`, `readUTF8(n)`
+  - [ ] EOF and bounds checking with descriptive errors
+- [ ] Section parser (`src/binary/wasm-parser.ts`)
+  - [ ] Magic + version header check (`\0asm`, version 1)
+  - [ ] Section dispatch loop (id → handler)
+  - [ ] Type section — function type signatures → `FuncType[]`
+  - [ ] Import section — func/table/memory/global imports → `WasmImport[]`
+  - [ ] Function section — type index per function
+  - [ ] Table section — `WasmTable[]`
+  - [ ] Memory section — `WasmMemory[]`
+  - [ ] Global section — type + mutability + init expr → `WasmGlobal[]`
+  - [ ] Export section — name + kind + index → `WasmExport[]`
+  - [ ] Code section — local decls + instruction stream → function bodies
+  - [ ] Data section — active (memory index + offset) and passive segments
+  - [ ] Element section — function reference segments
+  - [ ] Custom sections — skip gracefully (preserve name section if present)
+- [ ] Instruction decoder — opcode byte(s) → `Expression` node
+  - [ ] All MVP opcodes (control flow, numeric, memory, parametric)
+  - [ ] Multi-byte opcodes: `0xFC` prefix (bulk memory, saturating trunc)
+  - [ ] SIMD: `0xFD` prefix — stub as `nop` for now (Phase 9)
+  - [ ] GC: `0xFB` prefix — stub as `nop` for now (Phase 7)
+  - [ ] EH: `0x06`/`0x19` prefix — stub as `nop` for now (Phase 8)
+- [ ] `parseWasm(bytes: Uint8Array): WasmModule` — public entry point
+- [ ] Tests (`tests/binary/wasm_parser_test.ts`)
+  - [ ] Parse magic/version rejection
+  - [ ] Parse a minimal hand-crafted `.wasm` (add function)
+  - [ ] Parse a `.wasm` produced by wasmtk or wabt-ts `wat2wasm`
+  - [ ] Round-trip: WAT → `wat2wasm` (wabt-ts) → `parseWasm` → check IR shape
 
 ---
 
-## Phase 3 — WAT / WASM Serializer (IR → output)
+## Phase 3 — WASM Binary Encoder (IR → binary)
 
-Reference: `upstream/src/printing.h`, `upstream/src/wasm-binary.h`
+Reference: `upstream/src/wasm-binary.h`
 
-**Goal**: Serialize the IR back to WAT text and WASM binary.
+**Goal**: Serialize the IR back to a `.wasm` binary. WAT text output is handled by
+`wabt-ts` (`wasm2wat`) and is out of scope here.
 
-- [ ] WAT printer (`src/printer/wat-printer.ts`)
-  - [ ] Indented S-expression output
-  - [ ] All expression kinds
-  - [ ] Name resolution (index → `$name`)
-  - [ ] `--generate-stack-ir --print-stack-ir` mode for valid wasm text
 - [ ] WASM binary encoder (`src/encoder/wasm-encoder.ts`)
-  - [ ] LEB128 writer
-  - [ ] Section encoding for all section types
-  - [ ] Code section: function bodies
+  - [ ] LEB128 writer (signed + unsigned)
+  - [ ] Section encoding for all section types (type, import, function, table, memory, global, export, code, data, element)
+  - [ ] Code section: function bodies, instruction encoding
   - [ ] Data section with offset expressions
-- [ ] Round-trip test: IR → WAT → parse → IR (must be structurally equal)
-- [ ] Round-trip test: IR → WASM binary → parse → IR (must be structurally equal)
+- [ ] Round-trip test: IR → WASM binary → parse (Phase 2) → IR (must be structurally equal)
 
 ---
 
@@ -137,22 +152,18 @@ Reference: `upstream/src/passes/Inlining.cpp`
 
 ---
 
-## Phase 6 — `wasm-dis` and `wasm-as` CLI Tools
+## Phase 6 — `wasm-opt` CLI Integration
 
-Reference: `upstream/src/tools/wasm-dis.cpp`, `upstream/src/tools/wasm-as.cpp`
+**Goal**: Wire the native TypeScript optimization passes into the `wasm-opt` CLI tool
+so it operates without the subprocess hybrid. WAT↔binary conversion and disassembly
+are handled by `wabt-ts` and are out of scope here.
 
-**Goal**: Implement disassembler and assembler as Deno CLI tools.
-
-- [ ] `wasm-dis` (`src/tools/wasm-dis.ts`)
-  - [ ] Read `.wasm` binary → parse IR (requires Phase 2)
-  - [ ] Print WAT text
-  - [ ] `--generate-stack-ir --print-stack-ir` flags
-  - [ ] `--source-map` support
-- [ ] `wasm-as` (`src/tools/wasm-as.ts`)
-  - [ ] Read `.wat` text → parse IR (requires Phase 1)
-  - [ ] Serialize to `.wasm` binary (requires Phase 3)
-  - [ ] `--validate` flag
-- [ ] Register both in `main.ts` CLI dispatch
+- [ ] `wasm-opt` reads `.wasm` binary → parses IR (requires Phase 2)
+- [ ] Runs selected optimization passes (requires Phase 4)
+- [ ] Writes optimized `.wasm` binary (requires Phase 3)
+- [ ] `-O1`/`-O2`/`-O3`/`-Os`/`-Oz` flag mapping to pass sets
+- [ ] `--pass-arg` for per-pass tuning
+- [ ] Remove subprocess hybrid dependency once native passes are complete
 
 ---
 
@@ -225,13 +236,17 @@ Reference: `../wasmtk/src/wasic.ts`
 
 ```text
 Phase 0 (foundation)
-   └── Phase 1 (WAT parser)
-         └── Phase 3 (serializer) ←── Phase 2 (binary parser)
+   └── Phase 1 (WAT parser — IR construction + testing)
+   └── Phase 2 (binary parser — .wasm → IR)
+         └── Phase 3 (binary encoder — IR → .wasm)
                └── Phase 4 (core passes)
                      └── Phase 5 (inlining)
-   └── Phase 6 (CLI tools) ← requires Phase 1 + Phase 3
-   └── Phase 7 (GC) ← extends Phase 1 + Phase 3
-   └── Phase 8 (EH) ← extends Phase 1 + Phase 3
-   └── Phase 9 (SIMD) ← extends Phase 1 + Phase 3
+                           └── Phase 6 (wasm-opt native CLI)
+   └── Phase 7 (GC) ← extends IR + passes
+   └── Phase 8 (EH) ← extends IR + passes
+   └── Phase 9 (SIMD) ← extends IR + passes
    └── Phase 10 (wasic compilation) ← requires Phase 4
+
+Note: WAT text output (wasm2wat) and validation (wasm-validate) are handled
+by wabt-ts and are out of scope for binaryen-ts.
 ```

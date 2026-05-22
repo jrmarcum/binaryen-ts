@@ -126,7 +126,7 @@ deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -S
 `binaryen-ts` uses a **hybrid** approach to optimization:
 
 | Mode | What runs | Use when |
-|------|-----------|----------|
+| ---- | --------- | -------- |
 | Native TypeScript | Built-in passes (`DCE`, `Vacuum`, etc.) | Fast iteration, unit testing passes |
 | Hybrid (subprocess) | Upstream `wasm-opt` binary on `PATH` | Maximum optimization quality |
 | Hybrid (binaryen.js) | Upstream `binaryen.js` WASM binary | No binary dependency, browser compat |
@@ -136,7 +136,7 @@ Enable hybrid mode by passing `hybridMode: true` to optimization calls, or by us
 ## Module exports (JSR)
 
 | Import path | Contents |
-|---|---|
+| ----------- | -------- |
 | `@jrmarcum/binaryen-ts` | CLI entry point |
 | `@jrmarcum/binaryen-ts/api` | High-level `createModule`, `Module`, `ExprBuilder` |
 | `@jrmarcum/binaryen-ts/ir` | `ValType`, `ModuleBuilder`, `BinaryOp`, `UnaryOp`, expression builders |
@@ -149,14 +149,14 @@ Enable hybrid mode by passing `hybridMode: true` to optimization calls, or by us
 This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 
 | Phase | Status | Description |
-|-------|--------|-------------|
+| ----- | ------ | ----------- |
 | 0 | ✅ Done | Project setup, upstream submodule, IR type system, pass infrastructure |
 | 1 | ✅ Done | WAT text parser (WASM → IR) |
-| 2 | Planned | WASM binary parser (binary → IR) |
-| 3 | Planned | WAT / WASM serializer (IR → text / binary) |
-| 4 | Planned | Port core passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, CoalesceLocals) |
-| 5 | Planned | Port Inlining pass |
-| 6 | Planned | `wasm-dis` / `wasm-as` CLI tools |
+| 2 | 🚧 Active | WASM binary parser (binary → IR) |
+| 3 | Planned | WASM binary encoder (IR → .wasm) |
+| 4 | Planned | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, CoalesceLocals) |
+| 5 | Planned | Inlining pass |
+| 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
 | 7 | Planned | GC proposal types and instructions |
 | 8 | Planned | Exception-handling proposal |
 | 9 | Planned | SIMD instructions |
@@ -178,13 +178,20 @@ deno task test
 deno task fmt
 ```
 
-## Upstream reference
+## Submodule references
 
-To update the upstream submodule:
+To update the upstream binaryen C++ reference:
 
 ```sh
 cd upstream && git fetch --depth 1 origin main && git checkout FETCH_HEAD
 cd .. && git add upstream && git commit -m "bump upstream binaryen"
+```
+
+To update the wabt-ts sibling reference:
+
+```sh
+cd wabt-ts && git fetch --depth 1 origin main && git checkout FETCH_HEAD
+cd .. && git add wabt-ts && git commit -m "bump wabt-ts reference"
 ```
 
 ## License
