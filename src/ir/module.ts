@@ -74,6 +74,10 @@ export interface WasmImport {
   params?: ValType[];
   /** For function imports: result types. */
   results?: ValType[];
+  /** For global imports: value type. */
+  type?: ValType;
+  /** For global imports: whether the global is mutable. */
+  mutable?: boolean;
 }
 
 /**
