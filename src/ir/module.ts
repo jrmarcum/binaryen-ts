@@ -344,9 +344,17 @@ export class ModuleBuilder {
    * @param internalName - Name used inside the module to reference this global.
    * @param module - External module name.
    * @param base - External global name.
+   * @param type - Value type of the global.
+   * @param mutable - Whether the global is mutable.
    */
-  addGlobalImport(internalName: string, module: string, base: string): this {
-    this._imports.push({ kind: "global", name: internalName, module, base });
+  addGlobalImport(
+    internalName: string,
+    module: string,
+    base: string,
+    type: ValType,
+    mutable = false,
+  ): this {
+    this._imports.push({ kind: "global", name: internalName, module, base, type, mutable });
     return this;
   }
 
