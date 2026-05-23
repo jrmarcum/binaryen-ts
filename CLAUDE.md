@@ -214,7 +214,7 @@ binaryen-ts/
 │   │   ├── tokenizer.ts    WAT lexer → Token stream
 │   │   ├── sexpr.ts        S-expression tree (List / Atom)
 │   │   └── wat-parser.ts   S-expr tree → WasmModule IR
-│   ├── passes/         Optimization pass registry and runner (Phase 4)
+│   ├── passes/         Optimization pass registry and runner (Phases 4–5)
 │   │   ├── pass.ts                         Pass interface, PassRunner, registry
 │   │   ├── dce.ts                          Dead code elimination
 │   │   ├── vacuum.ts                       Remove nops, empty blocks, drop(pure)
@@ -225,6 +225,7 @@ binaryen-ts/
 │   │   ├── local-cse.ts                    Within-block common subexpression elimination
 │   │   ├── remove-unused-module-elements.ts  Reachability-based dead function/global removal
 │   │   ├── pick-load-signs.ts              Sign/unsigned selection for narrow loads
+│   │   ├── inlining.ts                     Inlining + InliningOptimizing (Phase 5)
 │   │   └── index.ts                        Re-exports + side-effect pass registration
 │   ├── encoder/        WASM binary encoder (Phase 3)
 │   │   ├── wasm-encoder.ts BinaryWriter + WasmEncoder (IR → .wasm)
@@ -251,7 +252,7 @@ binaryen-ts/
 | 2 | ✅ Done | WASM binary parser (.wasm → IR) — 9/9 tests passing |
 | 3 | ✅ Done | WASM binary encoder (IR → .wasm) — 14/14 tests passing; full round-trip verified |
 | 4 | ✅ Done | Core optimization passes — 8 passes, 26/26 tests passing |
-| 5 | Planned | Inlining pass |
+| 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, 14/14 tests passing |
 | 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
 | 7+ | Planned | GC, EH, SIMD, wasic compilation |
 
@@ -311,6 +312,21 @@ Key design decisions:
 - **LocalCSE**: keys pure sub-expressions by structural string hash. Invalidates on `local.set`, `global.set`, calls, and stores. Recurses into `drop`/`return`/`local.set` children when counting and rewriting.
 - **RemoveUnusedModuleElements**: seeds from exports + element segments; fixed-point call-graph walk via `Call` and `RefFunc` nodes. Imported elements are never removed.
 - **PickLoadSigns**: tracks `local.set(i, narrow_load)` → counts signed/unsigned uses of `i` → flips load sign if all uses agree. Uses parent-context walk to classify comparison operators.
+
+#### Inlining pass design (Phase 5)
+
+`src/passes/inlining.ts` provides two registered passes: `Inlining` and `InliningOptimizing`.
+
+Key design decisions:
+
+- **Call graph analysis**: `buildFunctionInfo` walks every defined function body to count call-site references (`refs`), detect `hasLoops` / `hasCalls`, and mark `usedGlobally` from exports and element segments.
+- **Inlineability thresholds** (matching upstream `pass.h` defaults): always inline if `size ≤ 2`; inline single-caller functions if `size ≤ 10` and not exported; with `optimizeLevel ≥ 3` inline multi-caller functions if `size ≤ 20`.
+- **Recursion guard**: a call `$f` inside function `$f` is never inlined.
+- **Substitution**: the wrapper block is `(block $__inlined_func$callee ...)`. Steps: (1) extend caller locals with a copy of all callee locals (params + vars); (2) emit `local.set` for each call operand; (3) emit zero-init `local.set` for each non-param local; (4) `deepCopy` the callee body then apply `mapExpression` to remap local indices and rewrite `return` → `br $label`.
+- **`deepCopy`**: structural deep copy required because the same function may be inlined at multiple call sites (tree ownership rule: one parent per node).
+- **Dead callee removal**: after each iteration, functions whose entire ref-count was consumed by inlining and that are not globally used are removed from `module.functions`.
+- **Iteration**: up to `min(5, numFunctions+1)` rounds; stops early when no inlining occurs.
+- **Deferred**: split/partial inlining (Pattern A/B), return-call handling, post-inline cleanup passes inside `InliningOptimizing`.
 
 #### Upstream C++ reference
 

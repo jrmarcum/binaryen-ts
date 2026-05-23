@@ -181,17 +181,26 @@ and `walkExpression` (pre-order visitor), used by all passes.
 
 ---
 
-## Phase 5 — Inlining Pass
+## Phase 5 — Inlining Pass ✅ COMPLETE
 
 Reference: `upstream/src/passes/Inlining.cpp`
 
 **Goal**: Inline small call targets to eliminate call overhead.
 
-- [ ] Call graph analysis
-- [ ] Inlineability heuristic (function size, recursion check)
-- [ ] Substitution: replace `call $f(args)` with function body, renaming locals
-- [ ] Post-inline DCE
-- [ ] Test: verify inlined output is equivalent
+- [x] Call graph analysis (`buildFunctionInfo` — size, refs, hasLoops, hasCalls, usedGlobally)
+- [x] Inlineability heuristic: always ≤ 2, one-caller ≤ 10, flexible ≤ 20 at `-O3`; recursion blocked
+- [x] Substitution: deep-copy callee body; remap local indices; `return` → `br $label`; assign operands to param locals; zero-init non-param locals
+- [x] Dead callee removal: functions with all call-site refs inlined and not exported/globally used are removed
+- [x] `InliningOptimizing` variant registered alongside `Inlining`
+- [x] Tests (`tests/passes/inlining_test.ts`) — 14 tests, all passing
+
+**Implementation file**: `src/passes/inlining.ts`
+
+**Known gaps / deferred**:
+
+- Split / partial inlining (Pattern A/B from upstream) — deferred
+- Return-call (`isReturn`) inlining — deferred to EH/tail-call phase
+- Post-inline Vacuum + OptimizeInstructions within `InliningOptimizing` — stub (optimize flag present but cleanup passes not yet wired into `_iteration`)
 
 ---
 

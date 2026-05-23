@@ -108,9 +108,9 @@ const mod = new ModuleBuilder()
 import { PassRunner, listPasses } from "@jrmarcum/binaryen-ts/passes";
 import { ModuleBuilder } from "@jrmarcum/binaryen-ts/ir";
 
-// ["CoalesceLocals", "DCE", "LocalCSE", "OptimizeInstructions",
-//  "PickLoadSigns", "RemoveUnusedBrs", "RemoveUnusedModuleElements",
-//  "SimplifyLocals", "Vacuum"]
+// ["CoalesceLocals", "DCE", "Inlining", "InliningOptimizing", "LocalCSE",
+//  "OptimizeInstructions", "PickLoadSigns", "RemoveUnusedBrs",
+//  "RemoveUnusedModuleElements", "SimplifyLocals", "Vacuum"]
 console.log(listPasses());
 
 const runner = new PassRunner(module, { optimizeLevel: 2, shrinkLevel: 0 });
@@ -133,7 +133,7 @@ deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -S
 
 | Mode | What runs | Use when |
 | ---- | --------- | -------- |
-| Native TypeScript | Built-in passes (`DCE`, `Vacuum`, `OptimizeInstructions`, `CoalesceLocals`, etc.) | Fast iteration, unit testing passes |
+| Native TypeScript | Built-in passes (`DCE`, `Vacuum`, `OptimizeInstructions`, `CoalesceLocals`, `Inlining`, etc.) | Fast iteration, unit testing passes |
 | Hybrid (subprocess) | Upstream `wasm-opt` binary on `PATH` | Maximum optimization quality |
 | Hybrid (binaryen.js) | Upstream `binaryen.js` WASM binary | No binary dependency, browser compat |
 
@@ -163,8 +163,8 @@ This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 | 2 | ✅ Done | WASM binary parser (binary → IR) |
 | 3 | ✅ Done | WASM binary encoder (IR → .wasm) — full round-trip verified |
 | 4 | ✅ Done | Core optimization passes — 8 passes (Vacuum, OptimizeInstructions, CoalesceLocals, LocalCSE, …) |
-| 5 | 🚧 Next | Inlining pass |
-| 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
+| 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, call-graph analysis, dead-callee removal |
+| 6 | 🚧 Next | `wasm-opt` native CLI (no subprocess dependency) |
 | 7 | Planned | GC proposal types and instructions |
 | 8 | Planned | Exception-handling proposal |
 | 9 | Planned | SIMD instructions |
