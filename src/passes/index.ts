@@ -13,7 +13,7 @@
  * ```ts
  * import { PassRunner, listPasses } from "@jrmarcum/binaryen-ts/passes";
  *
- * console.log(listPasses()); // ["DCE", ...]
+ * console.log(listPasses()); // ["CoalesceLocals", "DCE", "LocalCSE", ...]
  *
  * const runner = new PassRunner(module, { optimizeLevel: 2, shrinkLevel: 1 });
  * runner.addDefaultOptimizationPasses().run();
@@ -34,3 +34,11 @@ export type { Pass, PassOptions } from "./pass.ts";
 
 // Side-effect imports: register all built-in passes.
 import "./dce.ts";
+import "./vacuum.ts";
+import "./optimize-instructions.ts";
+import "./remove-unused-brs.ts";
+import "./simplify-locals.ts";
+import "./coalesce-locals.ts";
+import "./local-cse.ts";
+import "./remove-unused-module-elements.ts";
+import "./pick-load-signs.ts";

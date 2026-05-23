@@ -1,0 +1,281 @@
+/**
+ * @module binaryen-ts/ir/walk
+ *
+ * Tree walking utilities for the binaryen-ts IR.
+ *
+ * Two operations are provided:
+ *
+ * - {@link mapExpression} — transform a tree bottom-up (children first, then
+ *   the parent). Used by optimisation passes that rewrite nodes.
+ * - {@link walkExpression} — visit every node pre-order (parent before
+ *   children). Used by analysis passes that only read the tree.
+ *
+ * @license MIT OR Apache-2.0
+ */
+
+import { Expression, ExpressionKind } from "./expressions.ts";
+
+// ---------------------------------------------------------------------------
+// mapExpression — bottom-up tree transform
+// ---------------------------------------------------------------------------
+
+/**
+ * Maps an expression tree bottom-up.
+ *
+ * Children are transformed recursively first, then `fn` is called on the
+ * resulting node and may return a replacement. Passes that return the same
+ * object from `fn` share unchanged subtrees with the original tree.
+ *
+ * @param expr - Root of the subtree to transform.
+ * @param fn   - Called on each node after its children have been transformed.
+ * @returns The transformed tree (may share structure with the original).
+ */
+export function mapExpression(
+  expr: Expression,
+  fn: (e: Expression) => Expression,
+): Expression {
+  const mapped = _mapChildren(expr, fn);
+  return fn(mapped);
+}
+
+// ---------------------------------------------------------------------------
+// walkExpression — pre-order visitor
+// ---------------------------------------------------------------------------
+
+/**
+ * Visits every node in an expression tree in pre-order (parent before children).
+ * Used by analysis passes that collect information without rewriting the tree.
+ *
+ * @param expr    - Root of the subtree to visit.
+ * @param visitor - Called on each node. Return value is ignored.
+ */
+export function walkExpression(
+  expr: Expression,
+  visitor: (e: Expression) => void,
+): void {
+  visitor(expr);
+  _visitChildren(expr, (child) => walkExpression(child, visitor));
+}
+
+// ---------------------------------------------------------------------------
+// Internal: map children
+// ---------------------------------------------------------------------------
+
+function _mapChildren(
+  expr: Expression,
+  fn: (e: Expression) => Expression,
+): Expression {
+  switch (expr.kind) {
+    case ExpressionKind.Block:
+      return { ...expr, children: expr.children.map((c) => mapExpression(c, fn)) };
+
+    case ExpressionKind.If:
+      return {
+        ...expr,
+        condition: mapExpression(expr.condition, fn),
+        ifTrue: mapExpression(expr.ifTrue, fn),
+        ifFalse: expr.ifFalse ? mapExpression(expr.ifFalse, fn) : null,
+      };
+
+    case ExpressionKind.Loop:
+      return { ...expr, body: mapExpression(expr.body, fn) };
+
+    case ExpressionKind.Break:
+      return {
+        ...expr,
+        condition: expr.condition ? mapExpression(expr.condition, fn) : null,
+        value: expr.value ? mapExpression(expr.value, fn) : null,
+      };
+
+    case ExpressionKind.Switch:
+      return {
+        ...expr,
+        condition: mapExpression(expr.condition, fn),
+        value: expr.value ? mapExpression(expr.value, fn) : null,
+      };
+
+    case ExpressionKind.Return:
+      return {
+        ...expr,
+        value: expr.value ? mapExpression(expr.value, fn) : null,
+      };
+
+    case ExpressionKind.LocalSet:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    case ExpressionKind.LocalTee:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    case ExpressionKind.GlobalSet:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    case ExpressionKind.Unary:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    case ExpressionKind.Binary:
+      return {
+        ...expr,
+        left: mapExpression(expr.left, fn),
+        right: mapExpression(expr.right, fn),
+      };
+
+    case ExpressionKind.Select:
+      return {
+        ...expr,
+        ifTrue: mapExpression(expr.ifTrue, fn),
+        ifFalse: mapExpression(expr.ifFalse, fn),
+        condition: mapExpression(expr.condition, fn),
+      };
+
+    case ExpressionKind.Drop:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    case ExpressionKind.Load:
+      return { ...expr, ptr: mapExpression(expr.ptr, fn) };
+
+    case ExpressionKind.Store:
+      return {
+        ...expr,
+        ptr: mapExpression(expr.ptr, fn),
+        value: mapExpression(expr.value, fn),
+      };
+
+    case ExpressionKind.MemoryGrow:
+      return { ...expr, delta: mapExpression(expr.delta, fn) };
+
+    case ExpressionKind.MemoryCopy:
+      return {
+        ...expr,
+        dest: mapExpression(expr.dest, fn),
+        source: mapExpression(expr.source, fn),
+        size: mapExpression(expr.size, fn),
+      };
+
+    case ExpressionKind.MemoryFill:
+      return {
+        ...expr,
+        dest: mapExpression(expr.dest, fn),
+        value: mapExpression(expr.value, fn),
+        size: mapExpression(expr.size, fn),
+      };
+
+    case ExpressionKind.Call:
+      return {
+        ...expr,
+        operands: expr.operands.map((o) => mapExpression(o, fn)),
+      };
+
+    case ExpressionKind.CallIndirect:
+      return {
+        ...expr,
+        target: mapExpression(expr.target, fn),
+        operands: expr.operands.map((o) => mapExpression(o, fn)),
+      };
+
+    case ExpressionKind.RefIsNull:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    // Leaf nodes — no children to transform
+    case ExpressionKind.Nop:
+    case ExpressionKind.Unreachable:
+    case ExpressionKind.Const:
+    case ExpressionKind.LocalGet:
+    case ExpressionKind.GlobalGet:
+    case ExpressionKind.MemorySize:
+    case ExpressionKind.RefNull:
+    case ExpressionKind.RefFunc:
+      return expr;
+
+    default:
+      // Unknown or unhandled kind — pass through unchanged
+      return expr;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Internal: visit children (pre-order helper)
+// ---------------------------------------------------------------------------
+
+function _visitChildren(
+  expr: Expression,
+  visit: (child: Expression) => void,
+): void {
+  switch (expr.kind) {
+    case ExpressionKind.Block:
+      expr.children.forEach(visit);
+      break;
+    case ExpressionKind.If:
+      visit(expr.condition);
+      visit(expr.ifTrue);
+      if (expr.ifFalse) visit(expr.ifFalse);
+      break;
+    case ExpressionKind.Loop:
+      visit(expr.body);
+      break;
+    case ExpressionKind.Break:
+      if (expr.condition) visit(expr.condition);
+      if (expr.value) visit(expr.value);
+      break;
+    case ExpressionKind.Switch:
+      visit(expr.condition);
+      if (expr.value) visit(expr.value);
+      break;
+    case ExpressionKind.Return:
+      if (expr.value) visit(expr.value);
+      break;
+    case ExpressionKind.LocalSet:
+    case ExpressionKind.LocalTee:
+      visit(expr.value);
+      break;
+    case ExpressionKind.GlobalSet:
+      visit(expr.value);
+      break;
+    case ExpressionKind.Unary:
+      visit(expr.value);
+      break;
+    case ExpressionKind.Binary:
+      visit(expr.left);
+      visit(expr.right);
+      break;
+    case ExpressionKind.Select:
+      visit(expr.ifTrue);
+      visit(expr.ifFalse);
+      visit(expr.condition);
+      break;
+    case ExpressionKind.Drop:
+      visit(expr.value);
+      break;
+    case ExpressionKind.Load:
+      visit(expr.ptr);
+      break;
+    case ExpressionKind.Store:
+      visit(expr.ptr);
+      visit(expr.value);
+      break;
+    case ExpressionKind.MemoryGrow:
+      visit(expr.delta);
+      break;
+    case ExpressionKind.MemoryCopy:
+      visit(expr.dest);
+      visit(expr.source);
+      visit(expr.size);
+      break;
+    case ExpressionKind.MemoryFill:
+      visit(expr.dest);
+      visit(expr.value);
+      visit(expr.size);
+      break;
+    case ExpressionKind.Call:
+      expr.operands.forEach(visit);
+      break;
+    case ExpressionKind.CallIndirect:
+      visit(expr.target);
+      expr.operands.forEach(visit);
+      break;
+    case ExpressionKind.RefIsNull:
+      visit(expr.value);
+      break;
+    default:
+      break;
+  }
+}

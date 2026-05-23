@@ -144,29 +144,40 @@ Reference: `upstream/src/wasm-binary.h`
 
 ---
 
-## Phase 4 — Core Optimization Passes (TypeScript)
+## Phase 4 — Core Optimization Passes (TypeScript) ✅ COMPLETE
 
 Reference: `upstream/src/passes/`
 
 **Goal**: Port the most impactful passes from C++. Each pass is one `.ts` file in `src/passes/`.
 
-- [ ] **Vacuum** (`vacuum.ts`) — remove nop, trivially dead expressions
+Shared infrastructure added: `src/ir/walk.ts` — `mapExpression` (bottom-up tree transform)
+and `walkExpression` (pre-order visitor), used by all passes.
+
+- [x] **Vacuum** (`vacuum.ts`) — remove nop, empty blocks, drop(pure) → nop
   - Reference: `upstream/src/passes/Vacuum.cpp`
-- [ ] **RemoveUnusedBrs** (`remove-unused-brs.ts`) — remove branches with no targets
+- [x] **RemoveUnusedBrs** (`remove-unused-brs.ts`) — remove `br $B` / `br_if $B cond` at tail of block `$B`
   - Reference: `upstream/src/passes/RemoveUnusedBrs.cpp`
-- [ ] **OptimizeInstructions** (`optimize-instructions.ts`) — peephole rewrites
+- [x] **OptimizeInstructions** (`optimize-instructions.ts`) — peephole rewrites + integer constant folding
   - Reference: `upstream/src/passes/OptimizeInstructions.cpp`
-  - Priority rules: `i32.add(x, 0) → x`, `i32.mul(x, 1) → x`, etc.
-- [ ] **CoalesceLocals** (`coalesce-locals.ts`) — reduce local variable count via liveness
+  - Algebraic identities: `add(x,0)→x`, `mul(x,1)→x`, `and(x,-1)→x`, shift-by-0, `eq(x,0)→eqz(x)`, etc.
+  - Constant folding: all non-trapping i32/i64 binary ops; i32/i64 unary ops (clz, eqz, extend, wrap)
+- [x] **CoalesceLocals** (`coalesce-locals.ts`) — dead-write elimination + linear-scan slot coalescing
   - Reference: `upstream/src/passes/CoalesceLocals.cpp`
-- [ ] **SimplifyLocals** (`simplify-locals.ts`) — collapse local set/get pairs
+  - Phase 4 implementation: replaces dead `local.set` with `drop`; greedy non-overlapping range coalescing
+  - Full dataflow-based liveness deferred to a later pass refinement
+- [x] **SimplifyLocals** (`simplify-locals.ts`) — collapse consecutive `local.set(i,v); local.get(i)` → `local.tee(i,v)`
   - Reference: `upstream/src/passes/SimplifyLocals.cpp`
-- [ ] **LocalCSE** (`local-cse.ts`) — common subexpression elimination within functions
+- [x] **LocalCSE** (`local-cse.ts`) — common subexpression elimination within blocks
   - Reference: `upstream/src/passes/LocalCSE.cpp`
-- [ ] **RemoveUnusedModuleElements** (`remove-unused-module-elements.ts`) — strip dead functions/globals
+  - Wraps first occurrence in `local.tee(fresh, expr)`, replaces subsequent in `local.get(fresh)`
+  - Invalidates cache on `local.set`, `global.set`, calls, and stores
+- [x] **RemoveUnusedModuleElements** (`remove-unused-module-elements.ts`) — strip dead functions/globals
   - Reference: `upstream/src/passes/RemoveUnusedModuleElements.cpp`
-- [ ] **PickLoadSigns** (`pick-load-signs.ts`) — choose sign-extend vs zero-extend for loads
+  - Reachability from exports + element segments; fixed-point call-graph walk
+- [x] **PickLoadSigns** (`pick-load-signs.ts`) — choose sign-extend vs zero-extend for narrow loads
   - Reference: `upstream/src/passes/PickLoadSigns.cpp`
+  - Tracks `local.set(i, narrow_load)` patterns; classifies uses as signed/unsigned; flips load sign
+- [x] Tests (`tests/passes/passes_test.ts`) — 26 tests, all passing
 
 ---
 

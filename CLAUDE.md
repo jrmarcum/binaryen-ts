@@ -208,15 +208,24 @@ binaryen-ts/
 │   │   ├── types.ts        ValType, Type, None, Unreachable
 │   │   ├── expressions.ts  All ExpressionKind variants + factory fns
 │   │   ├── module.ts       WasmModule, ModuleBuilder (fluent API)
+│   │   ├── walk.ts         mapExpression (bottom-up transform), walkExpression (pre-order visitor)
 │   │   └── index.ts        Re-exports
 │   ├── parser/         WAT text parser (Phase 1)
 │   │   ├── tokenizer.ts    WAT lexer → Token stream
 │   │   ├── sexpr.ts        S-expression tree (List / Atom)
 │   │   └── wat-parser.ts   S-expr tree → WasmModule IR
-│   ├── passes/         Optimization pass registry and runner
-│   │   ├── pass.ts         Pass interface, PassRunner, registry
-│   │   ├── dce.ts          Dead code elimination (first working pass)
-│   │   └── index.ts        Re-exports + side-effect pass registration
+│   ├── passes/         Optimization pass registry and runner (Phase 4)
+│   │   ├── pass.ts                         Pass interface, PassRunner, registry
+│   │   ├── dce.ts                          Dead code elimination
+│   │   ├── vacuum.ts                       Remove nops, empty blocks, drop(pure)
+│   │   ├── optimize-instructions.ts        Algebraic identities + i32/i64 constant folding
+│   │   ├── remove-unused-brs.ts            Remove tail-of-block br/br_if to own label
+│   │   ├── simplify-locals.ts              local.set+local.get → local.tee
+│   │   ├── coalesce-locals.ts              Dead-write elimination + linear-scan slot coalescing
+│   │   ├── local-cse.ts                    Within-block common subexpression elimination
+│   │   ├── remove-unused-module-elements.ts  Reachability-based dead function/global removal
+│   │   ├── pick-load-signs.ts              Sign/unsigned selection for narrow loads
+│   │   └── index.ts                        Re-exports + side-effect pass registration
 │   ├── encoder/        WASM binary encoder (Phase 3)
 │   │   ├── wasm-encoder.ts BinaryWriter + WasmEncoder (IR → .wasm)
 │   │   └── index.ts        Re-exports encodeWasm, WasmEncodeError
@@ -229,7 +238,8 @@ binaryen-ts/
 └── tests/
     ├── parser/         WAT parser round-trip tests
     ├── binary/         WASM binary parser tests
-    └── encoder/        WASM binary encoder round-trip tests
+    ├── encoder/        WASM binary encoder round-trip tests
+    └── passes/         Optimization pass tests (Phase 4)
 ```
 
 ### Phase Status
@@ -240,7 +250,7 @@ binaryen-ts/
 | 1 | ✅ Done | WAT text parser (tokenizer → S-expr → IR) — 47/47 tests passing |
 | 2 | ✅ Done | WASM binary parser (.wasm → IR) — 9/9 tests passing |
 | 3 | ✅ Done | WASM binary encoder (IR → .wasm) — 14/14 tests passing; full round-trip verified |
-| 4 | Planned | Core optimization passes (Vacuum, RemoveUnusedBrs, OptimizeInstructions, etc.) |
+| 4 | ✅ Done | Core optimization passes — 8 passes, 26/26 tests passing |
 | 5 | Planned | Inlining pass |
 | 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
 | 7+ | Planned | GC, EH, SIMD, wasic compilation |
@@ -283,6 +293,24 @@ Same invariant as upstream Binaryen: each expression node must have exactly one 
 - **Null-name block unpacking**: a `BlockExpr` with `name === null` is the function body container produced by the binary parser. The encoder unpacks it directly into the function body byte stream rather than wrapping it in a `0x02...0x0b` block.
 - **Load/store opcode resolution**: derived from `(bytes, signed, resultType)` for loads and `(bytes, value.type)` for stores — no separate opcode field stored in the IR.
 - **Label depth resolution**: a `string[]` label stack grows as blocks/loops are entered and shrinks on exit; `br`/`br_if`/`br_table` depths are computed as `stack.length - 1 - lastIndexOf(name)`.
+
+#### Optimization pass design (Phase 4)
+
+All passes use two shared IR utilities in `src/ir/walk.ts`:
+
+- `mapExpression(expr, fn)` — bottom-up tree transform (children first, then parent). Used by Vacuum, OptimizeInstructions, RemoveUnusedBrs, SimplifyLocals, CoalesceLocals, LocalCSE, PickLoadSigns.
+- `walkExpression(expr, visitor)` — pre-order visitor (parent before children). Used by analysis-only passes.
+
+Key design decisions:
+
+- **Vacuum**: removes `nop` from blocks; collapses empty and unnamed-single-child blocks; `drop(const|local.get|global.get)` → `nop`.
+- **OptimizeInstructions**: algebraic identities applied RHS-constant-first (covers shift-by-zero, identity elements for add/mul/and/or/xor, division by 1); constant folding for all non-trapping i32/i64 binary ops and unary ops (clz, eqz, extend, wrap, sign-extend). Float ops excluded (NaN semantics).
+- **RemoveUnusedBrs**: only tail-position branches are removed. Safety condition: the new last child must have type `none` so the block's result type is unchanged.
+- **SimplifyLocals**: only consecutive `local.set(i) + local.get(i)` pairs in the same block. No intervening instructions by construction.
+- **CoalesceLocals**: Phase 4 does dead-write elimination (set → drop when local has no reads) plus linear-scan range coalescing. Full dataflow liveness (for loops) is deferred.
+- **LocalCSE**: keys pure sub-expressions by structural string hash. Invalidates on `local.set`, `global.set`, calls, and stores. Recurses into `drop`/`return`/`local.set` children when counting and rewriting.
+- **RemoveUnusedModuleElements**: seeds from exports + element segments; fixed-point call-graph walk via `Call` and `RefFunc` nodes. Imported elements are never removed.
+- **PickLoadSigns**: tracks `local.set(i, narrow_load)` → counts signed/unsigned uses of `i` → flips load sign if all uses agree. Uses parent-context walk to classify comparison operators.
 
 #### Upstream C++ reference
 
