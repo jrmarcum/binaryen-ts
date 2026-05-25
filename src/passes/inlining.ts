@@ -28,26 +28,24 @@
  */
 
 import {
-  BlockExpr,
-  BreakExpr,
-  CallExpr,
-  Expression,
+  type BlockExpr,
+  type BreakExpr,
+  type CallExpr,
+  type Expression,
   ExpressionKind,
-  LocalSetExpr,
+  type LocalSetExpr,
   makeBlock,
-  makeBreak,
   makeF32Const,
   makeF64Const,
   makeI32Const,
   makeI64Const,
   makeLocalSet,
-  makeNop,
   makeUnreachable,
 } from "../ir/expressions.ts";
-import { Local, WasmFunction, WasmModule } from "../ir/module.ts";
+import type { Local, WasmFunction, WasmModule } from "../ir/module.ts";
 import { None, Unreachable, ValType } from "../ir/types.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 
 // ---------------------------------------------------------------------------
 // Size thresholds (matching upstream defaults in pass.h)
@@ -137,8 +135,10 @@ function isInlineable(
   opts: PassOptions,
 ): boolean {
   if (info.size <= ALWAYS_INLINE_MAX_SIZE) return true;
-  if (info.refs === 1 && !info.usedGlobally &&
-    info.size <= ONE_CALLER_INLINE_MAX_SIZE) return true;
+  if (
+    info.refs === 1 && !info.usedGlobally &&
+    info.size <= ONE_CALLER_INLINE_MAX_SIZE
+  ) return true;
   if (opts.optimizeLevel >= 3 && info.size <= FLEXIBLE_INLINE_MAX_SIZE) {
     return !info.hasCalls || !info.hasLoops;
   }
@@ -300,11 +300,16 @@ function freshLabel(base: string, used: Set<string>): string {
 
 function zeroForType(type: ValType): Expression | null {
   switch (type) {
-    case ValType.I32: return makeI32Const(0);
-    case ValType.I64: return makeI64Const(0n);
-    case ValType.F32: return makeF32Const(0);
-    case ValType.F64: return makeF64Const(0);
-    default: return null;
+    case ValType.I32:
+      return makeI32Const(0);
+    case ValType.I64:
+      return makeI64Const(0n);
+    case ValType.F32:
+      return makeF32Const(0);
+    case ValType.F64:
+      return makeF64Const(0);
+    default:
+      return null;
   }
 }
 
@@ -421,8 +426,10 @@ function inlineCallSite(
 
   if (call.type === Unreachable && !call.isReturn) {
     return makeBlock(
-      [block.type !== None ? { kind: ExpressionKind.Drop, type: None, value: block } : block,
-        makeUnreachable()],
+      [
+        block.type !== None ? { kind: ExpressionKind.Drop, type: None, value: block } : block,
+        makeUnreachable(),
+      ],
     );
   }
 
@@ -441,7 +448,7 @@ function inlineCallSite(
 function inlineIntoFunction(
   fn: WasmFunction,
   inlineable: Map<string, WasmFunction>,
-  opts: PassOptions,
+  _opts: PassOptions,
   labelHint: { value: number },
 ): boolean {
   const usedLabels = collectLabels(fn.body);
@@ -473,8 +480,7 @@ function inlineIntoFunction(
  */
 export class InliningPass implements Pass {
   readonly name: string = "Inlining";
-  readonly description: string =
-    "Inlines small direct-call targets to eliminate call overhead.";
+  readonly description: string = "Inlines small direct-call targets to eliminate call overhead.";
   readonly requiresNonNullableLocalFixups = false;
 
   /** Whether to run Vacuum + OptimizeInstructions on modified functions. */

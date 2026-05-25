@@ -13,10 +13,10 @@
  * @license MIT
  */
 
-import { Expression, ExpressionKind } from "../ir/expressions.ts";
-import { WasmModule, WasmFunction } from "../ir/module.ts";
+import { type Expression, ExpressionKind } from "../ir/expressions.ts";
+import type { WasmFunction, WasmModule } from "../ir/module.ts";
 import { Unreachable } from "../ir/types.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 
 /**
  * Dead Code Elimination pass.

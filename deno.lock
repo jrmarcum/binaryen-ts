@@ -30,5 +30,10 @@
         "jsr:@std/internal@^1.0.12"
       ]
     }
+  },
+  "workspace": {
+    "dependencies": [
+      "jsr:@std/assert@1"
+    ]
   }
 }

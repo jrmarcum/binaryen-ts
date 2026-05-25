@@ -99,15 +99,17 @@ export class BinaryenInterop {
    * @param options - Optional configuration.
    * @throws If the `binaryen.js` binary cannot be loaded.
    */
-  static async create(_options: BinaryenInteropOptions = {}): Promise<BinaryenInterop> {
+  static create(_options: BinaryenInteropOptions = {}): Promise<BinaryenInterop> {
     // TODO(phase 1): dynamically import binaryen.js from the upstream submodule
-    // or from npm:binaryen. For now this is a placeholder that throws a
-    // helpful error so callers know the feature is not yet implemented.
-    throw new Error(
-      "BinaryenInterop.create() is not yet implemented.\n" +
-        "Track progress in: https://github.com/jrmarcum/binaryen-ts/issues\n\n" +
-        "Workaround: use the upstream binaryen.js directly via `npm:binaryen`\n" +
-        "or run wasm-opt as a subprocess via BinaryenInterop.optimizeViaSubprocess().",
+    // or from npm:binaryen. For now this is a placeholder that returns a
+    // rejected promise so callers know the feature is not yet implemented.
+    return Promise.reject(
+      new Error(
+        "BinaryenInterop.create() is not yet implemented.\n" +
+          "Track progress in: https://github.com/jrmarcum/binaryen-ts/issues\n\n" +
+          "Workaround: use the upstream binaryen.js directly via `npm:binaryen`\n" +
+          "or run wasm-opt as a subprocess via BinaryenInterop.optimizeViaSubprocess().",
+      ),
     );
   }
 

@@ -21,13 +21,9 @@
  * @license MIT
  */
 
-import {
-  Expression,
-  ExpressionKind,
-  LocalTeeExpr,
-} from "../ir/expressions.ts";
-import { WasmModule } from "../ir/module.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Expression, ExpressionKind, type LocalTeeExpr } from "../ir/expressions.ts";
+import type { WasmModule } from "../ir/module.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 import { mapExpression } from "../ir/walk.ts";
 
 // ---------------------------------------------------------------------------
@@ -37,8 +33,7 @@ import { mapExpression } from "../ir/walk.ts";
 /** Collapses `local.set(i, v); local.get(i)` pairs into `local.tee(i, v)`. */
 export class SimplifyLocalsPass implements Pass {
   readonly name = "SimplifyLocals";
-  readonly description =
-    "Collapses consecutive local.set + local.get pairs into local.tee.";
+  readonly description = "Collapses consecutive local.set + local.get pairs into local.tee.";
   readonly requiresNonNullableLocalFixups = false;
 
   run(module: WasmModule, _options: PassOptions): void {

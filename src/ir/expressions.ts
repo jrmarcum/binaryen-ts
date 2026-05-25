@@ -24,8 +24,8 @@
  * @license MIT
  */
 
-import { None, Type, Unreachable, ValType } from "./types.ts";
-import { type HeapType, type RefType, AbstractHeapType } from "./gc-types.ts";
+import { None, type Type, Unreachable, ValType } from "./types.ts";
+import type { HeapType } from "./gc-types.ts";
 export type { HeapType, RefType } from "./gc-types.ts";
 
 // ---------------------------------------------------------------------------
@@ -370,56 +370,90 @@ export enum BinaryOp {
   // SIMD binary
   SwizzleVecI8x16 = "i8x16.swizzle",
   // i8x16 comparisons (return v128)
-  EqVecI8x16 = "i8x16.eq", NeVecI8x16 = "i8x16.ne",
-  LtSVecI8x16 = "i8x16.lt_s", LtUVecI8x16 = "i8x16.lt_u",
-  GtSVecI8x16 = "i8x16.gt_s", GtUVecI8x16 = "i8x16.gt_u",
-  LeSVecI8x16 = "i8x16.le_s", LeUVecI8x16 = "i8x16.le_u",
-  GeSVecI8x16 = "i8x16.ge_s", GeUVecI8x16 = "i8x16.ge_u",
+  EqVecI8x16 = "i8x16.eq",
+  NeVecI8x16 = "i8x16.ne",
+  LtSVecI8x16 = "i8x16.lt_s",
+  LtUVecI8x16 = "i8x16.lt_u",
+  GtSVecI8x16 = "i8x16.gt_s",
+  GtUVecI8x16 = "i8x16.gt_u",
+  LeSVecI8x16 = "i8x16.le_s",
+  LeUVecI8x16 = "i8x16.le_u",
+  GeSVecI8x16 = "i8x16.ge_s",
+  GeUVecI8x16 = "i8x16.ge_u",
   // i16x8 comparisons
-  EqVecI16x8 = "i16x8.eq", NeVecI16x8 = "i16x8.ne",
-  LtSVecI16x8 = "i16x8.lt_s", LtUVecI16x8 = "i16x8.lt_u",
-  GtSVecI16x8 = "i16x8.gt_s", GtUVecI16x8 = "i16x8.gt_u",
-  LeSVecI16x8 = "i16x8.le_s", LeUVecI16x8 = "i16x8.le_u",
-  GeSVecI16x8 = "i16x8.ge_s", GeUVecI16x8 = "i16x8.ge_u",
+  EqVecI16x8 = "i16x8.eq",
+  NeVecI16x8 = "i16x8.ne",
+  LtSVecI16x8 = "i16x8.lt_s",
+  LtUVecI16x8 = "i16x8.lt_u",
+  GtSVecI16x8 = "i16x8.gt_s",
+  GtUVecI16x8 = "i16x8.gt_u",
+  LeSVecI16x8 = "i16x8.le_s",
+  LeUVecI16x8 = "i16x8.le_u",
+  GeSVecI16x8 = "i16x8.ge_s",
+  GeUVecI16x8 = "i16x8.ge_u",
   // i32x4 comparisons
-  EqVecI32x4 = "i32x4.eq", NeVecI32x4 = "i32x4.ne",
-  LtSVecI32x4 = "i32x4.lt_s", LtUVecI32x4 = "i32x4.lt_u",
-  GtSVecI32x4 = "i32x4.gt_s", GtUVecI32x4 = "i32x4.gt_u",
-  LeSVecI32x4 = "i32x4.le_s", LeUVecI32x4 = "i32x4.le_u",
-  GeSVecI32x4 = "i32x4.ge_s", GeUVecI32x4 = "i32x4.ge_u",
+  EqVecI32x4 = "i32x4.eq",
+  NeVecI32x4 = "i32x4.ne",
+  LtSVecI32x4 = "i32x4.lt_s",
+  LtUVecI32x4 = "i32x4.lt_u",
+  GtSVecI32x4 = "i32x4.gt_s",
+  GtUVecI32x4 = "i32x4.gt_u",
+  LeSVecI32x4 = "i32x4.le_s",
+  LeUVecI32x4 = "i32x4.le_u",
+  GeSVecI32x4 = "i32x4.ge_s",
+  GeUVecI32x4 = "i32x4.ge_u",
   // f32x4 comparisons
-  EqVecF32x4 = "f32x4.eq", NeVecF32x4 = "f32x4.ne",
-  LtVecF32x4 = "f32x4.lt", GtVecF32x4 = "f32x4.gt",
-  LeVecF32x4 = "f32x4.le", GeVecF32x4 = "f32x4.ge",
+  EqVecF32x4 = "f32x4.eq",
+  NeVecF32x4 = "f32x4.ne",
+  LtVecF32x4 = "f32x4.lt",
+  GtVecF32x4 = "f32x4.gt",
+  LeVecF32x4 = "f32x4.le",
+  GeVecF32x4 = "f32x4.ge",
   // f64x2 comparisons
-  EqVecF64x2 = "f64x2.eq", NeVecF64x2 = "f64x2.ne",
-  LtVecF64x2 = "f64x2.lt", GtVecF64x2 = "f64x2.gt",
-  LeVecF64x2 = "f64x2.le", GeVecF64x2 = "f64x2.ge",
+  EqVecF64x2 = "f64x2.eq",
+  NeVecF64x2 = "f64x2.ne",
+  LtVecF64x2 = "f64x2.lt",
+  GtVecF64x2 = "f64x2.gt",
+  LeVecF64x2 = "f64x2.le",
+  GeVecF64x2 = "f64x2.ge",
   // i64x2 comparisons
-  EqVecI64x2 = "i64x2.eq", NeVecI64x2 = "i64x2.ne",
-  LtSVecI64x2 = "i64x2.lt_s", GtSVecI64x2 = "i64x2.gt_s",
-  LeSVecI64x2 = "i64x2.le_s", GeSVecI64x2 = "i64x2.ge_s",
+  EqVecI64x2 = "i64x2.eq",
+  NeVecI64x2 = "i64x2.ne",
+  LtSVecI64x2 = "i64x2.lt_s",
+  GtSVecI64x2 = "i64x2.gt_s",
+  LeSVecI64x2 = "i64x2.le_s",
+  GeSVecI64x2 = "i64x2.ge_s",
   // v128 bitwise
-  AndVec128 = "v128.and", OrVec128 = "v128.or",
-  XorVec128 = "v128.xor", AndNotVec128 = "v128.andnot",
+  AndVec128 = "v128.and",
+  OrVec128 = "v128.or",
+  XorVec128 = "v128.xor",
+  AndNotVec128 = "v128.andnot",
   // i8x16 arithmetic
   AddVecI8x16 = "i8x16.add",
-  AddSatSVecI8x16 = "i8x16.add_sat_s", AddSatUVecI8x16 = "i8x16.add_sat_u",
+  AddSatSVecI8x16 = "i8x16.add_sat_s",
+  AddSatUVecI8x16 = "i8x16.add_sat_u",
   SubVecI8x16 = "i8x16.sub",
-  SubSatSVecI8x16 = "i8x16.sub_sat_s", SubSatUVecI8x16 = "i8x16.sub_sat_u",
-  MinSVecI8x16 = "i8x16.min_s", MinUVecI8x16 = "i8x16.min_u",
-  MaxSVecI8x16 = "i8x16.max_s", MaxUVecI8x16 = "i8x16.max_u",
+  SubSatSVecI8x16 = "i8x16.sub_sat_s",
+  SubSatUVecI8x16 = "i8x16.sub_sat_u",
+  MinSVecI8x16 = "i8x16.min_s",
+  MinUVecI8x16 = "i8x16.min_u",
+  MaxSVecI8x16 = "i8x16.max_s",
+  MaxUVecI8x16 = "i8x16.max_u",
   AvgrUVecI8x16 = "i8x16.avgr_u",
   NarrowSVecI16x8ToI8x16 = "i8x16.narrow_i16x8_s",
   NarrowUVecI16x8ToI8x16 = "i8x16.narrow_i16x8_u",
   // i16x8 arithmetic
   AddVecI16x8 = "i16x8.add",
-  AddSatSVecI16x8 = "i16x8.add_sat_s", AddSatUVecI16x8 = "i16x8.add_sat_u",
+  AddSatSVecI16x8 = "i16x8.add_sat_s",
+  AddSatUVecI16x8 = "i16x8.add_sat_u",
   SubVecI16x8 = "i16x8.sub",
-  SubSatSVecI16x8 = "i16x8.sub_sat_s", SubSatUVecI16x8 = "i16x8.sub_sat_u",
+  SubSatSVecI16x8 = "i16x8.sub_sat_s",
+  SubSatUVecI16x8 = "i16x8.sub_sat_u",
   MulVecI16x8 = "i16x8.mul",
-  MinSVecI16x8 = "i16x8.min_s", MinUVecI16x8 = "i16x8.min_u",
-  MaxSVecI16x8 = "i16x8.max_s", MaxUVecI16x8 = "i16x8.max_u",
+  MinSVecI16x8 = "i16x8.min_s",
+  MinUVecI16x8 = "i16x8.min_u",
+  MaxSVecI16x8 = "i16x8.max_s",
+  MaxUVecI16x8 = "i16x8.max_u",
   AvgrUVecI16x8 = "i16x8.avgr_u",
   Q15MulrSatSVecI16x8 = "i16x8.q15mulr_sat_s",
   NarrowSVecI32x4ToI16x8 = "i16x8.narrow_i32x4_s",
@@ -429,30 +463,44 @@ export enum BinaryOp {
   ExtmulLowUVecI8x16ToI16x8 = "i16x8.extmul_low_i8x16_u",
   ExtmulHighUVecI8x16ToI16x8 = "i16x8.extmul_high_i8x16_u",
   // i32x4 arithmetic
-  AddVecI32x4 = "i32x4.add", SubVecI32x4 = "i32x4.sub", MulVecI32x4 = "i32x4.mul",
-  MinSVecI32x4 = "i32x4.min_s", MinUVecI32x4 = "i32x4.min_u",
-  MaxSVecI32x4 = "i32x4.max_s", MaxUVecI32x4 = "i32x4.max_u",
+  AddVecI32x4 = "i32x4.add",
+  SubVecI32x4 = "i32x4.sub",
+  MulVecI32x4 = "i32x4.mul",
+  MinSVecI32x4 = "i32x4.min_s",
+  MinUVecI32x4 = "i32x4.min_u",
+  MaxSVecI32x4 = "i32x4.max_s",
+  MaxUVecI32x4 = "i32x4.max_u",
   DotSVecI16x8ToI32x4 = "i32x4.dot_i16x8_s",
   ExtmulLowSVecI16x8ToI32x4 = "i32x4.extmul_low_i16x8_s",
   ExtmulHighSVecI16x8ToI32x4 = "i32x4.extmul_high_i16x8_s",
   ExtmulLowUVecI16x8ToI32x4 = "i32x4.extmul_low_i16x8_u",
   ExtmulHighUVecI16x8ToI32x4 = "i32x4.extmul_high_i16x8_u",
   // i64x2 arithmetic
-  AddVecI64x2 = "i64x2.add", SubVecI64x2 = "i64x2.sub", MulVecI64x2 = "i64x2.mul",
+  AddVecI64x2 = "i64x2.add",
+  SubVecI64x2 = "i64x2.sub",
+  MulVecI64x2 = "i64x2.mul",
   ExtmulLowSVecI32x4ToI64x2 = "i64x2.extmul_low_i32x4_s",
   ExtmulHighSVecI32x4ToI64x2 = "i64x2.extmul_high_i32x4_s",
   ExtmulLowUVecI32x4ToI64x2 = "i64x2.extmul_low_i32x4_u",
   ExtmulHighUVecI32x4ToI64x2 = "i64x2.extmul_high_i32x4_u",
   // f32x4 arithmetic
-  AddVecF32x4 = "f32x4.add", SubVecF32x4 = "f32x4.sub",
-  MulVecF32x4 = "f32x4.mul", DivVecF32x4 = "f32x4.div",
-  MinVecF32x4 = "f32x4.min", MaxVecF32x4 = "f32x4.max",
-  PminVecF32x4 = "f32x4.pmin", PmaxVecF32x4 = "f32x4.pmax",
+  AddVecF32x4 = "f32x4.add",
+  SubVecF32x4 = "f32x4.sub",
+  MulVecF32x4 = "f32x4.mul",
+  DivVecF32x4 = "f32x4.div",
+  MinVecF32x4 = "f32x4.min",
+  MaxVecF32x4 = "f32x4.max",
+  PminVecF32x4 = "f32x4.pmin",
+  PmaxVecF32x4 = "f32x4.pmax",
   // f64x2 arithmetic
-  AddVecF64x2 = "f64x2.add", SubVecF64x2 = "f64x2.sub",
-  MulVecF64x2 = "f64x2.mul", DivVecF64x2 = "f64x2.div",
-  MinVecF64x2 = "f64x2.min", MaxVecF64x2 = "f64x2.max",
-  PminVecF64x2 = "f64x2.pmin", PmaxVecF64x2 = "f64x2.pmax",
+  AddVecF64x2 = "f64x2.add",
+  SubVecF64x2 = "f64x2.sub",
+  MulVecF64x2 = "f64x2.mul",
+  DivVecF64x2 = "f64x2.div",
+  MinVecF64x2 = "f64x2.min",
+  MaxVecF64x2 = "f64x2.max",
+  PminVecF64x2 = "f64x2.pmin",
+  PmaxVecF64x2 = "f64x2.pmax",
 }
 
 // ---------------------------------------------------------------------------
@@ -483,10 +531,18 @@ export enum SIMDReplaceOp {
 
 /** SIMD lane shift operators. Mirrors `SIMDShiftOp` in Binaryen. */
 export enum SIMDShiftOp {
-  ShlVecI8x16 = "i8x16.shl",  ShrSVecI8x16 = "i8x16.shr_s",  ShrUVecI8x16 = "i8x16.shr_u",
-  ShlVecI16x8 = "i16x8.shl",  ShrSVecI16x8 = "i16x8.shr_s",  ShrUVecI16x8 = "i16x8.shr_u",
-  ShlVecI32x4 = "i32x4.shl",  ShrSVecI32x4 = "i32x4.shr_s",  ShrUVecI32x4 = "i32x4.shr_u",
-  ShlVecI64x2 = "i64x2.shl",  ShrSVecI64x2 = "i64x2.shr_s",  ShrUVecI64x2 = "i64x2.shr_u",
+  ShlVecI8x16 = "i8x16.shl",
+  ShrSVecI8x16 = "i8x16.shr_s",
+  ShrUVecI8x16 = "i8x16.shr_u",
+  ShlVecI16x8 = "i16x8.shl",
+  ShrSVecI16x8 = "i16x8.shr_s",
+  ShrUVecI16x8 = "i16x8.shr_u",
+  ShlVecI32x4 = "i32x4.shl",
+  ShrSVecI32x4 = "i32x4.shr_s",
+  ShrUVecI32x4 = "i32x4.shr_u",
+  ShlVecI64x2 = "i64x2.shl",
+  ShrSVecI64x2 = "i64x2.shr_s",
+  ShrUVecI64x2 = "i64x2.shr_u",
 }
 
 /** SIMD extended-load operators. Mirrors `SIMDLoadOp` in Binaryen. */
@@ -858,16 +914,15 @@ export interface RefFuncExpr extends ExprBase {
   func: string;
 }
 
-
 // ---------------------------------------------------------------------------
 // GC proposal expression node types (Phase 7)
 // ---------------------------------------------------------------------------
 
 /** Discriminant for br_on variants. */
 export enum BrOnOp {
-  Null     = "br_on_null",
-  NonNull  = "br_on_non_null",
-  Cast     = "br_on_cast",
+  Null = "br_on_null",
+  NonNull = "br_on_non_null",
+  Cast = "br_on_cast",
   CastFail = "br_on_cast_fail",
 }
 
@@ -1483,7 +1538,16 @@ export function makeCallIndirect(
   isReturn = false,
 ): CallIndirectExpr {
   const type: Type = results.length > 0 ? results[0] : None;
-  return { kind: ExpressionKind.CallIndirect, type, table, target, operands, params, results, isReturn };
+  return {
+    kind: ExpressionKind.CallIndirect,
+    type,
+    table,
+    target,
+    operands,
+    params,
+    results,
+    isReturn,
+  };
 }
 
 /** Creates a memory load expression. */
@@ -1520,12 +1584,20 @@ export function makeMemoryGrow(delta: Expression): MemoryGrowExpr {
 }
 
 /** Creates a `memory.copy` expression. */
-export function makeMemoryCopy(dest: Expression, source: Expression, size: Expression): MemoryCopyExpr {
+export function makeMemoryCopy(
+  dest: Expression,
+  source: Expression,
+  size: Expression,
+): MemoryCopyExpr {
   return { kind: ExpressionKind.MemoryCopy, type: None, dest, source, size };
 }
 
 /** Creates a `memory.fill` expression. */
-export function makeMemoryFill(dest: Expression, value: Expression, size: Expression): MemoryFillExpr {
+export function makeMemoryFill(
+  dest: Expression,
+  value: Expression,
+  size: Expression,
+): MemoryFillExpr {
   return { kind: ExpressionKind.MemoryFill, type: None, dest, value, size };
 }
 
@@ -1544,7 +1616,6 @@ export function makeRefIsNull(value: Expression): RefIsNullExpr {
   return { kind: ExpressionKind.RefIsNull, type: ValType.I32, value };
 }
 
-
 /** Creates a ref.eq expression. */
 export function makeRefEq(left: Expression, right: Expression): RefEqExpr {
   return { kind: ExpressionKind.RefEq, type: ValType.I32, left, right };
@@ -1561,74 +1632,133 @@ export function makeI31Get(i31: Expression, signed: boolean): I31GetExpr {
 }
 
 /** Creates a struct.new expression. */
-export function makeStructNew(typeIndex: number, operands: Expression[], resultType: Type): StructNewExpr {
-  return { kind: ExpressionKind.StructNew, type: resultType, typeIndex, operands, defaultInit: false };
+export function makeStructNew(
+  typeIndex: number,
+  operands: Expression[],
+  resultType: Type,
+): StructNewExpr {
+  return {
+    kind: ExpressionKind.StructNew,
+    type: resultType,
+    typeIndex,
+    operands,
+    defaultInit: false,
+  };
 }
 
 /** Creates a struct.new_default expression. */
 export function makeStructNewDefault(typeIndex: number, resultType: Type): StructNewExpr {
-  return { kind: ExpressionKind.StructNew, type: resultType, typeIndex, operands: [], defaultInit: true };
+  return {
+    kind: ExpressionKind.StructNew,
+    type: resultType,
+    typeIndex,
+    operands: [],
+    defaultInit: true,
+  };
 }
 
 /** Creates a struct.get expression. */
 export function makeStructGet(
-  typeIndex: number, fieldIndex: number, ref: Expression,
-  resultType: Type, signed = false,
+  typeIndex: number,
+  fieldIndex: number,
+  ref: Expression,
+  resultType: Type,
+  signed = false,
 ): StructGetExpr {
   return { kind: ExpressionKind.StructGet, type: resultType, typeIndex, fieldIndex, ref, signed };
 }
 
 /** Creates a struct.set expression. */
 export function makeStructSet(
-  typeIndex: number, fieldIndex: number, ref: Expression, value: Expression,
+  typeIndex: number,
+  fieldIndex: number,
+  ref: Expression,
+  value: Expression,
 ): StructSetExpr {
   return { kind: ExpressionKind.StructSet, type: None, typeIndex, fieldIndex, ref, value };
 }
 
 /** Creates an array.new expression. */
 export function makeArrayNew(
-  typeIndex: number, init: Expression, length: Expression, resultType: Type,
+  typeIndex: number,
+  init: Expression,
+  length: Expression,
+  resultType: Type,
 ): ArrayNewExpr {
   return { kind: ExpressionKind.ArrayNew, type: resultType, typeIndex, init, length };
 }
 
 /** Creates an array.new_default expression. */
-export function makeArrayNewDefault(typeIndex: number, length: Expression, resultType: Type): ArrayNewExpr {
+export function makeArrayNewDefault(
+  typeIndex: number,
+  length: Expression,
+  resultType: Type,
+): ArrayNewExpr {
   return { kind: ExpressionKind.ArrayNew, type: resultType, typeIndex, init: null, length };
 }
 
 /** Creates an array.new_fixed expression. */
-export function makeArrayNewFixed(typeIndex: number, values: Expression[], resultType: Type): ArrayNewFixedExpr {
+export function makeArrayNewFixed(
+  typeIndex: number,
+  values: Expression[],
+  resultType: Type,
+): ArrayNewFixedExpr {
   return { kind: ExpressionKind.ArrayNewFixed, type: resultType, typeIndex, values };
 }
 
 /** Creates an array.new_data expression. */
 export function makeArrayNewData(
-  typeIndex: number, dataSegment: number,
-  offset: Expression, length: Expression, resultType: Type,
+  typeIndex: number,
+  dataSegment: number,
+  offset: Expression,
+  length: Expression,
+  resultType: Type,
 ): ArrayNewDataExpr {
-  return { kind: ExpressionKind.ArrayNewData, type: resultType, typeIndex, dataSegment, offset, length };
+  return {
+    kind: ExpressionKind.ArrayNewData,
+    type: resultType,
+    typeIndex,
+    dataSegment,
+    offset,
+    length,
+  };
 }
 
 /** Creates an array.new_elem expression. */
 export function makeArrayNewElem(
-  typeIndex: number, elemSegment: number,
-  offset: Expression, length: Expression, resultType: Type,
+  typeIndex: number,
+  elemSegment: number,
+  offset: Expression,
+  length: Expression,
+  resultType: Type,
 ): ArrayNewElemExpr {
-  return { kind: ExpressionKind.ArrayNewElem, type: resultType, typeIndex, elemSegment, offset, length };
+  return {
+    kind: ExpressionKind.ArrayNewElem,
+    type: resultType,
+    typeIndex,
+    elemSegment,
+    offset,
+    length,
+  };
 }
 
 /** Creates an array.get expression. */
 export function makeArrayGet(
-  typeIndex: number, ref: Expression, index: Expression,
-  resultType: Type, signed = false,
+  typeIndex: number,
+  ref: Expression,
+  index: Expression,
+  resultType: Type,
+  signed = false,
 ): ArrayGetExpr {
   return { kind: ExpressionKind.ArrayGet, type: resultType, typeIndex, ref, index, signed };
 }
 
 /** Creates an array.set expression. */
 export function makeArraySet(
-  typeIndex: number, ref: Expression, index: Expression, value: Expression,
+  typeIndex: number,
+  ref: Expression,
+  index: Expression,
+  value: Expression,
 ): ArraySetExpr {
   return { kind: ExpressionKind.ArraySet, type: None, typeIndex, ref, index, value };
 }
@@ -1644,14 +1774,23 @@ export function makeRefTest(ref: Expression, castType: HeapType, nullable: boole
 }
 
 /** Creates a ref.cast or ref.cast null expression. */
-export function makeRefCast(ref: Expression, castType: HeapType, nullable: boolean, resultType: Type): RefCastExpr {
+export function makeRefCast(
+  ref: Expression,
+  castType: HeapType,
+  nullable: boolean,
+  resultType: Type,
+): RefCastExpr {
   return { kind: ExpressionKind.RefCast, type: resultType, ref, castType, nullable };
 }
 
 /** Creates a br_on_null, br_on_non_null, br_on_cast, or br_on_cast_fail expression. */
 export function makeBrOn(
-  op: BrOnOp, label: string, ref: Expression, resultType: Type,
-  castType?: HeapType, castNullable?: boolean,
+  op: BrOnOp,
+  label: string,
+  ref: Expression,
+  resultType: Type,
+  castType?: HeapType,
+  castNullable?: boolean,
 ): BrOnExpr {
   return { kind: ExpressionKind.BrOn, type: resultType, op, label, ref, castType, castNullable };
 }
@@ -1675,7 +1814,15 @@ export function makeTry(
   delegateTarget: string | null,
   resultType: Type,
 ): TryExpr {
-  return { kind: ExpressionKind.Try, type: resultType, name, body, catchTags, catchBodies, delegateTarget };
+  return {
+    kind: ExpressionKind.Try,
+    type: resultType,
+    name,
+    body,
+    catchTags,
+    catchBodies,
+    delegateTarget,
+  };
 }
 
 /** Creates a `throw $tag operands*` expression. */
@@ -1710,17 +1857,31 @@ export function makeSIMDExtract(op: SIMDExtractOp, vec: Expression, lane: number
 }
 
 /** Creates a `*.replace_lane` SIMD expression. */
-export function makeSIMDReplace(op: SIMDReplaceOp, vec: Expression, lane: number, value: Expression): SIMDReplaceExpr {
+export function makeSIMDReplace(
+  op: SIMDReplaceOp,
+  vec: Expression,
+  lane: number,
+  value: Expression,
+): SIMDReplaceExpr {
   return { kind: ExpressionKind.SIMDReplace, type: ValType.V128, op, vec, lane, value };
 }
 
 /** Creates an `i8x16.shuffle` expression. */
-export function makeSIMDShuffle(left: Expression, right: Expression, mask: Uint8Array): SIMDShuffleExpr {
+export function makeSIMDShuffle(
+  left: Expression,
+  right: Expression,
+  mask: Uint8Array,
+): SIMDShuffleExpr {
   return { kind: ExpressionKind.SIMDShuffle, type: ValType.V128, left, right, mask };
 }
 
 /** Creates a `v128.bitselect` or relaxed ternary SIMD expression. */
-export function makeSIMDTernary(op: SIMDTernaryOp, a: Expression, b: Expression, c: Expression): SIMDTernaryExpr {
+export function makeSIMDTernary(
+  op: SIMDTernaryOp,
+  a: Expression,
+  b: Expression,
+  c: Expression,
+): SIMDTernaryExpr {
   return { kind: ExpressionKind.SIMDTernary, type: ValType.V128, op, a, b, c };
 }
 
@@ -1730,7 +1891,12 @@ export function makeSIMDShift(op: SIMDShiftOp, vec: Expression, shift: Expressio
 }
 
 /** Creates a SIMD extended load expression (splat, extend, or zero-extend). */
-export function makeSIMDLoad(op: SIMDLoadOp, ptr: Expression, offset: number, align: number): SIMDLoadExpr {
+export function makeSIMDLoad(
+  op: SIMDLoadOp,
+  ptr: Expression,
+  offset: number,
+  align: number,
+): SIMDLoadExpr {
   return { kind: ExpressionKind.SIMDLoad, type: ValType.V128, op, ptr, offset, align };
 }
 
@@ -1747,7 +1913,16 @@ export function makeSIMDLoadStoreLane(
     op === SIMDLoadStoreLaneOp.Store16LaneVec128 ||
     op === SIMDLoadStoreLaneOp.Store32LaneVec128 ||
     op === SIMDLoadStoreLaneOp.Store64LaneVec128;
-  return { kind: ExpressionKind.SIMDLoadStoreLane, type: isStore ? None : ValType.V128, op, ptr, vec, offset, align, lane };
+  return {
+    kind: ExpressionKind.SIMDLoadStoreLane,
+    type: isStore ? None : ValType.V128,
+    op,
+    ptr,
+    vec,
+    offset,
+    align,
+    lane,
+  };
 }
 
 // ---------------------------------------------------------------------------
@@ -1756,9 +1931,11 @@ export function makeSIMDLoadStoreLane(
 
 function inferBinaryType(op: BinaryOp): ValType {
   // SIMD ops all return v128 (including SIMD comparisons, unlike scalar comparisons)
-  if (op.startsWith("i8x16.") || op.startsWith("i16x8.") || op.startsWith("i32x4.") ||
-      op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
-      op.startsWith("v128.")) return ValType.V128;
+  if (
+    op.startsWith("i8x16.") || op.startsWith("i16x8.") || op.startsWith("i32x4.") ||
+    op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
+    op.startsWith("v128.")
+  ) return ValType.V128;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;
@@ -1767,11 +1944,15 @@ function inferBinaryType(op: BinaryOp): ValType {
 
 function inferUnaryType(op: UnaryOp): ValType {
   // SIMD reduction ops return i32
-  if (op.endsWith(".all_true") || op.endsWith(".bitmask") || op === UnaryOp.AnyTrueVec128) return ValType.I32;
+  if (op.endsWith(".all_true") || op.endsWith(".bitmask") || op === UnaryOp.AnyTrueVec128) {
+    return ValType.I32;
+  }
   // All other SIMD ops return v128
-  if (op.startsWith("i8x16.") || op.startsWith("i16x8.") || op.startsWith("i32x4.") ||
-      op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
-      op.startsWith("v128.")) return ValType.V128;
+  if (
+    op.startsWith("i8x16.") || op.startsWith("i16x8.") || op.startsWith("i32x4.") ||
+    op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
+    op.startsWith("v128.")
+  ) return ValType.V128;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;

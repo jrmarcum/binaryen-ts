@@ -29,7 +29,7 @@
  * @license MIT
  */
 
-import { Token, TokenKind, TextPos, WatTokenizeError } from "./tokenizer.ts";
+import { type TextPos, type Token, TokenKind } from "./tokenizer.ts";
 
 // ---------------------------------------------------------------------------
 // SExpr node types
@@ -225,7 +225,11 @@ export function listFrom(s: SList, from: number): SExpr[] {
  */
 export function assertList(s: SExpr, expected: string, filename = "<input>"): SList {
   if (s.kind !== "list") {
-    throw new WatSExprError(`expected (${expected} ...) but got atom ${atomText(s)}`, s.pos, filename);
+    throw new WatSExprError(
+      `expected (${expected} ...) but got atom ${atomText(s)}`,
+      s.pos,
+      filename,
+    );
   }
   const head = listHead(s);
   if (head !== expected) {

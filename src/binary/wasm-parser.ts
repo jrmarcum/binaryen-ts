@@ -17,9 +17,9 @@ import {
 } from "../ir/module.ts";
 import {
   BinaryOp,
-  makeBinary,
   type CatchClause,
   type Expression,
+  makeBinary,
   makeBlock,
   makeBreak,
   makeCall,
@@ -46,9 +46,16 @@ import {
   makeRefFunc,
   makeRefIsNull,
   makeRefNull,
-  makeReturn,
   makeRethrow,
+  makeReturn,
   makeSelect,
+  makeSIMDExtract,
+  makeSIMDLoad,
+  makeSIMDLoadStoreLane,
+  makeSIMDReplace,
+  makeSIMDShift,
+  makeSIMDShuffle,
+  makeSIMDTernary,
   makeStore,
   makeSwitch,
   makeThrow,
@@ -57,24 +64,44 @@ import {
   makeTryTable,
   makeUnary,
   makeUnreachable,
-  UnaryOp,
   makeV128Const,
-  makeSIMDExtract, makeSIMDReplace, makeSIMDShuffle,
-  makeSIMDTernary, makeSIMDShift, makeSIMDLoad, makeSIMDLoadStoreLane,
-  SIMDExtractOp, SIMDReplaceOp, SIMDShiftOp, SIMDLoadOp, SIMDLoadStoreLaneOp, SIMDTernaryOp,
+  SIMDExtractOp,
+  SIMDLoadOp,
+  SIMDLoadStoreLaneOp,
+  SIMDReplaceOp,
+  SIMDShiftOp,
+  SIMDTernaryOp,
+  UnaryOp,
 } from "../ir/expressions.ts";
 import {
-  type TypeDef, type FieldType, type StorageType, type RefType,
-  AbstractHeapType, type HeapType,
+  AbstractHeapType,
+  type FieldType,
+  type HeapType,
   isRefType,
+  type RefType,
+  type StorageType,
+  type TypeDef,
 } from "../ir/gc-types.ts";
 import {
-  makeRefEq, makeRefI31, makeI31Get,
-  makeStructNew, makeStructNewDefault, makeStructGet, makeStructSet,
-  makeArrayNew, makeArrayNewDefault, makeArrayNewFixed,
-  makeArrayNewData, makeArrayNewElem,
-  makeArrayGet, makeArraySet, makeArrayLen,
-  makeRefTest, makeRefCast, makeBrOn, BrOnOp,
+  BrOnOp,
+  makeArrayGet,
+  makeArrayLen,
+  makeArrayNew,
+  makeArrayNewData,
+  makeArrayNewDefault,
+  makeArrayNewElem,
+  makeArrayNewFixed,
+  makeArraySet,
+  makeBrOn,
+  makeI31Get,
+  makeRefCast,
+  makeRefEq,
+  makeRefI31,
+  makeRefTest,
+  makeStructGet,
+  makeStructNew,
+  makeStructNewDefault,
+  makeStructSet,
 } from "../ir/expressions.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 
@@ -290,18 +317,30 @@ const BINARY_OPCODE: Record<number, BinaryOp> = {
 function readHeapType(r: BinaryReader): HeapType {
   const v = r.readI32(); // heap types encoded as signed LEB128
   switch (v) {
-    case -0x10: return AbstractHeapType.Func;
-    case -0x0d: return AbstractHeapType.NoFunc;
-    case -0x11: return AbstractHeapType.Ext;
-    case -0x0e: return AbstractHeapType.NoExt;
-    case -0x12: return AbstractHeapType.Any;
-    case -0x13: return AbstractHeapType.Eq;
-    case -0x14: return AbstractHeapType.I31;
-    case -0x15: return AbstractHeapType.Struct;
-    case -0x16: return AbstractHeapType.Array;
-    case -0x0f: return AbstractHeapType.None;
-    case -0x17: return AbstractHeapType.Exn;
-    case -0x0c: return AbstractHeapType.NoExn;
+    case -0x10:
+      return AbstractHeapType.Func;
+    case -0x0d:
+      return AbstractHeapType.NoFunc;
+    case -0x11:
+      return AbstractHeapType.Ext;
+    case -0x0e:
+      return AbstractHeapType.NoExt;
+    case -0x12:
+      return AbstractHeapType.Any;
+    case -0x13:
+      return AbstractHeapType.Eq;
+    case -0x14:
+      return AbstractHeapType.I31;
+    case -0x15:
+      return AbstractHeapType.Struct;
+    case -0x16:
+      return AbstractHeapType.Array;
+    case -0x0f:
+      return AbstractHeapType.None;
+    case -0x17:
+      return AbstractHeapType.Exn;
+    case -0x0c:
+      return AbstractHeapType.NoExn;
     default:
       if (v >= 0) return v; // type index
       return AbstractHeapType.Any; // fallback for unknown abstract types
@@ -312,28 +351,48 @@ function readHeapType(r: BinaryReader): HeapType {
 function readValueType(r: BinaryReader): ValType | RefType {
   const b = r.readU8();
   switch (b) {
-    case 0x7f: return ValType.I32;
-    case 0x7e: return ValType.I64;
-    case 0x7d: return ValType.F32;
-    case 0x7c: return ValType.F64;
-    case 0x7b: return ValType.V128;
+    case 0x7f:
+      return ValType.I32;
+    case 0x7e:
+      return ValType.I64;
+    case 0x7d:
+      return ValType.F32;
+    case 0x7c:
+      return ValType.F64;
+    case 0x7b:
+      return ValType.V128;
     // Abstract nullable reference types (shorthand encodings)
-    case 0x70: return ValType.FuncRef;
-    case 0x6f: return ValType.ExternRef;
-    case 0x6e: return ValType.AnyRef;
-    case 0x6d: return ValType.EqRef;
-    case 0x6c: return ValType.I31Ref;
-    case 0x6b: return ValType.StructRef;
-    case 0x6a: return ValType.ArrayRef;
-    case 0x73: return ValType.NullFuncRef;
-    case 0x72: return ValType.NullExternRef;
-    case 0x71: return ValType.NullRef;
-    case 0x69: return ValType.ExnRef;
-    case 0x74: return ValType.NullExnRef;
+    case 0x70:
+      return ValType.FuncRef;
+    case 0x6f:
+      return ValType.ExternRef;
+    case 0x6e:
+      return ValType.AnyRef;
+    case 0x6d:
+      return ValType.EqRef;
+    case 0x6c:
+      return ValType.I31Ref;
+    case 0x6b:
+      return ValType.StructRef;
+    case 0x6a:
+      return ValType.ArrayRef;
+    case 0x73:
+      return ValType.NullFuncRef;
+    case 0x72:
+      return ValType.NullExternRef;
+    case 0x71:
+      return ValType.NullRef;
+    case 0x69:
+      return ValType.ExnRef;
+    case 0x74:
+      return ValType.NullExnRef;
     // Typed reference: (ref null $T) = 0x63, (ref $T) = 0x64
-    case 0x63: return { heap: readHeapType(r), nullable: true };
-    case 0x64: return { heap: readHeapType(r), nullable: false };
-    default: r.error(`unknown valtype byte 0x${b.toString(16)}`);
+    case 0x63:
+      return { heap: readHeapType(r), nullable: true };
+    case 0x64:
+      return { heap: readHeapType(r), nullable: false };
+    default:
+      r.error(`unknown valtype byte 0x${b.toString(16)}`);
   }
 }
 
@@ -347,13 +406,18 @@ function readValTypeByte(r: BinaryReader): ValType {
 
 function readBlockType(r: BinaryReader): (ValType | RefType)[] {
   const b = r.peekU8();
-  if (b === 0x40) { r.readU8(); return []; }
+  if (b === 0x40) {
+    r.readU8();
+    return [];
+  }
   // Any value type byte (MVP + GC + EH ref types)
-  if (b === 0x7f || b === 0x7e || b === 0x7d || b === 0x7c || b === 0x7b ||
-      b === 0x70 || b === 0x6f || b === 0x6e || b === 0x6d || b === 0x6c ||
-      b === 0x6b || b === 0x6a || b === 0x73 || b === 0x72 || b === 0x71 ||
-      b === 0x69 || b === 0x74 ||
-      b === 0x63 || b === 0x64) {
+  if (
+    b === 0x7f || b === 0x7e || b === 0x7d || b === 0x7c || b === 0x7b ||
+    b === 0x70 || b === 0x6f || b === 0x6e || b === 0x6d || b === 0x6c ||
+    b === 0x6b || b === 0x6a || b === 0x73 || b === 0x72 || b === 0x71 ||
+    b === 0x69 || b === 0x74 ||
+    b === 0x63 || b === 0x64
+  ) {
     return [readValueType(r)];
   }
   // type index (multi-value) — read as signed LEB128
@@ -372,7 +436,6 @@ function resolveLabel(frames: ControlFrame[], depth: number): string {
   if (idx < 0) return `$label${depth}`;
   return frames[idx].label;
 }
-
 
 function sealFrame(frame: ControlFrame): Expression {
   if (frame.exprs.length === 0) return makeNop();
@@ -412,8 +475,6 @@ class WasmParser {
     };
   }
 
-
-
   private readHeader(): void {
     const magic = this.r.readU32Fixed();
     if (magic !== 0x6d736100) this.r.error("invalid WASM magic");
@@ -429,21 +490,51 @@ class WasmParser {
       const end = start + size;
 
       switch (id) {
-        case SECTION_TYPE:     this.readTypeSection(); break;
-        case SECTION_IMPORT:   this.readImportSection(); break;
-        case SECTION_FUNCTION: this.readFunctionSection(); break;
-        case SECTION_TABLE:    this.readTableSection(); break;
-        case SECTION_MEMORY:   this.readMemorySection(); break;
-        case SECTION_GLOBAL:   this.readGlobalSection(); break;
-        case SECTION_EXPORT:   this.readExportSection(); break;
-        case SECTION_START:    this.r.readU32(); break; // start func index -- skip
-        case SECTION_ELEMENT:  this.readElementSection(end); break;
-        case SECTION_CODE:     this.readCodeSection(); break;
-        case SECTION_DATA:     this.readDataSection(); break;
-        case SECTION_DATA_COUNT: this.r.readU32(); break;
-        case SECTION_TAG:      this.readTagSection(); break;
-        case SECTION_CUSTOM:   this.readCustomSection(start, end); break;
-        default:               this.r.seek(end); break;
+        case SECTION_TYPE:
+          this.readTypeSection();
+          break;
+        case SECTION_IMPORT:
+          this.readImportSection();
+          break;
+        case SECTION_FUNCTION:
+          this.readFunctionSection();
+          break;
+        case SECTION_TABLE:
+          this.readTableSection();
+          break;
+        case SECTION_MEMORY:
+          this.readMemorySection();
+          break;
+        case SECTION_GLOBAL:
+          this.readGlobalSection();
+          break;
+        case SECTION_EXPORT:
+          this.readExportSection();
+          break;
+        case SECTION_START:
+          this.r.readU32();
+          break; // start func index -- skip
+        case SECTION_ELEMENT:
+          this.readElementSection(end);
+          break;
+        case SECTION_CODE:
+          this.readCodeSection();
+          break;
+        case SECTION_DATA:
+          this.readDataSection();
+          break;
+        case SECTION_DATA_COUNT:
+          this.r.readU32();
+          break;
+        case SECTION_TAG:
+          this.readTagSection();
+          break;
+        case SECTION_CUSTOM:
+          this.readCustomSection(start, end);
+          break;
+        default:
+          this.r.seek(end);
+          break;
       }
 
       if (this.r.position !== end) this.r.seek(end);
@@ -459,8 +550,14 @@ class WasmParser {
 
   private readStorageType(): StorageType {
     const b = this.r.peekU8();
-    if (b === 0x78) { this.r.readU8(); return "i8"; }
-    if (b === 0x77) { this.r.readU8(); return "i16"; }
+    if (b === 0x78) {
+      this.r.readU8();
+      return "i8";
+    }
+    if (b === 0x77) {
+      this.r.readU8();
+      return "i16";
+    }
     return readValueType(this.r);
   }
 
@@ -562,7 +659,8 @@ class WasmParser {
           this.builder.addGlobalImport(gname, module, base, type, mutable);
           break;
         }
-        default: this.r.error(`unknown import kind 0x${kind.toString(16)}`);
+        default:
+          this.r.error(`unknown import kind 0x${kind.toString(16)}`);
       }
     }
   }
@@ -637,7 +735,8 @@ class WasmParser {
           this.builder.addExport(name, `$global${index}`, "global");
           break;
         }
-        default: break;
+        default:
+          break;
       }
     }
   }
@@ -687,7 +786,13 @@ class WasmParser {
       const ft = this.funcTypes[typeIdx];
       const bodyReader = this.r.slice(bodyStart, bodyEnd);
       const fn = this.decodeFunction(bodyReader, ft, funcIdx, ctx);
-      this.builder.addFunction(fn.name, fn.params, fn.results, fn.body, fn.locals.slice(fn.params.length));
+      this.builder.addFunction(
+        fn.name,
+        fn.params,
+        fn.results,
+        fn.body,
+        fn.locals.slice(fn.params.length),
+      );
       this.r.seek(bodyEnd);
     }
   }
@@ -730,7 +835,10 @@ class WasmParser {
   private readCustomSection(_start: number, end: number): void {
     if (this.r.position >= end) return;
     const nameLen = this.r.readU32();
-    if (this.r.position + nameLen > end) { this.r.seek(end); return; }
+    if (this.r.position + nameLen > end) {
+      this.r.seek(end);
+      return;
+    }
     const name = this.r.readUTF8(nameLen);
     if (name === "name") {
       this.readNameSection(end);
@@ -748,10 +856,18 @@ class WasmParser {
     const opcode = this.r.readU8();
     let expr: Expression;
     switch (opcode) {
-      case 0x41: expr = makeI32Const(this.r.readI32()); break;
-      case 0x42: expr = makeI64Const(this.r.readI64()); break;
-      case 0x43: expr = makeF32Const(this.r.readF32()); break;
-      case 0x44: expr = makeF64Const(this.r.readF64()); break;
+      case 0x41:
+        expr = makeI32Const(this.r.readI32());
+        break;
+      case 0x42:
+        expr = makeI64Const(this.r.readI64());
+        break;
+      case 0x43:
+        expr = makeF32Const(this.r.readF32());
+        break;
+      case 0x44:
+        expr = makeF64Const(this.r.readF64());
+        break;
       case 0x23: { // global.get
         const idx = this.r.readU32();
         const gi = this.globalInfos[idx];
@@ -822,8 +938,12 @@ class WasmParser {
     decode: while (!r.eof) {
       const op = r.readU8();
       switch (op) {
-        case 0x00: push(makeUnreachable()); break;
-        case 0x01: push(makeNop()); break;
+        case 0x00:
+          push(makeUnreachable());
+          break;
+        case 0x01:
+          push(makeNop());
+          break;
 
         case 0x02: { // block
           const rts = readBlockType(r);
@@ -838,7 +958,14 @@ class WasmParser {
         case 0x04: { // if
           const rts = readBlockType(r);
           const cond = pop();
-          frames.push({ kind: "if", label: freshLabel(), resultTypes: rts, exprs: [], ifCondition: cond, thenExprs: [] });
+          frames.push({
+            kind: "if",
+            label: freshLabel(),
+            resultTypes: rts,
+            exprs: [],
+            ifCondition: cond,
+            thenExprs: [],
+          });
           break;
         }
         case 0x05: { // else
@@ -854,8 +981,13 @@ class WasmParser {
         case 0x06: { // try (old EH)
           const rts = readBlockType(r);
           frames.push({
-            kind: "try", label: freshLabel(), resultTypes: rts, exprs: [],
-            catchTags: [], catchBodies: [], delegateTarget: null,
+            kind: "try",
+            label: freshLabel(),
+            resultTypes: rts,
+            exprs: [],
+            catchTags: [],
+            catchBodies: [],
+            delegateTarget: null,
           });
           break;
         }
@@ -917,13 +1049,24 @@ class WasmParser {
             push(makeLoop(frame.label, body, resultType));
           } else if (frame.kind === "try" || frame.kind === "catch") {
             const tryBodyExprs = frame.kind === "try" ? frame.exprs : (frame.tryBody ?? []);
-            const tryBody = tryBodyExprs.length === 1 ? tryBodyExprs[0] : makeBlock(tryBodyExprs, null);
+            const tryBody = tryBodyExprs.length === 1
+              ? tryBodyExprs[0]
+              : makeBlock(tryBodyExprs, null);
             const allCatchBodies = [...(frame.catchBodies ?? [])];
             if (frame.kind === "catch") allCatchBodies.push(frame.exprs);
             const catchBodyExprs = allCatchBodies.map((ce) =>
               ce.length === 1 ? ce[0] : makeBlock(ce, null)
             );
-            push(makeTry(frame.label, tryBody, frame.catchTags ?? [], catchBodyExprs, null, resultType));
+            push(
+              makeTry(
+                frame.label,
+                tryBody,
+                frame.catchTags ?? [],
+                catchBodyExprs,
+                null,
+                resultType,
+              ),
+            );
           } else if (frame.kind === "try_table") {
             const body = sealFrame(frame);
             push(makeTryTable(frame.label, body, frame.tryCatches ?? [], resultType));
@@ -970,8 +1113,10 @@ class WasmParser {
             : ctx.funcTypeIndices[fidx - ctx.importedFuncCount];
           const cft = typeIdx !== undefined ? ctx.funcTypes[typeIdx] : { params: [], results: [] };
           const operands = popN(cft.params.length);
-          const resultType: Type = cft.results.length === 0 ? None
-            : cft.results.length === 1 ? cft.results[0]
+          const resultType: Type = cft.results.length === 0
+            ? None
+            : cft.results.length === 1
+            ? cft.results[0]
             : cft.results;
           push(makeCall(`$func${fidx}`, operands, resultType));
           break;
@@ -1027,15 +1172,25 @@ class WasmParser {
             catchData.push({ tag, depth, isRef });
           }
           // Push the frame first — catch dest depths are relative to this frame at depth 0
-          frames.push({ kind: "try_table", label: freshLabel(), resultTypes: rts, exprs: [], tryCatches: [] });
+          frames.push({
+            kind: "try_table",
+            label: freshLabel(),
+            resultTypes: rts,
+            exprs: [],
+            tryCatches: [],
+          });
           const catches: CatchClause[] = catchData.map(({ tag, depth, isRef }) => ({
-            tag, dest: resolveLabel(frames, depth), isRef,
+            tag,
+            dest: resolveLabel(frames, depth),
+            isRef,
           }));
           frames[frames.length - 1].tryCatches = catches;
           break;
         }
 
-        case 0x1a: push(makeDrop(pop())); break; // drop
+        case 0x1a:
+          push(makeDrop(pop()));
+          break; // drop
         case 0x1b: { // select
           const cond = pop();
           const b = pop();
@@ -1080,44 +1235,160 @@ class WasmParser {
         }
         case 0x26: { // table.set -- stub
           r.readU32();
-          pop(); pop();
+          pop();
+          pop();
           push(makeNop());
           break;
         }
 
         // Loads
-        case 0x28: { const { align, offset } = readMemArg(r); push(makeLoad(4, false, offset, align, pop(), ValType.I32)); break; }
-        case 0x29: { const { align, offset } = readMemArg(r); push(makeLoad(8, false, offset, align, pop(), ValType.I64)); break; }
-        case 0x2a: { const { align, offset } = readMemArg(r); push(makeLoad(4, false, offset, align, pop(), ValType.F32)); break; }
-        case 0x2b: { const { align, offset } = readMemArg(r); push(makeLoad(8, false, offset, align, pop(), ValType.F64)); break; }
-        case 0x2c: { const { align, offset } = readMemArg(r); push(makeLoad(1, true,  offset, align, pop(), ValType.I32)); break; }
-        case 0x2d: { const { align, offset } = readMemArg(r); push(makeLoad(1, false, offset, align, pop(), ValType.I32)); break; }
-        case 0x2e: { const { align, offset } = readMemArg(r); push(makeLoad(2, true,  offset, align, pop(), ValType.I32)); break; }
-        case 0x2f: { const { align, offset } = readMemArg(r); push(makeLoad(2, false, offset, align, pop(), ValType.I32)); break; }
-        case 0x30: { const { align, offset } = readMemArg(r); push(makeLoad(1, true,  offset, align, pop(), ValType.I64)); break; }
-        case 0x31: { const { align, offset } = readMemArg(r); push(makeLoad(1, false, offset, align, pop(), ValType.I64)); break; }
-        case 0x32: { const { align, offset } = readMemArg(r); push(makeLoad(2, true,  offset, align, pop(), ValType.I64)); break; }
-        case 0x33: { const { align, offset } = readMemArg(r); push(makeLoad(2, false, offset, align, pop(), ValType.I64)); break; }
-        case 0x34: { const { align, offset } = readMemArg(r); push(makeLoad(4, true,  offset, align, pop(), ValType.I64)); break; }
-        case 0x35: { const { align, offset } = readMemArg(r); push(makeLoad(4, false, offset, align, pop(), ValType.I64)); break; }
+        case 0x28: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(4, false, offset, align, pop(), ValType.I32));
+          break;
+        }
+        case 0x29: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(8, false, offset, align, pop(), ValType.I64));
+          break;
+        }
+        case 0x2a: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(4, false, offset, align, pop(), ValType.F32));
+          break;
+        }
+        case 0x2b: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(8, false, offset, align, pop(), ValType.F64));
+          break;
+        }
+        case 0x2c: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(1, true, offset, align, pop(), ValType.I32));
+          break;
+        }
+        case 0x2d: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(1, false, offset, align, pop(), ValType.I32));
+          break;
+        }
+        case 0x2e: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(2, true, offset, align, pop(), ValType.I32));
+          break;
+        }
+        case 0x2f: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(2, false, offset, align, pop(), ValType.I32));
+          break;
+        }
+        case 0x30: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(1, true, offset, align, pop(), ValType.I64));
+          break;
+        }
+        case 0x31: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(1, false, offset, align, pop(), ValType.I64));
+          break;
+        }
+        case 0x32: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(2, true, offset, align, pop(), ValType.I64));
+          break;
+        }
+        case 0x33: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(2, false, offset, align, pop(), ValType.I64));
+          break;
+        }
+        case 0x34: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(4, true, offset, align, pop(), ValType.I64));
+          break;
+        }
+        case 0x35: {
+          const { align, offset } = readMemArg(r);
+          push(makeLoad(4, false, offset, align, pop(), ValType.I64));
+          break;
+        }
         // Stores
-        case 0x36: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(4, offset, align, pop(), v)); break; }
-        case 0x37: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(8, offset, align, pop(), v)); break; }
-        case 0x38: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(4, offset, align, pop(), v)); break; }
-        case 0x39: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(8, offset, align, pop(), v)); break; }
-        case 0x3a: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(1, offset, align, pop(), v)); break; }
-        case 0x3b: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(2, offset, align, pop(), v)); break; }
-        case 0x3c: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(4, offset, align, pop(), v)); break; }
-        case 0x3d: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(1, offset, align, pop(), v)); break; }
-        case 0x3e: { const { align, offset } = readMemArg(r); const v = pop(); push(makeStore(2, offset, align, pop(), v)); break; }
+        case 0x36: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(4, offset, align, pop(), v));
+          break;
+        }
+        case 0x37: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(8, offset, align, pop(), v));
+          break;
+        }
+        case 0x38: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(4, offset, align, pop(), v));
+          break;
+        }
+        case 0x39: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(8, offset, align, pop(), v));
+          break;
+        }
+        case 0x3a: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(1, offset, align, pop(), v));
+          break;
+        }
+        case 0x3b: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(2, offset, align, pop(), v));
+          break;
+        }
+        case 0x3c: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(4, offset, align, pop(), v));
+          break;
+        }
+        case 0x3d: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(1, offset, align, pop(), v));
+          break;
+        }
+        case 0x3e: {
+          const { align, offset } = readMemArg(r);
+          const v = pop();
+          push(makeStore(2, offset, align, pop(), v));
+          break;
+        }
 
-        case 0x3f: r.readU8(); push(makeMemorySize()); break; // memory.size
-        case 0x40: r.readU8(); push(makeMemoryGrow(pop())); break; // memory.grow
+        case 0x3f:
+          r.readU8();
+          push(makeMemorySize());
+          break; // memory.size
+        case 0x40:
+          r.readU8();
+          push(makeMemoryGrow(pop()));
+          break; // memory.grow
 
-        case 0x41: push(makeI32Const(r.readI32())); break;
-        case 0x42: push(makeI64Const(r.readI64())); break;
-        case 0x43: push(makeF32Const(r.readF32())); break;
-        case 0x44: push(makeF64Const(r.readF64())); break;
+        case 0x41:
+          push(makeI32Const(r.readI32()));
+          break;
+        case 0x42:
+          push(makeI64Const(r.readI64()));
+          break;
+        case 0x43:
+          push(makeF32Const(r.readF32()));
+          break;
+        case 0x44:
+          push(makeF64Const(r.readF64()));
+          break;
 
         case 0xd0: { // ref.null
           const ht = r.readU8();
@@ -1133,7 +1404,8 @@ class WasmParser {
           break;
         }
         case 0xd3: { // ref.eq
-          const b2 = pop(); const a2 = pop();
+          const b2 = pop();
+          const a2 = pop();
           push(makeRefEq(a2, b2));
           break;
         }
@@ -1150,15 +1422,28 @@ class WasmParser {
           break;
         }
 
-        case 0xfb: decodeGcPrefix(r, push, pop, ctx, frames); break;
-        case 0xfc: decodeMiscPrefix(r, push, pop); break;
-        case 0xfd: decodeSIMDPrefix(r, push, pop); break;
+        case 0xfb:
+          decodeGcPrefix(r, push, pop, ctx, frames);
+          break;
+        case 0xfc:
+          decodeMiscPrefix(r, push, pop);
+          break;
+        case 0xfd:
+          decodeSIMDPrefix(r, push, pop);
+          break;
 
         default: {
           const unary = UNARY_OPCODE[op];
-          if (unary !== undefined) { push(makeUnary(unary, pop())); break; }
+          if (unary !== undefined) {
+            push(makeUnary(unary, pop()));
+            break;
+          }
           const binary = BINARY_OPCODE[op];
-          if (binary !== undefined) { const rhs = pop(); push(makeBinary(binary, pop(), rhs)); break; }
+          if (binary !== undefined) {
+            const rhs = pop();
+            push(makeBinary(binary, pop(), rhs));
+            break;
+          }
           // Unknown opcode -- push nop to keep stack consistent
           push(makeNop());
           break;
@@ -1213,7 +1498,8 @@ function decodeGcPrefix(
       break;
     }
     case 0x02: { // struct.get $T $f
-      const ti = r.readU32(); const fi = r.readU32();
+      const ti = r.readU32();
+      const fi = r.readU32();
       const ref = pop();
       const def = ctx.heapTypeDefs[ti];
       const ft = (def?.kind === "struct") ? def.fields[fi] : undefined;
@@ -1222,24 +1508,29 @@ function decodeGcPrefix(
       break;
     }
     case 0x03: { // struct.get_s $T $f
-      const ti = r.readU32(); const fi = r.readU32();
+      const ti = r.readU32();
+      const fi = r.readU32();
       push(makeStructGet(ti, fi, pop(), ValType.I32, true));
       break;
     }
     case 0x04: { // struct.get_u $T $f
-      const ti = r.readU32(); const fi = r.readU32();
+      const ti = r.readU32();
+      const fi = r.readU32();
       push(makeStructGet(ti, fi, pop(), ValType.I32, false));
       break;
     }
     case 0x05: { // struct.set $T $f
-      const ti = r.readU32(); const fi = r.readU32();
-      const val = pop(); const ref = pop();
+      const ti = r.readU32();
+      const fi = r.readU32();
+      const val = pop();
+      const ref = pop();
       push(makeStructSet(ti, fi, ref, val));
       break;
     }
     case 0x06: { // array.new $T
       const ti = r.readU32();
-      const len = pop(); const init = pop();
+      const len = pop();
+      const init = pop();
       push(makeArrayNew(ti, init, len, gcRefType(ti)));
       break;
     }
@@ -1249,21 +1540,26 @@ function decodeGcPrefix(
       break;
     }
     case 0x08: { // array.new_fixed $T n
-      const ti = r.readU32(); const n = r.readU32();
+      const ti = r.readU32();
+      const n = r.readU32();
       const vals: Expression[] = [];
       for (let i = 0; i < n; i++) vals.unshift(pop());
       push(makeArrayNewFixed(ti, vals, gcRefType(ti)));
       break;
     }
     case 0x09: { // array.new_data $T $d
-      const ti = r.readU32(); const di = r.readU32();
-      const len = pop(); const off = pop();
+      const ti = r.readU32();
+      const di = r.readU32();
+      const len = pop();
+      const off = pop();
       push(makeArrayNewData(ti, di, off, len, gcRefType(ti)));
       break;
     }
     case 0x0a: { // array.new_elem $T $e
-      const ti = r.readU32(); const ei = r.readU32();
-      const len = pop(); const off = pop();
+      const ti = r.readU32();
+      const ei = r.readU32();
+      const len = pop();
+      const off = pop();
       push(makeArrayNewElem(ti, ei, off, len, gcRefType(ti)));
       break;
     }
@@ -1272,25 +1568,30 @@ function decodeGcPrefix(
       const def = ctx.heapTypeDefs[ti];
       const eft = (def?.kind === "array") ? def.element : undefined;
       const rt: Type = eft ? (isRefType(eft.type) ? eft.type : eft.type as ValType) : ValType.I32;
-      const idx = pop(); const ref = pop();
+      const idx = pop();
+      const ref = pop();
       push(makeArrayGet(ti, ref, idx, rt, false));
       break;
     }
     case 0x0c: { // array.get_s $T
       const ti = r.readU32();
-      const idx = pop(); const ref = pop();
+      const idx = pop();
+      const ref = pop();
       push(makeArrayGet(ti, ref, idx, ValType.I32, true));
       break;
     }
     case 0x0d: { // array.get_u $T
       const ti = r.readU32();
-      const idx = pop(); const ref = pop();
+      const idx = pop();
+      const ref = pop();
       push(makeArrayGet(ti, ref, idx, ValType.I32, false));
       break;
     }
     case 0x0e: { // array.set $T
       const ti = r.readU32();
-      const val = pop(); const idx = pop(); const ref = pop();
+      const val = pop();
+      const idx = pop();
+      const ref = pop();
       push(makeArraySet(ti, ref, idx, val));
       break;
     }
@@ -1300,7 +1601,10 @@ function decodeGcPrefix(
     }
     case 0x10: { // array.fill $T
       const ti = r.readU32();
-      const len = pop(); const val = pop(); const idx = pop(); const ref = pop();
+      const len = pop();
+      const val = pop();
+      const idx = pop();
+      const ref = pop();
       void ti;
       // Emit as: ref[idx..idx+len] = val — modelled as array.set for first element
       // Full array.fill IR node is available; emit nop for now (complex multi-op)
@@ -1309,20 +1613,33 @@ function decodeGcPrefix(
       break;
     }
     case 0x11: { // array.copy $T1 $T2
-      const _ti1 = r.readU32(); const _ti2 = r.readU32();
-      pop(); pop(); pop(); pop(); pop();
+      const _ti1 = r.readU32();
+      const _ti2 = r.readU32();
+      pop();
+      pop();
+      pop();
+      pop();
+      pop();
       push(makeNop());
       break;
     }
     case 0x12: { // array.init_data $T $d
-      const _ti = r.readU32(); const _di = r.readU32();
-      pop(); pop(); pop(); pop();
+      const _ti = r.readU32();
+      const _di = r.readU32();
+      pop();
+      pop();
+      pop();
+      pop();
       push(makeNop());
       break;
     }
     case 0x13: { // array.init_elem $T $e
-      const _ti = r.readU32(); const _ei = r.readU32();
-      pop(); pop(); pop(); pop();
+      const _ti = r.readU32();
+      const _ei = r.readU32();
+      pop();
+      pop();
+      pop();
+      pop();
       push(makeNop());
       break;
     }
@@ -1366,7 +1683,8 @@ function decodeGcPrefix(
       push(makeBrOn(BrOnOp.CastFail, resolveLabel(frames, depth), ref, ref.type, ht2, nullable));
       break;
     }
-    case 0x1a: case 0x1b: { // any.convert_extern / extern.convert_any
+    case 0x1a:
+    case 0x1b: { // any.convert_extern / extern.convert_any
       push(pop()); // identity conversion in IR
       break;
     }
@@ -1399,35 +1717,103 @@ function decodeMiscPrefix(
 ): void {
   const sub = r.readU32();
   switch (sub) {
-    case 0: push(makeUnary(UnaryOp.TruncSF32ToI32, pop())); break; // i32.trunc_sat_f32_s
-    case 1: push(makeUnary(UnaryOp.TruncUF32ToI32, pop())); break;
-    case 2: push(makeUnary(UnaryOp.TruncSF64ToI32, pop())); break;
-    case 3: push(makeUnary(UnaryOp.TruncUF64ToI32, pop())); break;
-    case 4: push(makeUnary(UnaryOp.TruncSF32ToI64, pop())); break;
-    case 5: push(makeUnary(UnaryOp.TruncUF32ToI64, pop())); break;
-    case 6: push(makeUnary(UnaryOp.TruncSF64ToI64, pop())); break;
-    case 7: push(makeUnary(UnaryOp.TruncUF64ToI64, pop())); break;
+    case 0:
+      push(makeUnary(UnaryOp.TruncSF32ToI32, pop()));
+      break; // i32.trunc_sat_f32_s
+    case 1:
+      push(makeUnary(UnaryOp.TruncUF32ToI32, pop()));
+      break;
+    case 2:
+      push(makeUnary(UnaryOp.TruncSF64ToI32, pop()));
+      break;
+    case 3:
+      push(makeUnary(UnaryOp.TruncUF64ToI32, pop()));
+      break;
+    case 4:
+      push(makeUnary(UnaryOp.TruncSF32ToI64, pop()));
+      break;
+    case 5:
+      push(makeUnary(UnaryOp.TruncUF32ToI64, pop()));
+      break;
+    case 6:
+      push(makeUnary(UnaryOp.TruncSF64ToI64, pop()));
+      break;
+    case 7:
+      push(makeUnary(UnaryOp.TruncUF64ToI64, pop()));
+      break;
     case 10: { // memory.copy
-      r.readU8(); r.readU8(); // dst memidx, src memidx
-      const size = pop(); const src = pop(); const dst = pop();
+      r.readU8();
+      r.readU8(); // dst memidx, src memidx
+      const size = pop();
+      const src = pop();
+      const dst = pop();
       push(makeMemoryCopy(dst, src, size));
       break;
     }
     case 11: { // memory.fill
       r.readU8(); // memidx
-      const size = pop(); const val = pop(); const dst = pop();
+      const size = pop();
+      const val = pop();
+      const dst = pop();
       push(makeMemoryFill(dst, val, size));
       break;
     }
-    case 8:  { r.readU32(); r.readU8(); pop(); pop(); push(makeNop()); break; } // memory.init
-    case 9:  { r.readU32(); push(makeNop()); break; } // data.drop
-    case 12: { r.readU32(); r.readU32(); pop(); pop(); push(makeNop()); break; } // table.init
-    case 13: { r.readU32(); push(makeNop()); break; } // elem.drop
-    case 14: { r.readU32(); r.readU32(); pop(); pop(); pop(); push(makeNop()); break; } // table.copy
-    case 15: { r.readU32(); push(makeNop()); break; } // table.grow (stub)
-    case 16: { r.readU32(); push(makeNop()); break; } // table.size (stub)
-    case 17: { r.readU32(); pop(); pop(); pop(); push(makeNop()); break; } // table.fill (stub)
-    default: push(makeNop()); break;
+    case 8: {
+      r.readU32();
+      r.readU8();
+      pop();
+      pop();
+      push(makeNop());
+      break;
+    } // memory.init
+    case 9: {
+      r.readU32();
+      push(makeNop());
+      break;
+    } // data.drop
+    case 12: {
+      r.readU32();
+      r.readU32();
+      pop();
+      pop();
+      push(makeNop());
+      break;
+    } // table.init
+    case 13: {
+      r.readU32();
+      push(makeNop());
+      break;
+    } // elem.drop
+    case 14: {
+      r.readU32();
+      r.readU32();
+      pop();
+      pop();
+      pop();
+      push(makeNop());
+      break;
+    } // table.copy
+    case 15: {
+      r.readU32();
+      push(makeNop());
+      break;
+    } // table.grow (stub)
+    case 16: {
+      r.readU32();
+      push(makeNop());
+      break;
+    } // table.size (stub)
+    case 17: {
+      r.readU32();
+      pop();
+      pop();
+      pop();
+      push(makeNop());
+      break;
+    } // table.fill (stub)
+    default:
+      push(makeNop());
+      break;
   }
 }
 
@@ -1444,23 +1830,76 @@ function decodeSIMDPrefix(
   switch (sub) {
     // ---- loads ----
     case 0x00: { // v128.load (16 bytes)
-      const align = r.readU32(); const offset = r.readU32();
+      const align = r.readU32();
+      const offset = r.readU32();
       push(makeLoad(16, false, offset, align, pop(), ValType.V128));
       break;
     }
-    case 0x01: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load8x8SVec128,  pop(), offset, align)); break; }
-    case 0x02: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load8x8UVec128,  pop(), offset, align)); break; }
-    case 0x03: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load16x4SVec128, pop(), offset, align)); break; }
-    case 0x04: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load16x4UVec128, pop(), offset, align)); break; }
-    case 0x05: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load32x2SVec128, pop(), offset, align)); break; }
-    case 0x06: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load32x2UVec128, pop(), offset, align)); break; }
-    case 0x07: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load8SplatVec128,  pop(), offset, align)); break; }
-    case 0x08: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load16SplatVec128, pop(), offset, align)); break; }
-    case 0x09: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load32SplatVec128, pop(), offset, align)); break; }
-    case 0x0a: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load64SplatVec128, pop(), offset, align)); break; }
+    case 0x01: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load8x8SVec128, pop(), offset, align));
+      break;
+    }
+    case 0x02: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load8x8UVec128, pop(), offset, align));
+      break;
+    }
+    case 0x03: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load16x4SVec128, pop(), offset, align));
+      break;
+    }
+    case 0x04: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load16x4UVec128, pop(), offset, align));
+      break;
+    }
+    case 0x05: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load32x2SVec128, pop(), offset, align));
+      break;
+    }
+    case 0x06: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load32x2UVec128, pop(), offset, align));
+      break;
+    }
+    case 0x07: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load8SplatVec128, pop(), offset, align));
+      break;
+    }
+    case 0x08: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load16SplatVec128, pop(), offset, align));
+      break;
+    }
+    case 0x09: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load32SplatVec128, pop(), offset, align));
+      break;
+    }
+    case 0x0a: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load64SplatVec128, pop(), offset, align));
+      break;
+    }
     case 0x0b: { // v128.store
-      const align = r.readU32(); const offset = r.readU32();
-      const value = pop(); const ptr = pop();
+      const align = r.readU32();
+      const offset = r.readU32();
+      const value = pop();
+      const ptr = pop();
       push(makeStore(16, offset, align, ptr, value));
       break;
     }
@@ -1471,249 +1910,1106 @@ function decodeSIMDPrefix(
     }
     case 0x0d: { // i8x16.shuffle — 16 lane-select bytes
       const mask = r.readBytes(16);
-      const right = pop(); const left = pop();
+      const right = pop();
+      const left = pop();
       push(makeSIMDShuffle(left, right, mask));
       break;
     }
-    case 0x0e: { const right = pop(); push(makeBinary(BinaryOp.SwizzleVecI8x16, pop(), right)); break; }
+    case 0x0e: {
+      const right = pop();
+      push(makeBinary(BinaryOp.SwizzleVecI8x16, pop(), right));
+      break;
+    }
     // ---- splats ----
-    case 0x0f: push(makeUnary(UnaryOp.SplatVecI8x16, pop())); break;
-    case 0x10: push(makeUnary(UnaryOp.SplatVecI16x8, pop())); break;
-    case 0x11: push(makeUnary(UnaryOp.SplatVecI32x4, pop())); break;
-    case 0x12: push(makeUnary(UnaryOp.SplatVecI64x2, pop())); break;
-    case 0x13: push(makeUnary(UnaryOp.SplatVecF32x4, pop())); break;
-    case 0x14: push(makeUnary(UnaryOp.SplatVecF64x2, pop())); break;
+    case 0x0f:
+      push(makeUnary(UnaryOp.SplatVecI8x16, pop()));
+      break;
+    case 0x10:
+      push(makeUnary(UnaryOp.SplatVecI16x8, pop()));
+      break;
+    case 0x11:
+      push(makeUnary(UnaryOp.SplatVecI32x4, pop()));
+      break;
+    case 0x12:
+      push(makeUnary(UnaryOp.SplatVecI64x2, pop()));
+      break;
+    case 0x13:
+      push(makeUnary(UnaryOp.SplatVecF32x4, pop()));
+      break;
+    case 0x14:
+      push(makeUnary(UnaryOp.SplatVecF64x2, pop()));
+      break;
     // ---- extract / replace lane ----
-    case 0x15: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneSVecI8x16, pop(), lane)); break; }
-    case 0x16: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneUVecI8x16, pop(), lane)); break; }
-    case 0x17: { const lane = r.readU8(); const value = pop(); push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI8x16, pop(), lane, value)); break; }
-    case 0x18: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneSVecI16x8, pop(), lane)); break; }
-    case 0x19: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneUVecI16x8, pop(), lane)); break; }
-    case 0x1a: { const lane = r.readU8(); const value = pop(); push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI16x8, pop(), lane, value)); break; }
-    case 0x1b: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecI32x4, pop(), lane)); break; }
-    case 0x1c: { const lane = r.readU8(); const value = pop(); push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI32x4, pop(), lane, value)); break; }
-    case 0x1d: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecI64x2, pop(), lane)); break; }
-    case 0x1e: { const lane = r.readU8(); const value = pop(); push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI64x2, pop(), lane, value)); break; }
-    case 0x1f: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecF32x4, pop(), lane)); break; }
-    case 0x20: { const lane = r.readU8(); const value = pop(); push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecF32x4, pop(), lane, value)); break; }
-    case 0x21: { const lane = r.readU8(); push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecF64x2, pop(), lane)); break; }
-    case 0x22: { const lane = r.readU8(); const value = pop(); push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecF64x2, pop(), lane, value)); break; }
+    case 0x15: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneSVecI8x16, pop(), lane));
+      break;
+    }
+    case 0x16: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneUVecI8x16, pop(), lane));
+      break;
+    }
+    case 0x17: {
+      const lane = r.readU8();
+      const value = pop();
+      push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI8x16, pop(), lane, value));
+      break;
+    }
+    case 0x18: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneSVecI16x8, pop(), lane));
+      break;
+    }
+    case 0x19: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneUVecI16x8, pop(), lane));
+      break;
+    }
+    case 0x1a: {
+      const lane = r.readU8();
+      const value = pop();
+      push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI16x8, pop(), lane, value));
+      break;
+    }
+    case 0x1b: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecI32x4, pop(), lane));
+      break;
+    }
+    case 0x1c: {
+      const lane = r.readU8();
+      const value = pop();
+      push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI32x4, pop(), lane, value));
+      break;
+    }
+    case 0x1d: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecI64x2, pop(), lane));
+      break;
+    }
+    case 0x1e: {
+      const lane = r.readU8();
+      const value = pop();
+      push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecI64x2, pop(), lane, value));
+      break;
+    }
+    case 0x1f: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecF32x4, pop(), lane));
+      break;
+    }
+    case 0x20: {
+      const lane = r.readU8();
+      const value = pop();
+      push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecF32x4, pop(), lane, value));
+      break;
+    }
+    case 0x21: {
+      const lane = r.readU8();
+      push(makeSIMDExtract(SIMDExtractOp.ExtractLaneVecF64x2, pop(), lane));
+      break;
+    }
+    case 0x22: {
+      const lane = r.readU8();
+      const value = pop();
+      push(makeSIMDReplace(SIMDReplaceOp.ReplaceLaneVecF64x2, pop(), lane, value));
+      break;
+    }
     // ---- i8x16 comparisons ----
-    case 0x23: { const r2 = pop(); push(makeBinary(BinaryOp.EqVecI8x16,  pop(), r2)); break; }
-    case 0x24: { const r2 = pop(); push(makeBinary(BinaryOp.NeVecI8x16,  pop(), r2)); break; }
-    case 0x25: { const r2 = pop(); push(makeBinary(BinaryOp.LtSVecI8x16, pop(), r2)); break; }
-    case 0x26: { const r2 = pop(); push(makeBinary(BinaryOp.LtUVecI8x16, pop(), r2)); break; }
-    case 0x27: { const r2 = pop(); push(makeBinary(BinaryOp.GtSVecI8x16, pop(), r2)); break; }
-    case 0x28: { const r2 = pop(); push(makeBinary(BinaryOp.GtUVecI8x16, pop(), r2)); break; }
-    case 0x29: { const r2 = pop(); push(makeBinary(BinaryOp.LeSVecI8x16, pop(), r2)); break; }
-    case 0x2a: { const r2 = pop(); push(makeBinary(BinaryOp.LeUVecI8x16, pop(), r2)); break; }
-    case 0x2b: { const r2 = pop(); push(makeBinary(BinaryOp.GeSVecI8x16, pop(), r2)); break; }
-    case 0x2c: { const r2 = pop(); push(makeBinary(BinaryOp.GeUVecI8x16, pop(), r2)); break; }
+    case 0x23: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.EqVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x24: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NeVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x25: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x26: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x27: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x28: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x29: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x2a: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x2b: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x2c: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeUVecI8x16, pop(), r2));
+      break;
+    }
     // ---- i16x8 comparisons ----
-    case 0x2d: { const r2 = pop(); push(makeBinary(BinaryOp.EqVecI16x8,  pop(), r2)); break; }
-    case 0x2e: { const r2 = pop(); push(makeBinary(BinaryOp.NeVecI16x8,  pop(), r2)); break; }
-    case 0x2f: { const r2 = pop(); push(makeBinary(BinaryOp.LtSVecI16x8, pop(), r2)); break; }
-    case 0x30: { const r2 = pop(); push(makeBinary(BinaryOp.LtUVecI16x8, pop(), r2)); break; }
-    case 0x31: { const r2 = pop(); push(makeBinary(BinaryOp.GtSVecI16x8, pop(), r2)); break; }
-    case 0x32: { const r2 = pop(); push(makeBinary(BinaryOp.GtUVecI16x8, pop(), r2)); break; }
-    case 0x33: { const r2 = pop(); push(makeBinary(BinaryOp.LeSVecI16x8, pop(), r2)); break; }
-    case 0x34: { const r2 = pop(); push(makeBinary(BinaryOp.LeUVecI16x8, pop(), r2)); break; }
-    case 0x35: { const r2 = pop(); push(makeBinary(BinaryOp.GeSVecI16x8, pop(), r2)); break; }
-    case 0x36: { const r2 = pop(); push(makeBinary(BinaryOp.GeUVecI16x8, pop(), r2)); break; }
+    case 0x2d: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.EqVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x2e: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NeVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x2f: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x30: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x31: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x32: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x33: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x34: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x35: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x36: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeUVecI16x8, pop(), r2));
+      break;
+    }
     // ---- i32x4 comparisons ----
-    case 0x37: { const r2 = pop(); push(makeBinary(BinaryOp.EqVecI32x4,  pop(), r2)); break; }
-    case 0x38: { const r2 = pop(); push(makeBinary(BinaryOp.NeVecI32x4,  pop(), r2)); break; }
-    case 0x39: { const r2 = pop(); push(makeBinary(BinaryOp.LtSVecI32x4, pop(), r2)); break; }
-    case 0x3a: { const r2 = pop(); push(makeBinary(BinaryOp.LtUVecI32x4, pop(), r2)); break; }
-    case 0x3b: { const r2 = pop(); push(makeBinary(BinaryOp.GtSVecI32x4, pop(), r2)); break; }
-    case 0x3c: { const r2 = pop(); push(makeBinary(BinaryOp.GtUVecI32x4, pop(), r2)); break; }
-    case 0x3d: { const r2 = pop(); push(makeBinary(BinaryOp.LeSVecI32x4, pop(), r2)); break; }
-    case 0x3e: { const r2 = pop(); push(makeBinary(BinaryOp.LeUVecI32x4, pop(), r2)); break; }
-    case 0x3f: { const r2 = pop(); push(makeBinary(BinaryOp.GeSVecI32x4, pop(), r2)); break; }
-    case 0x40: { const r2 = pop(); push(makeBinary(BinaryOp.GeUVecI32x4, pop(), r2)); break; }
+    case 0x37: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.EqVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x38: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NeVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x39: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtSVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x3a: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtUVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x3b: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtSVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x3c: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtUVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x3d: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeSVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x3e: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeUVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x3f: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeSVecI32x4, pop(), r2));
+      break;
+    }
+    case 0x40: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeUVecI32x4, pop(), r2));
+      break;
+    }
     // ---- f32x4 comparisons ----
-    case 0x41: { const r2 = pop(); push(makeBinary(BinaryOp.EqVecF32x4,  pop(), r2)); break; }
-    case 0x42: { const r2 = pop(); push(makeBinary(BinaryOp.NeVecF32x4,  pop(), r2)); break; }
-    case 0x43: { const r2 = pop(); push(makeBinary(BinaryOp.LtVecF32x4,  pop(), r2)); break; }
-    case 0x44: { const r2 = pop(); push(makeBinary(BinaryOp.GtVecF32x4,  pop(), r2)); break; }
-    case 0x45: { const r2 = pop(); push(makeBinary(BinaryOp.LeVecF32x4,  pop(), r2)); break; }
-    case 0x46: { const r2 = pop(); push(makeBinary(BinaryOp.GeVecF32x4,  pop(), r2)); break; }
+    case 0x41: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.EqVecF32x4, pop(), r2));
+      break;
+    }
+    case 0x42: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NeVecF32x4, pop(), r2));
+      break;
+    }
+    case 0x43: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtVecF32x4, pop(), r2));
+      break;
+    }
+    case 0x44: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtVecF32x4, pop(), r2));
+      break;
+    }
+    case 0x45: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeVecF32x4, pop(), r2));
+      break;
+    }
+    case 0x46: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeVecF32x4, pop(), r2));
+      break;
+    }
     // ---- f64x2 comparisons ----
-    case 0x47: { const r2 = pop(); push(makeBinary(BinaryOp.EqVecF64x2,  pop(), r2)); break; }
-    case 0x48: { const r2 = pop(); push(makeBinary(BinaryOp.NeVecF64x2,  pop(), r2)); break; }
-    case 0x49: { const r2 = pop(); push(makeBinary(BinaryOp.LtVecF64x2,  pop(), r2)); break; }
-    case 0x4a: { const r2 = pop(); push(makeBinary(BinaryOp.GtVecF64x2,  pop(), r2)); break; }
-    case 0x4b: { const r2 = pop(); push(makeBinary(BinaryOp.LeVecF64x2,  pop(), r2)); break; }
-    case 0x4c: { const r2 = pop(); push(makeBinary(BinaryOp.GeVecF64x2,  pop(), r2)); break; }
+    case 0x47: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.EqVecF64x2, pop(), r2));
+      break;
+    }
+    case 0x48: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NeVecF64x2, pop(), r2));
+      break;
+    }
+    case 0x49: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtVecF64x2, pop(), r2));
+      break;
+    }
+    case 0x4a: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtVecF64x2, pop(), r2));
+      break;
+    }
+    case 0x4b: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeVecF64x2, pop(), r2));
+      break;
+    }
+    case 0x4c: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeVecF64x2, pop(), r2));
+      break;
+    }
     // ---- v128 bitwise ----
-    case 0x4d: push(makeUnary(UnaryOp.NotVec128,     pop())); break;
-    case 0x4e: { const r2 = pop(); push(makeBinary(BinaryOp.AndVec128,    pop(), r2)); break; }
-    case 0x4f: { const r2 = pop(); push(makeBinary(BinaryOp.AndNotVec128, pop(), r2)); break; }
-    case 0x50: { const r2 = pop(); push(makeBinary(BinaryOp.OrVec128,     pop(), r2)); break; }
-    case 0x51: { const r2 = pop(); push(makeBinary(BinaryOp.XorVec128,    pop(), r2)); break; }
-    case 0x52: { const c2 = pop(); const b2 = pop(); push(makeSIMDTernary(SIMDTernaryOp.Bitselect, pop(), b2, c2)); break; }
-    case 0x53: push(makeUnary(UnaryOp.AnyTrueVec128, pop())); break;
+    case 0x4d:
+      push(makeUnary(UnaryOp.NotVec128, pop()));
+      break;
+    case 0x4e: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AndVec128, pop(), r2));
+      break;
+    }
+    case 0x4f: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AndNotVec128, pop(), r2));
+      break;
+    }
+    case 0x50: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.OrVec128, pop(), r2));
+      break;
+    }
+    case 0x51: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.XorVec128, pop(), r2));
+      break;
+    }
+    case 0x52: {
+      const c2 = pop();
+      const b2 = pop();
+      push(makeSIMDTernary(SIMDTernaryOp.Bitselect, pop(), b2, c2));
+      break;
+    }
+    case 0x53:
+      push(makeUnary(UnaryOp.AnyTrueVec128, pop()));
+      break;
     // ---- load / store lane ----
-    case 0x54: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Load8LaneVec128,  pop(), vec, offset, align, lane)); break; }
-    case 0x55: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Load16LaneVec128, pop(), vec, offset, align, lane)); break; }
-    case 0x56: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Load32LaneVec128, pop(), vec, offset, align, lane)); break; }
-    case 0x57: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Load64LaneVec128, pop(), vec, offset, align, lane)); break; }
-    case 0x58: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Store8LaneVec128,  pop(), vec, offset, align, lane)); break; }
-    case 0x59: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Store16LaneVec128, pop(), vec, offset, align, lane)); break; }
-    case 0x5a: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Store32LaneVec128, pop(), vec, offset, align, lane)); break; }
-    case 0x5b: { const align = r.readU32(); const offset = r.readU32(); const lane = r.readU8(); const vec = pop(); push(makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Store64LaneVec128, pop(), vec, offset, align, lane)); break; }
-    case 0x5c: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load32ZeroVec128, pop(), offset, align)); break; }
-    case 0x5d: { const align = r.readU32(); const offset = r.readU32(); push(makeSIMDLoad(SIMDLoadOp.Load64ZeroVec128, pop(), offset, align)); break; }
+    case 0x54: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(SIMDLoadStoreLaneOp.Load8LaneVec128, pop(), vec, offset, align, lane),
+      );
+      break;
+    }
+    case 0x55: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Load16LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x56: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Load32LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x57: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Load64LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x58: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Store8LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x59: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Store16LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x5a: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Store32LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x5b: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      const lane = r.readU8();
+      const vec = pop();
+      push(
+        makeSIMDLoadStoreLane(
+          SIMDLoadStoreLaneOp.Store64LaneVec128,
+          pop(),
+          vec,
+          offset,
+          align,
+          lane,
+        ),
+      );
+      break;
+    }
+    case 0x5c: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load32ZeroVec128, pop(), offset, align));
+      break;
+    }
+    case 0x5d: {
+      const align = r.readU32();
+      const offset = r.readU32();
+      push(makeSIMDLoad(SIMDLoadOp.Load64ZeroVec128, pop(), offset, align));
+      break;
+    }
     // ---- float conversions ----
-    case 0x5e: push(makeUnary(UnaryOp.DemoteZeroVecF64x2ToF32x4, pop())); break;
-    case 0x5f: push(makeUnary(UnaryOp.PromoteLowVecF32x4ToF64x2, pop())); break;
+    case 0x5e:
+      push(makeUnary(UnaryOp.DemoteZeroVecF64x2ToF32x4, pop()));
+      break;
+    case 0x5f:
+      push(makeUnary(UnaryOp.PromoteLowVecF32x4ToF64x2, pop()));
+      break;
     // ---- i8x16 unary ----
-    case 0x60: push(makeUnary(UnaryOp.AbsVecI8x16,      pop())); break;
-    case 0x61: push(makeUnary(UnaryOp.NegVecI8x16,      pop())); break;
-    case 0x62: push(makeUnary(UnaryOp.PopcntVecI8x16,   pop())); break;
-    case 0x63: push(makeUnary(UnaryOp.AllTrueVecI8x16,  pop())); break;
-    case 0x64: push(makeUnary(UnaryOp.BitmaskVecI8x16,  pop())); break;
-    case 0x65: { const r2 = pop(); push(makeBinary(BinaryOp.NarrowSVecI16x8ToI8x16, pop(), r2)); break; }
-    case 0x66: { const r2 = pop(); push(makeBinary(BinaryOp.NarrowUVecI16x8ToI8x16, pop(), r2)); break; }
-    case 0x67: push(makeUnary(UnaryOp.CeilVecF32x4,    pop())); break;
-    case 0x68: push(makeUnary(UnaryOp.FloorVecF32x4,   pop())); break;
-    case 0x69: push(makeUnary(UnaryOp.TruncVecF32x4,   pop())); break;
-    case 0x6a: push(makeUnary(UnaryOp.NearestVecF32x4, pop())); break;
-    case 0x6b: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShlVecI8x16,  pop(), shift)); break; }
-    case 0x6c: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrSVecI8x16, pop(), shift)); break; }
-    case 0x6d: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrUVecI8x16, pop(), shift)); break; }
-    case 0x6e: { const r2 = pop(); push(makeBinary(BinaryOp.AddVecI8x16,      pop(), r2)); break; }
-    case 0x6f: { const r2 = pop(); push(makeBinary(BinaryOp.AddSatSVecI8x16,  pop(), r2)); break; }
-    case 0x70: { const r2 = pop(); push(makeBinary(BinaryOp.AddSatUVecI8x16,  pop(), r2)); break; }
-    case 0x71: { const r2 = pop(); push(makeBinary(BinaryOp.SubVecI8x16,      pop(), r2)); break; }
-    case 0x72: { const r2 = pop(); push(makeBinary(BinaryOp.SubSatSVecI8x16,  pop(), r2)); break; }
-    case 0x73: { const r2 = pop(); push(makeBinary(BinaryOp.SubSatUVecI8x16,  pop(), r2)); break; }
-    case 0x74: push(makeUnary(UnaryOp.CeilVecF64x2,    pop())); break;
-    case 0x75: push(makeUnary(UnaryOp.FloorVecF64x2,   pop())); break;
-    case 0x76: { const r2 = pop(); push(makeBinary(BinaryOp.MinSVecI8x16, pop(), r2)); break; }
-    case 0x77: { const r2 = pop(); push(makeBinary(BinaryOp.MinUVecI8x16, pop(), r2)); break; }
-    case 0x78: { const r2 = pop(); push(makeBinary(BinaryOp.MaxSVecI8x16, pop(), r2)); break; }
-    case 0x79: { const r2 = pop(); push(makeBinary(BinaryOp.MaxUVecI8x16, pop(), r2)); break; }
-    case 0x7a: push(makeUnary(UnaryOp.TruncVecF64x2,   pop())); break;
-    case 0x7b: { const r2 = pop(); push(makeBinary(BinaryOp.AvgrUVecI8x16, pop(), r2)); break; }
-    case 0x7c: push(makeUnary(UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8, pop())); break;
-    case 0x7d: push(makeUnary(UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8, pop())); break;
-    case 0x7e: push(makeUnary(UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4, pop())); break;
-    case 0x7f: push(makeUnary(UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4, pop())); break;
+    case 0x60:
+      push(makeUnary(UnaryOp.AbsVecI8x16, pop()));
+      break;
+    case 0x61:
+      push(makeUnary(UnaryOp.NegVecI8x16, pop()));
+      break;
+    case 0x62:
+      push(makeUnary(UnaryOp.PopcntVecI8x16, pop()));
+      break;
+    case 0x63:
+      push(makeUnary(UnaryOp.AllTrueVecI8x16, pop()));
+      break;
+    case 0x64:
+      push(makeUnary(UnaryOp.BitmaskVecI8x16, pop()));
+      break;
+    case 0x65: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NarrowSVecI16x8ToI8x16, pop(), r2));
+      break;
+    }
+    case 0x66: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NarrowUVecI16x8ToI8x16, pop(), r2));
+      break;
+    }
+    case 0x67:
+      push(makeUnary(UnaryOp.CeilVecF32x4, pop()));
+      break;
+    case 0x68:
+      push(makeUnary(UnaryOp.FloorVecF32x4, pop()));
+      break;
+    case 0x69:
+      push(makeUnary(UnaryOp.TruncVecF32x4, pop()));
+      break;
+    case 0x6a:
+      push(makeUnary(UnaryOp.NearestVecF32x4, pop()));
+      break;
+    case 0x6b: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShlVecI8x16, pop(), shift));
+      break;
+    }
+    case 0x6c: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrSVecI8x16, pop(), shift));
+      break;
+    }
+    case 0x6d: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrUVecI8x16, pop(), shift));
+      break;
+    }
+    case 0x6e: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x6f: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddSatSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x70: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddSatUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x71: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x72: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubSatSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x73: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubSatUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x74:
+      push(makeUnary(UnaryOp.CeilVecF64x2, pop()));
+      break;
+    case 0x75:
+      push(makeUnary(UnaryOp.FloorVecF64x2, pop()));
+      break;
+    case 0x76: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x77: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x78: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxSVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x79: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x7a:
+      push(makeUnary(UnaryOp.TruncVecF64x2, pop()));
+      break;
+    case 0x7b: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AvgrUVecI8x16, pop(), r2));
+      break;
+    }
+    case 0x7c:
+      push(makeUnary(UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8, pop()));
+      break;
+    case 0x7d:
+      push(makeUnary(UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8, pop()));
+      break;
+    case 0x7e:
+      push(makeUnary(UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4, pop()));
+      break;
+    case 0x7f:
+      push(makeUnary(UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4, pop()));
+      break;
     // ---- i16x8 ----
-    case 0x80: push(makeUnary(UnaryOp.AbsVecI16x8,     pop())); break;
-    case 0x81: push(makeUnary(UnaryOp.NegVecI16x8,     pop())); break;
-    case 0x82: { const r2 = pop(); push(makeBinary(BinaryOp.Q15MulrSatSVecI16x8,     pop(), r2)); break; }
-    case 0x83: push(makeUnary(UnaryOp.AllTrueVecI16x8, pop())); break;
-    case 0x84: push(makeUnary(UnaryOp.BitmaskVecI16x8, pop())); break;
-    case 0x85: { const r2 = pop(); push(makeBinary(BinaryOp.NarrowSVecI32x4ToI16x8, pop(), r2)); break; }
-    case 0x86: { const r2 = pop(); push(makeBinary(BinaryOp.NarrowUVecI32x4ToI16x8, pop(), r2)); break; }
-    case 0x87: push(makeUnary(UnaryOp.ExtendLowSVecI8x16ToI16x8,  pop())); break;
-    case 0x88: push(makeUnary(UnaryOp.ExtendHighSVecI8x16ToI16x8, pop())); break;
-    case 0x89: push(makeUnary(UnaryOp.ExtendLowUVecI8x16ToI16x8,  pop())); break;
-    case 0x8a: push(makeUnary(UnaryOp.ExtendHighUVecI8x16ToI16x8, pop())); break;
-    case 0x8b: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShlVecI16x8,  pop(), shift)); break; }
-    case 0x8c: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrSVecI16x8, pop(), shift)); break; }
-    case 0x8d: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrUVecI16x8, pop(), shift)); break; }
-    case 0x8e: { const r2 = pop(); push(makeBinary(BinaryOp.AddVecI16x8,     pop(), r2)); break; }
-    case 0x8f: { const r2 = pop(); push(makeBinary(BinaryOp.AddSatSVecI16x8, pop(), r2)); break; }
-    case 0x90: { const r2 = pop(); push(makeBinary(BinaryOp.AddSatUVecI16x8, pop(), r2)); break; }
-    case 0x91: { const r2 = pop(); push(makeBinary(BinaryOp.SubVecI16x8,     pop(), r2)); break; }
-    case 0x92: { const r2 = pop(); push(makeBinary(BinaryOp.SubSatSVecI16x8, pop(), r2)); break; }
-    case 0x93: { const r2 = pop(); push(makeBinary(BinaryOp.SubSatUVecI16x8, pop(), r2)); break; }
-    case 0x94: push(makeUnary(UnaryOp.NearestVecF64x2, pop())); break;
-    case 0x95: { const r2 = pop(); push(makeBinary(BinaryOp.MulVecI16x8,    pop(), r2)); break; }
-    case 0x96: { const r2 = pop(); push(makeBinary(BinaryOp.MinSVecI16x8,   pop(), r2)); break; }
-    case 0x97: { const r2 = pop(); push(makeBinary(BinaryOp.MinUVecI16x8,   pop(), r2)); break; }
-    case 0x98: { const r2 = pop(); push(makeBinary(BinaryOp.MaxSVecI16x8,   pop(), r2)); break; }
-    case 0x99: { const r2 = pop(); push(makeBinary(BinaryOp.MaxUVecI16x8,   pop(), r2)); break; }
-    case 0x9b: { const r2 = pop(); push(makeBinary(BinaryOp.AvgrUVecI16x8,  pop(), r2)); break; }
-    case 0x9c: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulLowSVecI8x16ToI16x8,  pop(), r2)); break; }
-    case 0x9d: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulHighSVecI8x16ToI16x8, pop(), r2)); break; }
-    case 0x9e: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulLowUVecI8x16ToI16x8,  pop(), r2)); break; }
-    case 0x9f: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulHighUVecI8x16ToI16x8, pop(), r2)); break; }
+    case 0x80:
+      push(makeUnary(UnaryOp.AbsVecI16x8, pop()));
+      break;
+    case 0x81:
+      push(makeUnary(UnaryOp.NegVecI16x8, pop()));
+      break;
+    case 0x82: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.Q15MulrSatSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x83:
+      push(makeUnary(UnaryOp.AllTrueVecI16x8, pop()));
+      break;
+    case 0x84:
+      push(makeUnary(UnaryOp.BitmaskVecI16x8, pop()));
+      break;
+    case 0x85: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NarrowSVecI32x4ToI16x8, pop(), r2));
+      break;
+    }
+    case 0x86: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NarrowUVecI32x4ToI16x8, pop(), r2));
+      break;
+    }
+    case 0x87:
+      push(makeUnary(UnaryOp.ExtendLowSVecI8x16ToI16x8, pop()));
+      break;
+    case 0x88:
+      push(makeUnary(UnaryOp.ExtendHighSVecI8x16ToI16x8, pop()));
+      break;
+    case 0x89:
+      push(makeUnary(UnaryOp.ExtendLowUVecI8x16ToI16x8, pop()));
+      break;
+    case 0x8a:
+      push(makeUnary(UnaryOp.ExtendHighUVecI8x16ToI16x8, pop()));
+      break;
+    case 0x8b: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShlVecI16x8, pop(), shift));
+      break;
+    }
+    case 0x8c: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrSVecI16x8, pop(), shift));
+      break;
+    }
+    case 0x8d: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrUVecI16x8, pop(), shift));
+      break;
+    }
+    case 0x8e: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x8f: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddSatSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x90: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddSatUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x91: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x92: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubSatSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x93: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubSatUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x94:
+      push(makeUnary(UnaryOp.NearestVecF64x2, pop()));
+      break;
+    case 0x95: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MulVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x96: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x97: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x98: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxSVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x99: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x9b: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AvgrUVecI16x8, pop(), r2));
+      break;
+    }
+    case 0x9c: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulLowSVecI8x16ToI16x8, pop(), r2));
+      break;
+    }
+    case 0x9d: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulHighSVecI8x16ToI16x8, pop(), r2));
+      break;
+    }
+    case 0x9e: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulLowUVecI8x16ToI16x8, pop(), r2));
+      break;
+    }
+    case 0x9f: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulHighUVecI8x16ToI16x8, pop(), r2));
+      break;
+    }
     // ---- i32x4 ----
-    case 0xa0: push(makeUnary(UnaryOp.AbsVecI32x4,     pop())); break;
-    case 0xa1: push(makeUnary(UnaryOp.NegVecI32x4,     pop())); break;
-    case 0xa3: push(makeUnary(UnaryOp.AllTrueVecI32x4, pop())); break;
-    case 0xa4: push(makeUnary(UnaryOp.BitmaskVecI32x4, pop())); break;
-    case 0xa7: push(makeUnary(UnaryOp.ExtendLowSVecI16x8ToI32x4,  pop())); break;
-    case 0xa8: push(makeUnary(UnaryOp.ExtendHighSVecI16x8ToI32x4, pop())); break;
-    case 0xa9: push(makeUnary(UnaryOp.ExtendLowUVecI16x8ToI32x4,  pop())); break;
-    case 0xaa: push(makeUnary(UnaryOp.ExtendHighUVecI16x8ToI32x4, pop())); break;
-    case 0xab: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShlVecI32x4,  pop(), shift)); break; }
-    case 0xac: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrSVecI32x4, pop(), shift)); break; }
-    case 0xad: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrUVecI32x4, pop(), shift)); break; }
-    case 0xae: { const r2 = pop(); push(makeBinary(BinaryOp.AddVecI32x4,  pop(), r2)); break; }
-    case 0xb1: { const r2 = pop(); push(makeBinary(BinaryOp.SubVecI32x4,  pop(), r2)); break; }
-    case 0xb5: { const r2 = pop(); push(makeBinary(BinaryOp.MulVecI32x4,  pop(), r2)); break; }
-    case 0xb6: { const r2 = pop(); push(makeBinary(BinaryOp.MinSVecI32x4, pop(), r2)); break; }
-    case 0xb7: { const r2 = pop(); push(makeBinary(BinaryOp.MinUVecI32x4, pop(), r2)); break; }
-    case 0xb8: { const r2 = pop(); push(makeBinary(BinaryOp.MaxSVecI32x4, pop(), r2)); break; }
-    case 0xb9: { const r2 = pop(); push(makeBinary(BinaryOp.MaxUVecI32x4, pop(), r2)); break; }
-    case 0xba: { const r2 = pop(); push(makeBinary(BinaryOp.DotSVecI16x8ToI32x4, pop(), r2)); break; }
-    case 0xbc: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulLowSVecI16x8ToI32x4,  pop(), r2)); break; }
-    case 0xbd: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulHighSVecI16x8ToI32x4, pop(), r2)); break; }
-    case 0xbe: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulLowUVecI16x8ToI32x4,  pop(), r2)); break; }
-    case 0xbf: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulHighUVecI16x8ToI32x4, pop(), r2)); break; }
+    case 0xa0:
+      push(makeUnary(UnaryOp.AbsVecI32x4, pop()));
+      break;
+    case 0xa1:
+      push(makeUnary(UnaryOp.NegVecI32x4, pop()));
+      break;
+    case 0xa3:
+      push(makeUnary(UnaryOp.AllTrueVecI32x4, pop()));
+      break;
+    case 0xa4:
+      push(makeUnary(UnaryOp.BitmaskVecI32x4, pop()));
+      break;
+    case 0xa7:
+      push(makeUnary(UnaryOp.ExtendLowSVecI16x8ToI32x4, pop()));
+      break;
+    case 0xa8:
+      push(makeUnary(UnaryOp.ExtendHighSVecI16x8ToI32x4, pop()));
+      break;
+    case 0xa9:
+      push(makeUnary(UnaryOp.ExtendLowUVecI16x8ToI32x4, pop()));
+      break;
+    case 0xaa:
+      push(makeUnary(UnaryOp.ExtendHighUVecI16x8ToI32x4, pop()));
+      break;
+    case 0xab: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShlVecI32x4, pop(), shift));
+      break;
+    }
+    case 0xac: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrSVecI32x4, pop(), shift));
+      break;
+    }
+    case 0xad: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrUVecI32x4, pop(), shift));
+      break;
+    }
+    case 0xae: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xb1: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xb5: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MulVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xb6: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinSVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xb7: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinUVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xb8: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxSVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xb9: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxUVecI32x4, pop(), r2));
+      break;
+    }
+    case 0xba: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.DotSVecI16x8ToI32x4, pop(), r2));
+      break;
+    }
+    case 0xbc: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulLowSVecI16x8ToI32x4, pop(), r2));
+      break;
+    }
+    case 0xbd: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulHighSVecI16x8ToI32x4, pop(), r2));
+      break;
+    }
+    case 0xbe: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulLowUVecI16x8ToI32x4, pop(), r2));
+      break;
+    }
+    case 0xbf: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulHighUVecI16x8ToI32x4, pop(), r2));
+      break;
+    }
     // ---- i64x2 ----
-    case 0xc0: push(makeUnary(UnaryOp.AbsVecI64x2,     pop())); break;
-    case 0xc1: push(makeUnary(UnaryOp.NegVecI64x2,     pop())); break;
-    case 0xc3: push(makeUnary(UnaryOp.AllTrueVecI64x2, pop())); break;
-    case 0xc4: push(makeUnary(UnaryOp.BitmaskVecI64x2, pop())); break;
-    case 0xc7: push(makeUnary(UnaryOp.ExtendLowSVecI32x4ToI64x2,  pop())); break;
-    case 0xc8: push(makeUnary(UnaryOp.ExtendHighSVecI32x4ToI64x2, pop())); break;
-    case 0xc9: push(makeUnary(UnaryOp.ExtendLowUVecI32x4ToI64x2,  pop())); break;
-    case 0xca: push(makeUnary(UnaryOp.ExtendHighUVecI32x4ToI64x2, pop())); break;
-    case 0xcb: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShlVecI64x2,  pop(), shift)); break; }
-    case 0xcc: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrSVecI64x2, pop(), shift)); break; }
-    case 0xcd: { const shift = pop(); push(makeSIMDShift(SIMDShiftOp.ShrUVecI64x2, pop(), shift)); break; }
-    case 0xce: { const r2 = pop(); push(makeBinary(BinaryOp.AddVecI64x2, pop(), r2)); break; }
-    case 0xd1: { const r2 = pop(); push(makeBinary(BinaryOp.SubVecI64x2, pop(), r2)); break; }
-    case 0xd5: { const r2 = pop(); push(makeBinary(BinaryOp.MulVecI64x2, pop(), r2)); break; }
-    case 0xd6: { const r2 = pop(); push(makeBinary(BinaryOp.EqVecI64x2,  pop(), r2)); break; }
-    case 0xd7: { const r2 = pop(); push(makeBinary(BinaryOp.NeVecI64x2,  pop(), r2)); break; }
-    case 0xd8: { const r2 = pop(); push(makeBinary(BinaryOp.LtSVecI64x2, pop(), r2)); break; }
-    case 0xd9: { const r2 = pop(); push(makeBinary(BinaryOp.GtSVecI64x2, pop(), r2)); break; }
-    case 0xda: { const r2 = pop(); push(makeBinary(BinaryOp.LeSVecI64x2, pop(), r2)); break; }
-    case 0xdb: { const r2 = pop(); push(makeBinary(BinaryOp.GeSVecI64x2, pop(), r2)); break; }
-    case 0xdc: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulLowSVecI32x4ToI64x2,  pop(), r2)); break; }
-    case 0xdd: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulHighSVecI32x4ToI64x2, pop(), r2)); break; }
-    case 0xde: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulLowUVecI32x4ToI64x2,  pop(), r2)); break; }
-    case 0xdf: { const r2 = pop(); push(makeBinary(BinaryOp.ExtmulHighUVecI32x4ToI64x2, pop(), r2)); break; }
+    case 0xc0:
+      push(makeUnary(UnaryOp.AbsVecI64x2, pop()));
+      break;
+    case 0xc1:
+      push(makeUnary(UnaryOp.NegVecI64x2, pop()));
+      break;
+    case 0xc3:
+      push(makeUnary(UnaryOp.AllTrueVecI64x2, pop()));
+      break;
+    case 0xc4:
+      push(makeUnary(UnaryOp.BitmaskVecI64x2, pop()));
+      break;
+    case 0xc7:
+      push(makeUnary(UnaryOp.ExtendLowSVecI32x4ToI64x2, pop()));
+      break;
+    case 0xc8:
+      push(makeUnary(UnaryOp.ExtendHighSVecI32x4ToI64x2, pop()));
+      break;
+    case 0xc9:
+      push(makeUnary(UnaryOp.ExtendLowUVecI32x4ToI64x2, pop()));
+      break;
+    case 0xca:
+      push(makeUnary(UnaryOp.ExtendHighUVecI32x4ToI64x2, pop()));
+      break;
+    case 0xcb: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShlVecI64x2, pop(), shift));
+      break;
+    }
+    case 0xcc: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrSVecI64x2, pop(), shift));
+      break;
+    }
+    case 0xcd: {
+      const shift = pop();
+      push(makeSIMDShift(SIMDShiftOp.ShrUVecI64x2, pop(), shift));
+      break;
+    }
+    case 0xce: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xd1: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xd5: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MulVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xd6: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.EqVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xd7: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.NeVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xd8: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LtSVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xd9: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GtSVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xda: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.LeSVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xdb: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.GeSVecI64x2, pop(), r2));
+      break;
+    }
+    case 0xdc: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulLowSVecI32x4ToI64x2, pop(), r2));
+      break;
+    }
+    case 0xdd: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulHighSVecI32x4ToI64x2, pop(), r2));
+      break;
+    }
+    case 0xde: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulLowUVecI32x4ToI64x2, pop(), r2));
+      break;
+    }
+    case 0xdf: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.ExtmulHighUVecI32x4ToI64x2, pop(), r2));
+      break;
+    }
     // ---- f32x4 ----
-    case 0xe0: push(makeUnary(UnaryOp.AbsVecF32x4,  pop())); break;
-    case 0xe1: push(makeUnary(UnaryOp.NegVecF32x4,  pop())); break;
-    case 0xe3: push(makeUnary(UnaryOp.SqrtVecF32x4, pop())); break;
-    case 0xe4: { const r2 = pop(); push(makeBinary(BinaryOp.AddVecF32x4,  pop(), r2)); break; }
-    case 0xe5: { const r2 = pop(); push(makeBinary(BinaryOp.SubVecF32x4,  pop(), r2)); break; }
-    case 0xe6: { const r2 = pop(); push(makeBinary(BinaryOp.MulVecF32x4,  pop(), r2)); break; }
-    case 0xe7: { const r2 = pop(); push(makeBinary(BinaryOp.DivVecF32x4,  pop(), r2)); break; }
-    case 0xe8: { const r2 = pop(); push(makeBinary(BinaryOp.MinVecF32x4,  pop(), r2)); break; }
-    case 0xe9: { const r2 = pop(); push(makeBinary(BinaryOp.MaxVecF32x4,  pop(), r2)); break; }
-    case 0xea: { const r2 = pop(); push(makeBinary(BinaryOp.PminVecF32x4, pop(), r2)); break; }
-    case 0xeb: { const r2 = pop(); push(makeBinary(BinaryOp.PmaxVecF32x4, pop(), r2)); break; }
+    case 0xe0:
+      push(makeUnary(UnaryOp.AbsVecF32x4, pop()));
+      break;
+    case 0xe1:
+      push(makeUnary(UnaryOp.NegVecF32x4, pop()));
+      break;
+    case 0xe3:
+      push(makeUnary(UnaryOp.SqrtVecF32x4, pop()));
+      break;
+    case 0xe4: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xe5: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xe6: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MulVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xe7: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.DivVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xe8: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xe9: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xea: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.PminVecF32x4, pop(), r2));
+      break;
+    }
+    case 0xeb: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.PmaxVecF32x4, pop(), r2));
+      break;
+    }
     // ---- f64x2 ----
-    case 0xec: push(makeUnary(UnaryOp.AbsVecF64x2,  pop())); break;
-    case 0xed: push(makeUnary(UnaryOp.NegVecF64x2,  pop())); break;
-    case 0xef: push(makeUnary(UnaryOp.SqrtVecF64x2, pop())); break;
-    case 0xf0: { const r2 = pop(); push(makeBinary(BinaryOp.AddVecF64x2,  pop(), r2)); break; }
-    case 0xf1: { const r2 = pop(); push(makeBinary(BinaryOp.SubVecF64x2,  pop(), r2)); break; }
-    case 0xf2: { const r2 = pop(); push(makeBinary(BinaryOp.MulVecF64x2,  pop(), r2)); break; }
-    case 0xf3: { const r2 = pop(); push(makeBinary(BinaryOp.DivVecF64x2,  pop(), r2)); break; }
-    case 0xf4: { const r2 = pop(); push(makeBinary(BinaryOp.MinVecF64x2,  pop(), r2)); break; }
-    case 0xf5: { const r2 = pop(); push(makeBinary(BinaryOp.MaxVecF64x2,  pop(), r2)); break; }
-    case 0xf6: { const r2 = pop(); push(makeBinary(BinaryOp.PminVecF64x2, pop(), r2)); break; }
-    case 0xf7: { const r2 = pop(); push(makeBinary(BinaryOp.PmaxVecF64x2, pop(), r2)); break; }
+    case 0xec:
+      push(makeUnary(UnaryOp.AbsVecF64x2, pop()));
+      break;
+    case 0xed:
+      push(makeUnary(UnaryOp.NegVecF64x2, pop()));
+      break;
+    case 0xef:
+      push(makeUnary(UnaryOp.SqrtVecF64x2, pop()));
+      break;
+    case 0xf0: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.AddVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf1: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.SubVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf2: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MulVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf3: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.DivVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf4: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MinVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf5: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.MaxVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf6: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.PminVecF64x2, pop(), r2));
+      break;
+    }
+    case 0xf7: {
+      const r2 = pop();
+      push(makeBinary(BinaryOp.PmaxVecF64x2, pop(), r2));
+      break;
+    }
     // ---- conversions ----
-    case 0xf8: push(makeUnary(UnaryOp.TruncSatSVecF32x4ToI32x4,     pop())); break;
-    case 0xf9: push(makeUnary(UnaryOp.TruncSatUVecF32x4ToI32x4,     pop())); break;
-    case 0xfa: push(makeUnary(UnaryOp.ConvertSVecI32x4ToF32x4,       pop())); break;
-    case 0xfb: push(makeUnary(UnaryOp.ConvertUVecI32x4ToF32x4,       pop())); break;
-    case 0xfc: push(makeUnary(UnaryOp.TruncSatSVecF64x2ToI32x4Zero,  pop())); break;
-    case 0xfd: push(makeUnary(UnaryOp.TruncSatUVecF64x2ToI32x4Zero,  pop())); break;
-    case 0xfe: push(makeUnary(UnaryOp.ConvertLowSVecI32x4ToF64x2,    pop())); break;
-    case 0xff: push(makeUnary(UnaryOp.ConvertLowUVecI32x4ToF64x2,    pop())); break;
+    case 0xf8:
+      push(makeUnary(UnaryOp.TruncSatSVecF32x4ToI32x4, pop()));
+      break;
+    case 0xf9:
+      push(makeUnary(UnaryOp.TruncSatUVecF32x4ToI32x4, pop()));
+      break;
+    case 0xfa:
+      push(makeUnary(UnaryOp.ConvertSVecI32x4ToF32x4, pop()));
+      break;
+    case 0xfb:
+      push(makeUnary(UnaryOp.ConvertUVecI32x4ToF32x4, pop()));
+      break;
+    case 0xfc:
+      push(makeUnary(UnaryOp.TruncSatSVecF64x2ToI32x4Zero, pop()));
+      break;
+    case 0xfd:
+      push(makeUnary(UnaryOp.TruncSatUVecF64x2ToI32x4Zero, pop()));
+      break;
+    case 0xfe:
+      push(makeUnary(UnaryOp.ConvertLowSVecI32x4ToF64x2, pop()));
+      break;
+    case 0xff:
+      push(makeUnary(UnaryOp.ConvertLowUVecI32x4ToF64x2, pop()));
+      break;
     default:
       // Unknown or relaxed SIMD opcode — skip by emitting nop
       push(makeNop());

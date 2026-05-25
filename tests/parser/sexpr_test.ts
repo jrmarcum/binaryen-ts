@@ -6,7 +6,7 @@
  * @license MIT
  */
 
-import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
+import { assertEquals, assertThrows } from "@std/assert";
 import { tokenize } from "../../src/parser/tokenizer.ts";
 import {
   atomString,
@@ -14,13 +14,14 @@ import {
   buildSExpr,
   buildSExprList,
   isListWith,
-  listHead,
   listChildren,
+  listHead,
+  type SExpr,
   sExprToString,
   WatSExprError,
 } from "../../src/parser/sexpr.ts";
 
-function parse(src: string) {
+function parse(src: string): SExpr {
   return buildSExpr(tokenize(src));
 }
 

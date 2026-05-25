@@ -19,14 +19,14 @@
  */
 
 import {
-  BlockExpr,
-  Expression,
+  type BlockExpr,
+  type Expression,
   ExpressionKind,
-  LoopExpr,
+  type LoopExpr,
 } from "../ir/expressions.ts";
-import { WasmModule } from "../ir/module.ts";
+import type { WasmModule } from "../ir/module.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 
 // ---------------------------------------------------------------------------
 // Pass class

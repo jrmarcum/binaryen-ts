@@ -23,9 +23,9 @@
  * @license MIT
  */
 
-import { Expression } from "./expressions.ts";
-import { None, Type, ValType } from "./types.ts";
-import { type TypeDef } from "./gc-types.ts";
+import type { Expression } from "./expressions.ts";
+import { None, type Type, ValType } from "./types.ts";
+import type { TypeDef } from "./gc-types.ts";
 export type { TypeDef } from "./gc-types.ts";
 
 // ---------------------------------------------------------------------------
@@ -456,7 +456,16 @@ export class ModuleBuilder {
     shared = false,
     is64 = false,
   ): this {
-    this._imports.push({ kind: "memory", name: internalName, module, base, initial, max, shared, is64 });
+    this._imports.push({
+      kind: "memory",
+      name: internalName,
+      module,
+      base,
+      initial,
+      max,
+      shared,
+      is64,
+    });
     return this;
   }
 

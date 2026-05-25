@@ -8,12 +8,12 @@
  * @license MIT
  */
 
-import { assertEquals, assertInstanceOf } from "jsr:@std/assert";
+import { assertEquals, assertInstanceOf } from "@std/assert";
 import { parseWasm } from "../../src/binary/index.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
 import { ValType } from "../../src/ir/types.ts";
-import { makeI32Const, makeBinary, makeLocalGet, BinaryOp } from "../../src/ir/expressions.ts";
+import { BinaryOp, makeBinary, makeI32Const, makeLocalGet } from "../../src/ir/expressions.ts";
 import { ModuleBuilder } from "../../src/ir/module.ts";
 
 // ---------------------------------------------------------------------------
@@ -21,25 +21,96 @@ import { ModuleBuilder } from "../../src/ir/module.ts";
 // ---------------------------------------------------------------------------
 
 const EMPTY_MODULE = new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d,
-  0x01, 0x00, 0x00, 0x00,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
 ]);
 
 const ADD_MODULE = new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-  0x01, 0x07, 0x01, 0x60, 0x02, 0x7f, 0x7f, 0x01, 0x7f,
-  0x03, 0x02, 0x01, 0x00,
-  0x07, 0x07, 0x01, 0x03, 0x61, 0x64, 0x64, 0x00, 0x00,
-  0x0a, 0x09, 0x01,
-  0x07, 0x00, 0x20, 0x00, 0x20, 0x01, 0x6a, 0x0b,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x07,
+  0x01,
+  0x60,
+  0x02,
+  0x7f,
+  0x7f,
+  0x01,
+  0x7f,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x07,
+  0x07,
+  0x01,
+  0x03,
+  0x61,
+  0x64,
+  0x64,
+  0x00,
+  0x00,
+  0x0a,
+  0x09,
+  0x01,
+  0x07,
+  0x00,
+  0x20,
+  0x00,
+  0x20,
+  0x01,
+  0x6a,
+  0x0b,
 ]);
 
 const GLOBAL_MODULE = new Uint8Array([
-  0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00,
-  0x01, 0x05, 0x01, 0x60, 0x00, 0x01, 0x7f,
-  0x03, 0x02, 0x01, 0x00,
-  0x06, 0x06, 0x01, 0x7f, 0x01, 0x41, 0x2a, 0x0b,
-  0x0a, 0x06, 0x01, 0x04, 0x00, 0x23, 0x00, 0x0b,
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x05,
+  0x01,
+  0x60,
+  0x00,
+  0x01,
+  0x7f,
+  0x03,
+  0x02,
+  0x01,
+  0x00,
+  0x06,
+  0x06,
+  0x01,
+  0x7f,
+  0x01,
+  0x41,
+  0x2a,
+  0x0b,
+  0x0a,
+  0x06,
+  0x01,
+  0x04,
+  0x00,
+  0x23,
+  0x00,
+  0x0b,
 ]);
 
 // ---------------------------------------------------------------------------
@@ -53,15 +124,39 @@ function roundTrip(bytes: Uint8Array): ReturnType<typeof parseWasm> {
 }
 
 function walkFind(
-  expr: { kind: string; children?: unknown[]; left?: unknown; right?: unknown; value?: unknown; body?: unknown; condition?: unknown; ifTrue?: unknown; ifFalse?: unknown; delta?: unknown; dest?: unknown; source?: unknown; size?: unknown; operands?: unknown[]; target?: unknown },
+  expr: {
+    kind: string;
+    children?: unknown[];
+    left?: unknown;
+    right?: unknown;
+    value?: unknown;
+    body?: unknown;
+    condition?: unknown;
+    ifTrue?: unknown;
+    ifFalse?: unknown;
+    delta?: unknown;
+    dest?: unknown;
+    source?: unknown;
+    size?: unknown;
+    operands?: unknown[];
+    target?: unknown;
+  },
   pred: (e: typeof expr) => boolean,
 ): boolean {
   if (pred(expr)) return true;
   const sub = [
     ...(expr.children ?? []),
-    expr.left, expr.right, expr.value, expr.body,
-    expr.condition, expr.ifTrue, expr.ifFalse,
-    expr.delta, expr.dest, expr.source, expr.size,
+    expr.left,
+    expr.right,
+    expr.value,
+    expr.body,
+    expr.condition,
+    expr.ifTrue,
+    expr.ifFalse,
+    expr.delta,
+    expr.dest,
+    expr.source,
+    expr.size,
     expr.target,
     ...(expr.operands ?? []),
   ].filter(Boolean) as typeof expr[];

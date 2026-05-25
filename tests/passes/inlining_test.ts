@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @module binaryen-ts/tests/passes/inlining_test
  *
  * Tests for the Phase 5 Inlining pass.
@@ -6,11 +6,11 @@
  * @license MIT
  */
 
-import { assert, assertEquals } from "jsr:@std/assert";
+import { assert, assertEquals } from "@std/assert";
 
 import {
   BinaryOp,
-  Expression,
+  type Expression,
   ExpressionKind,
   makeBinary,
   makeBlock,
@@ -22,7 +22,7 @@ import {
   makeReturn,
   makeUnreachable,
 } from "../../src/ir/expressions.ts";
-import { WasmFunction, WasmModule } from "../../src/ir/module.ts";
+import type { WasmFunction, WasmModule } from "../../src/ir/module.ts";
 import { None, ValType } from "../../src/ir/types.ts";
 import { listPasses, PassRunner } from "../../src/passes/index.ts";
 import { deepCopy, measureSize } from "../../src/passes/inlining.ts";
@@ -47,13 +47,15 @@ function emptyModule(): WasmModule {
     hasMemory64: false,
     hasMultiMemory: false,
     heapTypes: [],
-  hasGC: false,
+    hasGC: false,
   };
 }
 
 function countKind(expr: Expression, kind: ExpressionKind): number {
   let n = 0;
-  walkExpression(expr, (e) => { if (e.kind === kind) n++; });
+  walkExpression(expr, (e) => {
+    if (e.kind === kind) n++;
+  });
   return n;
 }
 
@@ -361,7 +363,7 @@ Deno.test("Inlining: non-param local is zero-initialised after inlining", () => 
     name: "localfn",
     params: [],
     results: [ValType.I32],
-    locals: [{ type: ValType.I32 }],  // one non-param local
+    locals: [{ type: ValType.I32 }], // one non-param local
     body: makeBlock([
       makeLocalSet(0, makeI32Const(7)),
       makeReturn(makeLocalGet(0, ValType.I32)),
@@ -390,8 +392,10 @@ Deno.test("Inlining: non-param local is zero-initialised after inlining", () => 
   let foundZeroInit = false;
   walkExpression(caller.body, (e) => {
     if (e.kind === ExpressionKind.LocalSet) {
-      if (e.value.kind === ExpressionKind.Const && "i32" in e.value.value &&
-        e.value.value.i32 === 0) {
+      if (
+        e.value.kind === ExpressionKind.Const && "i32" in e.value.value &&
+        e.value.value.i32 === 0
+      ) {
         foundZeroInit = true;
       }
     }
@@ -495,7 +499,7 @@ Deno.test("Inlining: unreachable before call keeps body unreachable", () => {
     locals: [],
     body: makeBlock([
       makeUnreachable(),
-      makeCall("tiny", [], ValType.I32),  // dead
+      makeCall("tiny", [], ValType.I32), // dead
     ]),
   };
 

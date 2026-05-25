@@ -29,9 +29,9 @@
  * @license MIT
  */
 
-import { Expression, ExpressionKind } from "../ir/expressions.ts";
-import { WasmModule } from "../ir/module.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Expression, ExpressionKind } from "../ir/expressions.ts";
+import type { WasmModule } from "../ir/module.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 import { walkExpression } from "../ir/walk.ts";
 
 // ---------------------------------------------------------------------------

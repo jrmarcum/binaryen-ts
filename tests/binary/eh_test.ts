@@ -13,11 +13,11 @@
  * @license MIT
  */
 
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "@std/assert";
 import { parseWasm } from "../../src/binary/index.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
-import type { ThrowExpr, TryTableExpr, ThrowRefExpr } from "../../src/ir/expressions.ts";
+import type { ThrowExpr, ThrowRefExpr, TryTableExpr } from "../../src/ir/expressions.ts";
 import { ValType } from "../../src/ir/types.ts";
 
 // ---------------------------------------------------------------------------
@@ -60,13 +60,15 @@ const THROW_MODULE = module(
   // Code section: func body [local.get 0, throw 0, unreachable, end]
   section(
     0x0a,
-    0x01,              // 1 function
-    0x07,              // body size = 7
-    0x00,              // 0 local groups
-    0x20, 0x00,        // local.get 0
-    0x08, 0x00,        // throw tag_idx=0
-    0x00,              // unreachable
-    0x0b,              // end
+    0x01, // 1 function
+    0x07, // body size = 7
+    0x00, // 0 local groups
+    0x20,
+    0x00, // local.get 0
+    0x08,
+    0x00, // throw tag_idx=0
+    0x00, // unreachable
+    0x0b, // end
   ),
 );
 
@@ -94,8 +96,14 @@ const TRY_TABLE_MODULE = module(
   section(
     0x01,
     0x02,
-    0x60, 0x01, 0x7f, 0x00,  // type 0: func (i32) -> ()
-    0x60, 0x00, 0x01, 0x7f,  // type 1: func () -> (i32)
+    0x60,
+    0x01,
+    0x7f,
+    0x00, // type 0: func (i32) -> ()
+    0x60,
+    0x00,
+    0x01,
+    0x7f, // type 1: func () -> (i32)
   ),
   // Function section: 1 function, type 1
   section(0x03, 0x01, 0x01),
@@ -104,18 +112,25 @@ const TRY_TABLE_MODULE = module(
   // Code section
   section(
     0x0a,
-    0x01,                    // 1 function
-    0x11,                    // body size = 17
-    0x00,                    // 0 local groups
-    0x02, 0x7f,              // block (result i32)
-    0x1f, 0x7f,              // try_table (result i32)
-    0x01,                    // 1 catch clause
-    0x00, 0x00, 0x01,        // catch, tag_idx=0, dest_depth=1 (outer block)
-    0x41, 0x2a,              // i32.const 42
-    0x08, 0x00,              // throw 0
-    0x0b,                    // end try_table
-    0x41, 0x63,              // i32.const 99
-    0x0b,                    // end block
+    0x01, // 1 function
+    0x11, // body size = 17
+    0x00, // 0 local groups
+    0x02,
+    0x7f, // block (result i32)
+    0x1f,
+    0x7f, // try_table (result i32)
+    0x01, // 1 catch clause
+    0x00,
+    0x00,
+    0x01, // catch, tag_idx=0, dest_depth=1 (outer block)
+    0x41,
+    0x2a, // i32.const 42
+    0x08,
+    0x00, // throw 0
+    0x0b, // end try_table
+    0x41,
+    0x63, // i32.const 99
+    0x0b, // end block
   ),
 );
 
@@ -149,20 +164,20 @@ const TRY_TABLE_MODULE = module(
 // where local 0 is of type exnref (0x69)
 const THROW_REF_MODULE = module(
   // Type section: 1 type — func (exnref) -> ()
-  section(0x01, 0x01,
-    0x60, 0x01, 0x69, 0x00,  // type 0: func (exnref=0x69) -> ()
+  section(0x01, 0x01, 0x60, 0x01, 0x69, 0x00 // type 0: func (exnref=0x69) -> ()
   ),
   // Function section: 1 function, type 0
   section(0x03, 0x01, 0x00),
   // Code section
   section(
     0x0a,
-    0x01,              // 1 function
-    0x05,              // body size = 5
-    0x00,              // 0 local groups
-    0x20, 0x00,        // local.get 0
-    0x0a,              // throw_ref
-    0x0b,              // end
+    0x01, // 1 function
+    0x05, // body size = 5
+    0x00, // 0 local groups
+    0x20,
+    0x00, // local.get 0
+    0x0a, // throw_ref
+    0x0b, // end
   ),
 );
 
@@ -225,8 +240,9 @@ Deno.test("EH parser: try_table decoded as TryTableExpr", () => {
   assertEquals(mod.functions.length, 1);
   // Find the try_table node (nested in a block)
   const body = mod.functions[0].body;
-  let ttExpr: TryTableExpr | undefined;
-  const findTryTable = (e: { kind: unknown; children?: unknown[]; body?: unknown }): TryTableExpr | undefined => {
+  const findTryTable = (
+    e: { kind: unknown; children?: unknown[]; body?: unknown },
+  ): TryTableExpr | undefined => {
     if (e.kind === ExpressionKind.TryTable) return e as TryTableExpr;
     if (e.kind === ExpressionKind.Block) {
       for (const c of (e.children ?? []) as typeof e[]) {
@@ -236,7 +252,7 @@ Deno.test("EH parser: try_table decoded as TryTableExpr", () => {
     }
     return undefined;
   };
-  ttExpr = findTryTable(body as { kind: unknown; children?: unknown[]; body?: unknown });
+  const ttExpr = findTryTable(body as { kind: unknown; children?: unknown[]; body?: unknown });
   assertEquals(ttExpr !== undefined, true, "try_table expression not found");
   assertEquals(ttExpr!.kind, ExpressionKind.TryTable);
   assertEquals(ttExpr!.catches.length, 1);
@@ -280,7 +296,9 @@ Deno.test("EH parser: throw_ref decoded as ThrowRefExpr", () => {
   if (body.kind === ExpressionKind.ThrowRef) {
     trExpr = body as ThrowRefExpr;
   } else if (body.kind === ExpressionKind.Block) {
-    trExpr = body.children.find((c) => c.kind === ExpressionKind.ThrowRef) as ThrowRefExpr | undefined;
+    trExpr = body.children.find((c) => c.kind === ExpressionKind.ThrowRef) as
+      | ThrowRefExpr
+      | undefined;
   }
   assertEquals(trExpr !== undefined, true, "throw_ref expression not found");
   assertEquals(trExpr!.kind, ExpressionKind.ThrowRef);
@@ -350,7 +368,9 @@ Deno.test("EH encoder: throw_ref module round-trips through encode+parse", () =>
   if (body.kind === ExpressionKind.ThrowRef) {
     trExpr = body as ThrowRefExpr;
   } else if (body.kind === ExpressionKind.Block) {
-    trExpr = body.children.find((c) => c.kind === ExpressionKind.ThrowRef) as ThrowRefExpr | undefined;
+    trExpr = body.children.find((c) => c.kind === ExpressionKind.ThrowRef) as
+      | ThrowRefExpr
+      | undefined;
   }
   assertEquals(trExpr !== undefined, true, "throw_ref not found after round-trip");
   assertEquals(trExpr!.exnref.kind, ExpressionKind.LocalGet);

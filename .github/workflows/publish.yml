@@ -6,7 +6,7 @@
 #
 # Required permissions:
 #   - id-token: write   → OIDC token for JSR provenance
-#   - contents: read    → checkout
+#   - contents: write   → checkout + create GitHub Release after publish
 #
 # JSR side: link the package (`@jrmarcum/binaryen-ts`) to this GitHub repo in the JSR UI
 # under "Settings → GitHub Actions". No JSR token is needed when OIDC is configured.
@@ -24,7 +24,7 @@ jobs:
     name: Publish ${{ github.ref_name }}
     runs-on: ubuntu-latest
     permissions:
-      contents: read
+      contents: write
       id-token: write
 
     steps:
@@ -55,3 +55,13 @@ jobs:
 
       - name: Publish to JSR (with provenance)
         run: deno task publish
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v')
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          gh release create "$GITHUB_REF_NAME" \
+            --title "binaryen-ts $GITHUB_REF_NAME" \
+            --generate-notes \
+            --verify-tag

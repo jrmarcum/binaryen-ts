@@ -32,16 +32,16 @@
 
 import {
   BinaryOp,
-  Expression,
+  type Expression,
   ExpressionKind,
-  Literal,
-  UnaryOp,
+  type Literal,
   makeI32Const,
   makeI64Const,
+  UnaryOp,
 } from "../ir/expressions.ts";
-import { WasmModule } from "../ir/module.ts";
+import type { WasmModule } from "../ir/module.ts";
 import { ValType } from "../ir/types.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 import { mapExpression } from "../ir/walk.ts";
 
 // ---------------------------------------------------------------------------
@@ -145,8 +145,12 @@ function _simplifyRHS(
   if ("i32" in rhs) {
     const v = rhs.i32 as number;
     switch (op) {
-      case BinaryOp.AddI32: if (v === 0) return left; break;
-      case BinaryOp.SubI32: if (v === 0) return left; break;
+      case BinaryOp.AddI32:
+        if (v === 0) return left;
+        break;
+      case BinaryOp.SubI32:
+        if (v === 0) return left;
+        break;
       case BinaryOp.MulI32:
         if (v === 1) return left;
         if (v === 0 && _isPure(left)) return makeI32Const(0);
@@ -163,7 +167,9 @@ function _simplifyRHS(
         if (v === 0) return left;
         if (v === -1 && _isPure(left)) return makeI32Const(-1);
         break;
-      case BinaryOp.XorI32: if (v === 0) return left; break;
+      case BinaryOp.XorI32:
+        if (v === 0) return left;
+        break;
       case BinaryOp.ShlI32:
       case BinaryOp.ShrSI32:
       case BinaryOp.ShrUI32:
@@ -187,8 +193,12 @@ function _simplifyRHS(
   if ("i64" in rhs) {
     const v = rhs.i64 as bigint;
     switch (op) {
-      case BinaryOp.AddI64: if (v === 0n) return left; break;
-      case BinaryOp.SubI64: if (v === 0n) return left; break;
+      case BinaryOp.AddI64:
+        if (v === 0n) return left;
+        break;
+      case BinaryOp.SubI64:
+        if (v === 0n) return left;
+        break;
       case BinaryOp.MulI64:
         if (v === 1n) return left;
         if (v === 0n && _isPure(left)) return makeI64Const(0n);
@@ -205,7 +215,9 @@ function _simplifyRHS(
         if (v === 0n) return left;
         if (v === -1n && _isPure(left)) return makeI64Const(-1n);
         break;
-      case BinaryOp.XorI64: if (v === 0n) return left; break;
+      case BinaryOp.XorI64:
+        if (v === 0n) return left;
+        break;
       case BinaryOp.ShlI64:
       case BinaryOp.ShrSI64:
       case BinaryOp.ShrUI64:
@@ -237,7 +249,9 @@ function _simplifyLHS(
   if ("i32" in lhs) {
     const v = lhs.i32 as number;
     switch (op) {
-      case BinaryOp.AddI32: if (v === 0) return right; break;
+      case BinaryOp.AddI32:
+        if (v === 0) return right;
+        break;
       case BinaryOp.MulI32:
         if (v === 1) return right;
         if (v === 0 && _isPure(right)) return makeI32Const(0);
@@ -250,14 +264,18 @@ function _simplifyLHS(
         if (v === 0) return right;
         if (v === -1 && _isPure(right)) return makeI32Const(-1);
         break;
-      case BinaryOp.XorI32: if (v === 0) return right; break;
+      case BinaryOp.XorI32:
+        if (v === 0) return right;
+        break;
     }
   }
 
   if ("i64" in lhs) {
     const v = lhs.i64 as bigint;
     switch (op) {
-      case BinaryOp.AddI64: if (v === 0n) return right; break;
+      case BinaryOp.AddI64:
+        if (v === 0n) return right;
+        break;
       case BinaryOp.MulI64:
         if (v === 1n) return right;
         if (v === 0n && _isPure(right)) return makeI64Const(0n);
@@ -270,7 +288,9 @@ function _simplifyLHS(
         if (v === 0n) return right;
         if (v === -1n && _isPure(right)) return makeI64Const(-1n);
         break;
-      case BinaryOp.XorI64: if (v === 0n) return right; break;
+      case BinaryOp.XorI64:
+        if (v === 0n) return right;
+        break;
     }
   }
 
@@ -305,15 +325,24 @@ function _foldBinary(
     const a = lhs.i32 as number;
     const b = rhs.i32 as number;
     switch (op) {
-      case BinaryOp.AddI32:  return makeI32Const((a + b) | 0);
-      case BinaryOp.SubI32:  return makeI32Const((a - b) | 0);
-      case BinaryOp.MulI32:  return makeI32Const(Math.imul(a, b));
-      case BinaryOp.AndI32:  return makeI32Const(a & b);
-      case BinaryOp.OrI32:   return makeI32Const(a | b);
-      case BinaryOp.XorI32:  return makeI32Const(a ^ b);
-      case BinaryOp.ShlI32:  return makeI32Const((a << (b & 31)) | 0);
-      case BinaryOp.ShrSI32: return makeI32Const(a >> (b & 31));
-      case BinaryOp.ShrUI32: return makeI32Const((a >>> (b & 31)) | 0);
+      case BinaryOp.AddI32:
+        return makeI32Const((a + b) | 0);
+      case BinaryOp.SubI32:
+        return makeI32Const((a - b) | 0);
+      case BinaryOp.MulI32:
+        return makeI32Const(Math.imul(a, b));
+      case BinaryOp.AndI32:
+        return makeI32Const(a & b);
+      case BinaryOp.OrI32:
+        return makeI32Const(a | b);
+      case BinaryOp.XorI32:
+        return makeI32Const(a ^ b);
+      case BinaryOp.ShlI32:
+        return makeI32Const((a << (b & 31)) | 0);
+      case BinaryOp.ShrSI32:
+        return makeI32Const(a >> (b & 31));
+      case BinaryOp.ShrUI32:
+        return makeI32Const((a >>> (b & 31)) | 0);
       case BinaryOp.RotlI32: {
         const s = b & 31;
         return makeI32Const(s === 0 ? a : ((a << s) | (a >>> (32 - s))) | 0);
@@ -322,16 +351,26 @@ function _foldBinary(
         const s = b & 31;
         return makeI32Const(s === 0 ? a : ((a >>> s) | (a << (32 - s))) | 0);
       }
-      case BinaryOp.EqI32:   return makeI32Const(a === b ? 1 : 0);
-      case BinaryOp.NeI32:   return makeI32Const(a !== b ? 1 : 0);
-      case BinaryOp.LtSI32:  return makeI32Const(a < b ? 1 : 0);
-      case BinaryOp.LeSI32:  return makeI32Const(a <= b ? 1 : 0);
-      case BinaryOp.GtSI32:  return makeI32Const(a > b ? 1 : 0);
-      case BinaryOp.GeSI32:  return makeI32Const(a >= b ? 1 : 0);
-      case BinaryOp.LtUI32:  return makeI32Const((a >>> 0) < (b >>> 0) ? 1 : 0);
-      case BinaryOp.LeUI32:  return makeI32Const((a >>> 0) <= (b >>> 0) ? 1 : 0);
-      case BinaryOp.GtUI32:  return makeI32Const((a >>> 0) > (b >>> 0) ? 1 : 0);
-      case BinaryOp.GeUI32:  return makeI32Const((a >>> 0) >= (b >>> 0) ? 1 : 0);
+      case BinaryOp.EqI32:
+        return makeI32Const(a === b ? 1 : 0);
+      case BinaryOp.NeI32:
+        return makeI32Const(a !== b ? 1 : 0);
+      case BinaryOp.LtSI32:
+        return makeI32Const(a < b ? 1 : 0);
+      case BinaryOp.LeSI32:
+        return makeI32Const(a <= b ? 1 : 0);
+      case BinaryOp.GtSI32:
+        return makeI32Const(a > b ? 1 : 0);
+      case BinaryOp.GeSI32:
+        return makeI32Const(a >= b ? 1 : 0);
+      case BinaryOp.LtUI32:
+        return makeI32Const((a >>> 0) < (b >>> 0) ? 1 : 0);
+      case BinaryOp.LeUI32:
+        return makeI32Const((a >>> 0) <= (b >>> 0) ? 1 : 0);
+      case BinaryOp.GtUI32:
+        return makeI32Const((a >>> 0) > (b >>> 0) ? 1 : 0);
+      case BinaryOp.GeUI32:
+        return makeI32Const((a >>> 0) >= (b >>> 0) ? 1 : 0);
     }
   }
 
@@ -340,17 +379,26 @@ function _foldBinary(
     const a = lhs.i64 as bigint;
     const b = rhs.i64 as bigint;
     switch (op) {
-      case BinaryOp.AddI64:  return makeI64Const(BigInt.asIntN(64, a + b));
-      case BinaryOp.SubI64:  return makeI64Const(BigInt.asIntN(64, a - b));
-      case BinaryOp.MulI64:  return makeI64Const(BigInt.asIntN(64, a * b));
-      case BinaryOp.AndI64:  return makeI64Const(BigInt.asIntN(64, a & b));
-      case BinaryOp.OrI64:   return makeI64Const(BigInt.asIntN(64, a | b));
-      case BinaryOp.XorI64:  return makeI64Const(BigInt.asIntN(64, a ^ b));
-      case BinaryOp.ShlI64:  return makeI64Const(BigInt.asIntN(64, a << (b & 63n)));
-      case BinaryOp.ShrSI64: return makeI64Const(a >> (b & 63n));
-      case BinaryOp.ShrUI64: return makeI64Const(
-        BigInt.asIntN(64, BigInt.asUintN(64, a) >> (b & 63n)),
-      );
+      case BinaryOp.AddI64:
+        return makeI64Const(BigInt.asIntN(64, a + b));
+      case BinaryOp.SubI64:
+        return makeI64Const(BigInt.asIntN(64, a - b));
+      case BinaryOp.MulI64:
+        return makeI64Const(BigInt.asIntN(64, a * b));
+      case BinaryOp.AndI64:
+        return makeI64Const(BigInt.asIntN(64, a & b));
+      case BinaryOp.OrI64:
+        return makeI64Const(BigInt.asIntN(64, a | b));
+      case BinaryOp.XorI64:
+        return makeI64Const(BigInt.asIntN(64, a ^ b));
+      case BinaryOp.ShlI64:
+        return makeI64Const(BigInt.asIntN(64, a << (b & 63n)));
+      case BinaryOp.ShrSI64:
+        return makeI64Const(a >> (b & 63n));
+      case BinaryOp.ShrUI64:
+        return makeI64Const(
+          BigInt.asIntN(64, BigInt.asUintN(64, a) >> (b & 63n)),
+        );
       case BinaryOp.RotlI64: {
         const s = b & 63n;
         if (s === 0n) return makeI64Const(a);
@@ -364,16 +412,26 @@ function _foldBinary(
         return makeI64Const(BigInt.asIntN(64, (u >> s) | (u << (64n - s))));
       }
       // i64 comparisons return i32
-      case BinaryOp.EqI64:   return makeI32Const(a === b ? 1 : 0);
-      case BinaryOp.NeI64:   return makeI32Const(a !== b ? 1 : 0);
-      case BinaryOp.LtSI64:  return makeI32Const(a < b ? 1 : 0);
-      case BinaryOp.LeSI64:  return makeI32Const(a <= b ? 1 : 0);
-      case BinaryOp.GtSI64:  return makeI32Const(a > b ? 1 : 0);
-      case BinaryOp.GeSI64:  return makeI32Const(a >= b ? 1 : 0);
-      case BinaryOp.LtUI64: return makeI32Const(BigInt.asUintN(64, a) < BigInt.asUintN(64, b) ? 1 : 0);
-      case BinaryOp.LeUI64: return makeI32Const(BigInt.asUintN(64, a) <= BigInt.asUintN(64, b) ? 1 : 0);
-      case BinaryOp.GtUI64: return makeI32Const(BigInt.asUintN(64, a) > BigInt.asUintN(64, b) ? 1 : 0);
-      case BinaryOp.GeUI64: return makeI32Const(BigInt.asUintN(64, a) >= BigInt.asUintN(64, b) ? 1 : 0);
+      case BinaryOp.EqI64:
+        return makeI32Const(a === b ? 1 : 0);
+      case BinaryOp.NeI64:
+        return makeI32Const(a !== b ? 1 : 0);
+      case BinaryOp.LtSI64:
+        return makeI32Const(a < b ? 1 : 0);
+      case BinaryOp.LeSI64:
+        return makeI32Const(a <= b ? 1 : 0);
+      case BinaryOp.GtSI64:
+        return makeI32Const(a > b ? 1 : 0);
+      case BinaryOp.GeSI64:
+        return makeI32Const(a >= b ? 1 : 0);
+      case BinaryOp.LtUI64:
+        return makeI32Const(BigInt.asUintN(64, a) < BigInt.asUintN(64, b) ? 1 : 0);
+      case BinaryOp.LeUI64:
+        return makeI32Const(BigInt.asUintN(64, a) <= BigInt.asUintN(64, b) ? 1 : 0);
+      case BinaryOp.GtUI64:
+        return makeI32Const(BigInt.asUintN(64, a) > BigInt.asUintN(64, b) ? 1 : 0);
+      case BinaryOp.GeUI64:
+        return makeI32Const(BigInt.asUintN(64, a) >= BigInt.asUintN(64, b) ? 1 : 0);
     }
   }
 
@@ -388,12 +446,18 @@ function _foldUnary(op: UnaryOp, val: Literal): Expression | null {
   if ("i32" in val) {
     const v = val.i32 as number;
     switch (op) {
-      case UnaryOp.ClzI32:      return makeI32Const(Math.clz32(v));
-      case UnaryOp.EqzI32:      return makeI32Const(v === 0 ? 1 : 0);
-      case UnaryOp.ExtendSI32:  return makeI64Const(BigInt(v));
-      case UnaryOp.ExtendUI32:  return makeI64Const(BigInt(v >>> 0));
-      case UnaryOp.ExtendS8I32: return makeI32Const((v << 24) >> 24);
-      case UnaryOp.ExtendS16I32: return makeI32Const((v << 16) >> 16);
+      case UnaryOp.ClzI32:
+        return makeI32Const(Math.clz32(v));
+      case UnaryOp.EqzI32:
+        return makeI32Const(v === 0 ? 1 : 0);
+      case UnaryOp.ExtendSI32:
+        return makeI64Const(BigInt(v));
+      case UnaryOp.ExtendUI32:
+        return makeI64Const(BigInt(v >>> 0));
+      case UnaryOp.ExtendS8I32:
+        return makeI32Const((v << 24) >> 24);
+      case UnaryOp.ExtendS16I32:
+        return makeI32Const((v << 16) >> 16);
       case UnaryOp.ReinterpretI32: {
         const buf = new ArrayBuffer(4);
         new Int32Array(buf)[0] = v;
@@ -405,11 +469,16 @@ function _foldUnary(op: UnaryOp, val: Literal): Expression | null {
   if ("i64" in val) {
     const v = val.i64 as bigint;
     switch (op) {
-      case UnaryOp.WrapI64:      return makeI32Const(Number(BigInt.asIntN(32, v)));
-      case UnaryOp.EqzI64:       return makeI32Const(v === 0n ? 1 : 0);
-      case UnaryOp.ExtendS8I64:  return makeI64Const(BigInt.asIntN(64, BigInt((Number(v) << 56) >> 56)));
-      case UnaryOp.ExtendS16I64: return makeI64Const(BigInt.asIntN(64, BigInt((Number(v) << 48) >> 48)));
-      case UnaryOp.ExtendS32I64: return makeI64Const(BigInt.asIntN(64, BigInt(Number(BigInt.asIntN(32, v)))));
+      case UnaryOp.WrapI64:
+        return makeI32Const(Number(BigInt.asIntN(32, v)));
+      case UnaryOp.EqzI64:
+        return makeI32Const(v === 0n ? 1 : 0);
+      case UnaryOp.ExtendS8I64:
+        return makeI64Const(BigInt.asIntN(64, BigInt((Number(v) << 56) >> 56)));
+      case UnaryOp.ExtendS16I64:
+        return makeI64Const(BigInt.asIntN(64, BigInt((Number(v) << 48) >> 48)));
+      case UnaryOp.ExtendS32I64:
+        return makeI64Const(BigInt.asIntN(64, BigInt(Number(BigInt.asIntN(32, v)))));
     }
   }
 

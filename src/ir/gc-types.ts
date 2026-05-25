@@ -21,7 +21,7 @@
  * @license MIT
  */
 
-import { type ValType } from "./types.ts";
+import type { ValType } from "./types.ts";
 
 // ---------------------------------------------------------------------------
 // Heap types
@@ -33,29 +33,29 @@ import { type ValType } from "./types.ts";
  */
 export enum AbstractHeapType {
   /** Top of the function reference hierarchy. */
-  Func   = "func",
+  Func = "func",
   /** Bottom of the function reference hierarchy (null func). */
   NoFunc = "nofunc",
   /** External (host) reference. */
-  Ext    = "ext",
+  Ext = "ext",
   /** Bottom of the external reference hierarchy. */
-  NoExt  = "noext",
+  NoExt = "noext",
   /** Top of the GC reference hierarchy. */
-  Any    = "any",
+  Any = "any",
   /** Equatable references (structs, arrays, i31). */
-  Eq     = "eq",
+  Eq = "eq",
   /** 31-bit integers as references. */
-  I31    = "i31",
+  I31 = "i31",
   /** Abstract struct type. */
   Struct = "struct",
   /** Abstract array type. */
-  Array  = "array",
+  Array = "array",
   /** Bottom of the GC reference hierarchy (null ref). */
-  None   = "none",
+  None = "none",
   /** Exception reference. */
-  Exn    = "exn",
+  Exn = "exn",
   /** Bottom of the exception reference hierarchy. */
-  NoExn  = "noexn",
+  NoExn = "noexn",
 }
 
 /**
@@ -250,18 +250,18 @@ export function storageTypeToString(t: StorageType): string {
 // ---------------------------------------------------------------------------
 
 /** `anyref` = `(ref null any)` */
-export const anyref: RefType  = { heap: AbstractHeapType.Any,    nullable: true };
+export const anyref: RefType = { heap: AbstractHeapType.Any, nullable: true };
 /** `eqref`  = `(ref null eq)`  */
-export const eqref: RefType   = { heap: AbstractHeapType.Eq,     nullable: true };
+export const eqref: RefType = { heap: AbstractHeapType.Eq, nullable: true };
 /** `i31ref` = `(ref null i31)` */
-export const i31ref: RefType  = { heap: AbstractHeapType.I31,    nullable: true };
+export const i31ref: RefType = { heap: AbstractHeapType.I31, nullable: true };
 /** `structref` = `(ref null struct)` */
 export const structref: RefType = { heap: AbstractHeapType.Struct, nullable: true };
 /** `arrayref` = `(ref null array)` */
-export const arrayref: RefType = { heap: AbstractHeapType.Array,  nullable: true };
+export const arrayref: RefType = { heap: AbstractHeapType.Array, nullable: true };
 /** `funcref` = `(ref null func)` */
-export const funcref: RefType  = { heap: AbstractHeapType.Func,   nullable: true };
+export const funcref: RefType = { heap: AbstractHeapType.Func, nullable: true };
 /** `externref` = `(ref null ext)` */
-export const externref: RefType = { heap: AbstractHeapType.Ext,   nullable: true };
+export const externref: RefType = { heap: AbstractHeapType.Ext, nullable: true };
 /** `nullref` = `(ref null none)` */
-export const nullref: RefType  = { heap: AbstractHeapType.None,   nullable: true };
+export const nullref: RefType = { heap: AbstractHeapType.None, nullable: true };

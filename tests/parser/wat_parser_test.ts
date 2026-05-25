@@ -6,8 +6,8 @@
  * @license MIT
  */
 
-import { assertEquals, assertThrows } from "jsr:@std/assert@^1";
-import { parseWat, WatParseError } from "../../src/parser/wat-parser.ts";
+import { assertEquals } from "@std/assert";
+import { parseWat } from "../../src/parser/wat-parser.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
 import { ValType } from "../../src/ir/types.ts";
 

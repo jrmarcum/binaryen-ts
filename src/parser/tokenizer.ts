@@ -171,14 +171,17 @@ class Tokenizer {
 
   private skipBlockComment(): void {
     // `(;` already confirmed
-    this.advance(); this.advance(); // consume `(` `;`
+    this.advance();
+    this.advance(); // consume `(` `;`
     let depth = 1;
     while (this.pos < this.src.length && depth > 0) {
       if (this.startsWith("(;")) {
-        this.advance(); this.advance();
+        this.advance();
+        this.advance();
         depth++;
       } else if (this.startsWith(";)")) {
-        this.advance(); this.advance();
+        this.advance();
+        this.advance();
         depth--;
       } else if (this.src[this.pos] === "\n") {
         this.advanceNewline();
@@ -196,7 +199,6 @@ class Tokenizer {
   // -------------------------------------------------------------------------
 
   private nextToken(): Token {
-    const start = this.pos;
     const pos = this.currentPos();
     const c = this.src[this.pos];
 
@@ -262,16 +264,22 @@ class Tokenizer {
     return { kind: TokenKind.String, raw, text, pos };
   }
 
-  private readEscape(pos: TextPos): string {
+  private readEscape(_pos: TextPos): string {
     const c = this.src[this.pos];
     this.advance();
     switch (c) {
-      case "n": return "\n";
-      case "t": return "\t";
-      case "r": return "\r";
-      case "\\": return "\\";
-      case '"': return '"';
-      case "'": return "'";
+      case "n":
+        return "\n";
+      case "t":
+        return "\t";
+      case "r":
+        return "\r";
+      case "\\":
+        return "\\";
+      case '"':
+        return '"';
+      case "'":
+        return "'";
       case "u": {
         if (this.src[this.pos] !== "{") this.err("expected { after \\u");
         this.advance();
@@ -321,24 +329,29 @@ class Tokenizer {
     const start = this.pos;
     // Optional sign
     let sign = 1n;
-    if (this.src[this.pos] === "+") { this.advance(); }
-    else if (this.src[this.pos] === "-") { sign = -1n; this.advance(); }
+    if (this.src[this.pos] === "+") this.advance();
+    else if (this.src[this.pos] === "-") {
+      sign = -1n;
+      this.advance();
+    }
 
     // Hex?
     if (this.src[this.pos] === "0" && this.src[this.pos + 1] === "x") {
-      this.advance(); this.advance(); // consume `0x`
+      this.advance();
+      this.advance(); // consume `0x`
       return this.readHexNumber(start, sign, pos);
     }
 
     // Decimal: read digits
     const intStart = this.pos;
-    while (this.pos < this.src.length && (isDigit(this.src[this.pos]) || this.src[this.pos] === "_")) {
+    while (
+      this.pos < this.src.length && (isDigit(this.src[this.pos]) || this.src[this.pos] === "_")
+    ) {
       this.advance();
     }
 
     // Float indicators: `.`, `e`, `E`
-    const isFloat =
-      this.src[this.pos] === "." ||
+    const isFloat = this.src[this.pos] === "." ||
       this.src[this.pos] === "e" ||
       this.src[this.pos] === "E";
 
@@ -346,7 +359,9 @@ class Tokenizer {
       // Read the rest of the float
       if (this.src[this.pos] === ".") {
         this.advance();
-        while (this.pos < this.src.length && (isDigit(this.src[this.pos]) || this.src[this.pos] === "_")) {
+        while (
+          this.pos < this.src.length && (isDigit(this.src[this.pos]) || this.src[this.pos] === "_")
+        ) {
           this.advance();
         }
       }
@@ -371,11 +386,12 @@ class Tokenizer {
 
   private readHexNumber(start: number, sign: bigint, pos: TextPos): Token {
     const hexStart = this.pos;
-    while (this.pos < this.src.length && (isHexDigit(this.src[this.pos]) || this.src[this.pos] === "_")) {
+    while (
+      this.pos < this.src.length && (isHexDigit(this.src[this.pos]) || this.src[this.pos] === "_")
+    ) {
       this.advance();
     }
-    const isFloat =
-      this.src[this.pos] === "." ||
+    const isFloat = this.src[this.pos] === "." ||
       this.src[this.pos] === "p" ||
       this.src[this.pos] === "P";
 
@@ -383,7 +399,10 @@ class Tokenizer {
       // Hex float: read fractional part and exponent
       if (this.src[this.pos] === ".") {
         this.advance();
-        while (this.pos < this.src.length && (isHexDigit(this.src[this.pos]) || this.src[this.pos] === "_")) {
+        while (
+          this.pos < this.src.length &&
+          (isHexDigit(this.src[this.pos]) || this.src[this.pos] === "_")
+        ) {
           this.advance();
         }
       }
@@ -428,9 +447,12 @@ class Tokenizer {
       if (keyword === "nan" || keyword === "+nan" || keyword === "-nan") {
         this.advance(); // consume `:`
         if (!this.startsWith("0x")) this.err("expected 0x after nan:");
-        this.advance(); this.advance();
-        const hexStart = this.pos;
-        while (this.pos < this.src.length && (isHexDigit(this.src[this.pos]) || this.src[this.pos] === "_")) {
+        this.advance();
+        this.advance();
+        while (
+          this.pos < this.src.length &&
+          (isHexDigit(this.src[this.pos]) || this.src[this.pos] === "_")
+        ) {
           this.advance();
         }
         const raw = this.src.slice(start, this.pos);
@@ -439,7 +461,9 @@ class Tokenizer {
     }
     const raw = this.src.slice(start, this.pos);
     // Special float keywords
-    if (raw === "inf" || raw === "+inf") return { kind: TokenKind.Float, raw, value: Infinity, pos };
+    if (raw === "inf" || raw === "+inf") {
+      return { kind: TokenKind.Float, raw, value: Infinity, pos };
+    }
     if (raw === "-inf") return { kind: TokenKind.Float, raw, value: -Infinity, pos };
     if (raw === "nan" || raw === "+nan") return { kind: TokenKind.Float, raw, value: NaN, pos };
     if (raw === "-nan") return { kind: TokenKind.Float, raw, value: NaN, pos };

@@ -6,7 +6,7 @@
  * @license MIT
  */
 
-import { assertEquals } from "jsr:@std/assert";
+import { assertEquals } from "@std/assert";
 import { parseWasm } from "../../src/binary/index.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
@@ -49,9 +49,18 @@ const STRUCT_MODULE = module(
     0x01,
     0x02, // count
     // type 0: struct { i32 immutable, i32 immutable }
-    0x5f, 0x02, 0x7f, 0x00, 0x7f, 0x00,
+    0x5f,
+    0x02,
+    0x7f,
+    0x00,
+    0x7f,
+    0x00,
     // type 1: func () -> (ref $0)
-    0x60, 0x00, 0x01, 0x64, 0x00,
+    0x60,
+    0x00,
+    0x01,
+    0x64,
+    0x00,
   ),
   section(0x03, 0x01, 0x01), // function section: 1 function, type 1
   // code section
@@ -60,9 +69,13 @@ const STRUCT_MODULE = module(
     0x01, // 1 function
     0x09, // body size = 9 bytes
     0x00, // 0 local groups
-    0x41, 0x01, // i32.const 1
-    0x41, 0x02, // i32.const 2
-    0xfb, 0x00, 0x00, // struct.new $0  (0xfb prefix, sub=0x00, typeIdx=0)
+    0x41,
+    0x01, // i32.const 1
+    0x41,
+    0x02, // i32.const 2
+    0xfb,
+    0x00,
+    0x00, // struct.new $0  (0xfb prefix, sub=0x00, typeIdx=0)
     0x0b, // end
   ),
 );
@@ -80,9 +93,16 @@ const ARRAY_MODULE = module(
     0x01,
     0x02, // count
     // type 0: array { i32, mutable }
-    0x5e, 0x7f, 0x01,
+    0x5e,
+    0x7f,
+    0x01,
     // type 1: func (i32) -> (ref $0)
-    0x60, 0x01, 0x7f, 0x01, 0x64, 0x00,
+    0x60,
+    0x01,
+    0x7f,
+    0x01,
+    0x64,
+    0x00,
   ),
   section(0x03, 0x01, 0x01),
   section(
@@ -90,8 +110,11 @@ const ARRAY_MODULE = module(
     0x01, // 1 function
     0x07, // body size = 7 bytes
     0x00, // 0 local groups
-    0x20, 0x00, // local.get 0
-    0xfb, 0x07, 0x00, // array.new_default $0  (sub=0x07)
+    0x20,
+    0x00, // local.get 0
+    0xfb,
+    0x07,
+    0x00, // array.new_default $0  (sub=0x07)
     0x0b,
   ),
 );
@@ -109,9 +132,14 @@ const REF_TEST_MODULE = module(
     0x01,
     0x02,
     // type 0: empty struct
-    0x5f, 0x00,
+    0x5f,
+    0x00,
     // type 1: func (anyref) -> i32   [anyref = 0x6e]
-    0x60, 0x01, 0x6e, 0x01, 0x7f,
+    0x60,
+    0x01,
+    0x6e,
+    0x01,
+    0x7f,
   ),
   section(0x03, 0x01, 0x01),
   section(
@@ -119,8 +147,11 @@ const REF_TEST_MODULE = module(
     0x01,
     0x07, // body size = 7 bytes: 0x00 + local.get(2) + ref.test(3) + end(1)
     0x00, // 0 local groups
-    0x20, 0x00, // local.get 0
-    0xfb, 0x14, 0x00, // ref.test $0  (sub=0x14, heapType=typeIdx 0)
+    0x20,
+    0x00, // local.get 0
+    0xfb,
+    0x14,
+    0x00, // ref.test $0  (sub=0x14, heapType=typeIdx 0)
     0x0b,
   ),
 );

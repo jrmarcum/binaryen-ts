@@ -33,14 +33,14 @@
 
 import {
   BinaryOp,
-  Expression,
+  type Expression,
   ExpressionKind,
-  LocalTeeExpr,
+  type LocalTeeExpr,
   makeLocalGet,
 } from "../ir/expressions.ts";
-import { Local, WasmFunction, WasmModule } from "../ir/module.ts";
+import type { Local, WasmFunction, WasmModule } from "../ir/module.ts";
 import { ValType } from "../ir/types.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 import { mapExpression } from "../ir/walk.ts";
 
 // ---------------------------------------------------------------------------

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @module binaryen-ts/tests/passes/passes_test
  *
  * Tests for all Phase 4 optimization passes.
@@ -6,12 +6,12 @@
  * @license MIT
  */
 
-import { assertEquals, assertNotEquals } from "jsr:@std/assert";
+import { assertEquals, assertNotEquals } from "@std/assert";
 
 import {
   BinaryOp,
-  BlockExpr,
-  Expression,
+  type BlockExpr,
+  type Expression,
   ExpressionKind,
   makeBinary,
   makeBlock,
@@ -27,7 +27,7 @@ import {
   makeUnreachable,
   UnaryOp,
 } from "../../src/ir/expressions.ts";
-import { ModuleBuilder, WasmFunction, WasmModule } from "../../src/ir/module.ts";
+import { ModuleBuilder, type WasmFunction, type WasmModule } from "../../src/ir/module.ts";
 import { None, ValType } from "../../src/ir/types.ts";
 import { listPasses, PassRunner } from "../../src/passes/index.ts";
 
@@ -60,7 +60,7 @@ function emptyModule(): WasmModule {
     hasMemory64: false,
     hasMultiMemory: false,
     heapTypes: [],
-  hasGC: false,
+    hasGC: false,
   };
 }
 
@@ -438,7 +438,10 @@ Deno.test("CoalesceLocals: used local.set is preserved", () => {
   const body = mod.functions[0].body;
   let hasSet = false;
   function find(e: typeof body): void {
-    if (e.kind === ExpressionKind.LocalSet) { hasSet = true; return; }
+    if (e.kind === ExpressionKind.LocalSet) {
+      hasSet = true;
+      return;
+    }
     if (e.kind === ExpressionKind.Block) e.children.forEach(find);
   }
   find(body);
@@ -479,7 +482,7 @@ Deno.test("RemoveUnusedModuleElements: unreachable function is removed", () => {
     hasMemory64: false,
     hasMultiMemory: false,
     heapTypes: [],
-  hasGC: false,
+    hasGC: false,
   };
 
   new PassRunner(mod).add("RemoveUnusedModuleElements").run();
@@ -526,7 +529,7 @@ Deno.test("RemoveUnusedModuleElements: callee of exported function is kept", () 
     hasMemory64: false,
     hasMultiMemory: false,
     heapTypes: [],
-  hasGC: false,
+    hasGC: false,
   };
 
   new PassRunner(mod).add("RemoveUnusedModuleElements").run();
@@ -565,7 +568,7 @@ Deno.test("RemoveUnusedModuleElements: dead global is removed", () => {
     hasMemory64: false,
     hasMultiMemory: false,
     heapTypes: [],
-  hasGC: false,
+    hasGC: false,
   };
 
   new PassRunner(mod).add("RemoveUnusedModuleElements").run();

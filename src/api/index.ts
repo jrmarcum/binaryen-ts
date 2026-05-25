@@ -37,11 +37,11 @@
  */
 
 import {
-  BinaryOp,
-  Expression,
+  type BinaryOp,
+  type Expression,
   ExpressionKind,
-  makeBlock,
   makeBinary,
+  makeBlock,
   makeDrop,
   makeF32Const,
   makeF64Const,
@@ -55,15 +55,10 @@ import {
   makeReturn,
   makeUnary,
   makeUnreachable,
-  UnaryOp,
+  type UnaryOp,
 } from "../ir/expressions.ts";
-import {
-  Local,
-  ModuleBuilder,
-  WasmFunction,
-  WasmModule,
-} from "../ir/module.ts";
-import { None, Type, ValType } from "../ir/types.ts";
+import { ModuleBuilder, type WasmModule } from "../ir/module.ts";
+import { None, ValType } from "../ir/types.ts";
 import { BinaryenInterop } from "../interop/binaryen-js.ts";
 import { PassRunner } from "../passes/index.ts";
 
@@ -78,35 +73,65 @@ import { PassRunner } from "../passes/index.ts";
  */
 export class ExprBuilder {
   /** `i32` constant. */
-  i32(v: number): Expression { return makeI32Const(v); }
+  i32(v: number): Expression {
+    return makeI32Const(v);
+  }
   /** `i64` constant. */
-  i64(v: bigint): Expression { return makeI64Const(v); }
+  i64(v: bigint): Expression {
+    return makeI64Const(v);
+  }
   /** `f32` constant. */
-  f32(v: number): Expression { return makeF32Const(v); }
+  f32(v: number): Expression {
+    return makeF32Const(v);
+  }
   /** `f64` constant. */
-  f64(v: number): Expression { return makeF64Const(v); }
+  f64(v: number): Expression {
+    return makeF64Const(v);
+  }
   /** `local.get` — reads local at `index`. */
-  localGet(index: number, type: ValType = ValType.I32): Expression { return makeLocalGet(index, type); }
+  localGet(index: number, type: ValType = ValType.I32): Expression {
+    return makeLocalGet(index, type);
+  }
   /** `local.set` — writes `value` to local at `index`. */
-  localSet(index: number, value: Expression): Expression { return makeLocalSet(index, value); }
+  localSet(index: number, value: Expression): Expression {
+    return makeLocalSet(index, value);
+  }
   /** `local.tee` — writes `value` to local at `index` and forwards the value. */
-  localTee(index: number, value: Expression, type: ValType): Expression { return makeLocalTee(index, value, type); }
+  localTee(index: number, value: Expression, type: ValType): Expression {
+    return makeLocalTee(index, value, type);
+  }
   /** Binary operation. */
-  binary(op: BinaryOp, left: Expression, right: Expression): Expression { return makeBinary(op, left, right); }
+  binary(op: BinaryOp, left: Expression, right: Expression): Expression {
+    return makeBinary(op, left, right);
+  }
   /** Unary operation. */
-  unary(op: UnaryOp, value: Expression): Expression { return makeUnary(op, value); }
+  unary(op: UnaryOp, value: Expression): Expression {
+    return makeUnary(op, value);
+  }
   /** `if` expression. */
-  if(cond: Expression, then: Expression, else_?: Expression): Expression { return makeIf(cond, then, else_ ?? null); }
+  if(cond: Expression, then: Expression, else_?: Expression): Expression {
+    return makeIf(cond, then, else_ ?? null);
+  }
   /** `block` expression. */
-  block(children: Expression[], name?: string): Expression { return makeBlock(children, name ?? null); }
+  block(children: Expression[], name?: string): Expression {
+    return makeBlock(children, name ?? null);
+  }
   /** `return` expression. */
-  return(value?: Expression): Expression { return makeReturn(value ?? null); }
+  return(value?: Expression): Expression {
+    return makeReturn(value ?? null);
+  }
   /** `drop` — discard a value. */
-  drop(value: Expression): Expression { return makeDrop(value); }
+  drop(value: Expression): Expression {
+    return makeDrop(value);
+  }
   /** `nop` — no-operation. */
-  nop(): Expression { return makeNop(); }
+  nop(): Expression {
+    return makeNop();
+  }
   /** `unreachable` — marks a point as never reached. */
-  unreachable(): Expression { return makeUnreachable(); }
+  unreachable(): Expression {
+    return makeUnreachable();
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -125,7 +150,9 @@ export class Module {
   }
 
   /** The underlying raw IR module. */
-  get ir(): WasmModule { return this._inner; }
+  get ir(): WasmModule {
+    return this._inner;
+  }
 
   /**
    * Optimizes the module and returns the WASM binary bytes.
@@ -136,7 +163,7 @@ export class Module {
    * @param hybridMode - Use upstream binaryen.js / wasm-opt subprocess.
    *   Default: `false` (TypeScript pass infrastructure).
    */
-  async optimize(flags = "-Oz", hybridMode = false): Promise<Uint8Array> {
+  optimize(flags = "-Oz", hybridMode = false): Promise<Uint8Array> {
     if (hybridMode) {
       const wat = this.toWat();
       return BinaryenInterop.optimizeViaSubprocess(wat, [flags]);
@@ -146,7 +173,7 @@ export class Module {
       shrinkLevel: flags.includes("z") ? 2 : flags.includes("s") ? 1 : 0,
     });
     runner.addDefaultOptimizationPasses().run();
-    return this.toBinary();
+    return Promise.resolve(this.toBinary());
   }
 
   /**
@@ -216,9 +243,24 @@ export function createModule(body: ModuleBodyBuilder): Module {
 export { BinaryOp, UnaryOp } from "../ir/expressions.ts";
 export { ExpressionKind } from "../ir/expressions.ts";
 export { ModuleBuilder } from "../ir/module.ts";
-export { ValType, None, Unreachable, typeToString, isInteger, isFloat, isRef } from "../ir/types.ts";
+export {
+  isFloat,
+  isInteger,
+  isRef,
+  None,
+  typeToString,
+  Unreachable,
+  ValType,
+} from "../ir/types.ts";
 export type { Expression, Literal } from "../ir/expressions.ts";
-export type { WasmModule, WasmFunction, WasmGlobal, Local, WasmExport, WasmImport } from "../ir/module.ts";
+export type {
+  Local,
+  WasmExport,
+  WasmFunction,
+  WasmGlobal,
+  WasmImport,
+  WasmModule,
+} from "../ir/module.ts";
 export type { Type } from "../ir/types.ts";
 
 // ---------------------------------------------------------------------------
@@ -238,7 +280,9 @@ function serializeToWat(mod: WasmModule): string {
       const params = (imp.params ?? []).map((t) => `(param ${t})`).join(" ");
       const results = (imp.results ?? []).map((t) => `(result ${t})`).join(" ");
       const sig = [params, results].filter(Boolean).join(" ");
-      lines.push(`  (import "${imp.module}" "${imp.base}" (func $${imp.name}${sig ? " " + sig : ""}))`);
+      lines.push(
+        `  (import "${imp.module}" "${imp.base}" (func $${imp.name}${sig ? " " + sig : ""}))`,
+      );
     }
   }
 

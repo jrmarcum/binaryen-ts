@@ -27,7 +27,7 @@
  * @license MIT
  */
 
-import { isRefType, refTypeToString, type RefType } from "./gc-types.ts";
+import { isRefType, type RefType, refTypeToString } from "./gc-types.ts";
 export type { RefType } from "./gc-types.ts";
 
 // ---------------------------------------------------------------------------

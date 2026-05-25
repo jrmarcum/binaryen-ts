@@ -36,15 +36,10 @@
  * @license MIT
  */
 
-import {
-  BinaryOp,
-  Expression,
-  ExpressionKind,
-  LoadExpr,
-} from "../ir/expressions.ts";
-import { WasmFunction, WasmModule } from "../ir/module.ts";
+import { BinaryOp, type Expression, ExpressionKind, type LoadExpr } from "../ir/expressions.ts";
+import type { WasmFunction, WasmModule } from "../ir/module.ts";
 import { ValType } from "../ir/types.ts";
-import { Pass, PassOptions, registerPass } from "./pass.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
 
 // ---------------------------------------------------------------------------
@@ -74,12 +69,24 @@ registerPass(PickLoadSignsPass);
 
 /** Signed binary ops — the result depends on the sign of the operands. */
 const SIGNED_CMP_OPS = new Set<BinaryOp>([
-  BinaryOp.LtSI32, BinaryOp.LeSI32, BinaryOp.GtSI32, BinaryOp.GeSI32,
-  BinaryOp.LtSI64, BinaryOp.LeSI64, BinaryOp.GtSI64, BinaryOp.GeSI64,
+  BinaryOp.LtSI32,
+  BinaryOp.LeSI32,
+  BinaryOp.GtSI32,
+  BinaryOp.GeSI32,
+  BinaryOp.LtSI64,
+  BinaryOp.LeSI64,
+  BinaryOp.GtSI64,
+  BinaryOp.GeSI64,
 ]);
 const UNSIGNED_CMP_OPS = new Set<BinaryOp>([
-  BinaryOp.LtUI32, BinaryOp.LeUI32, BinaryOp.GtUI32, BinaryOp.GeUI32,
-  BinaryOp.LtUI64, BinaryOp.LeUI64, BinaryOp.GtUI64, BinaryOp.GeUI64,
+  BinaryOp.LtUI32,
+  BinaryOp.LeUI32,
+  BinaryOp.GtUI32,
+  BinaryOp.GeUI32,
+  BinaryOp.LtUI64,
+  BinaryOp.LeUI64,
+  BinaryOp.GtUI64,
+  BinaryOp.GeUI64,
 ]);
 
 /** Zero-extension mask for a load of the given byte width. */

@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @module binaryen-ts/encoder/wasm-encoder
  *
  * WASM binary encoder: serializes a {@link WasmModule} IR tree into a `.wasm` binary.
@@ -10,15 +10,28 @@
  */
 
 import {
+  type ArrayGetExpr,
+  type ArrayLenExpr,
+  type ArrayNewDataExpr,
+  type ArrayNewElemExpr,
+  type ArrayNewExpr,
+  type ArrayNewFixedExpr,
+  type ArraySetExpr,
+  type BinaryExpr,
   BinaryOp,
   type BlockExpr,
   type BreakExpr,
+  type BrOnExpr,
+  BrOnOp,
   type CallExpr,
   type CallIndirectExpr,
+  type ConstExpr,
   type DropExpr,
+  type Expression,
   ExpressionKind,
   type GlobalGetExpr,
   type GlobalSetExpr,
+  type I31GetExpr,
   type IfExpr,
   type LoadExpr,
   type LocalGetExpr,
@@ -28,39 +41,43 @@ import {
   type MemoryCopyExpr,
   type MemoryFillExpr,
   type MemoryGrowExpr,
+  type RefCastExpr,
+  type RefEqExpr,
   type RefFuncExpr,
+  type RefI31Expr,
   type RefIsNullExpr,
   type RefNullExpr,
+  type RefTestExpr,
+  type RethrowExpr,
+  type ReturnExpr,
   type SelectExpr,
+  type SIMDExtractExpr,
+  type SIMDLoadExpr,
+  type SIMDLoadStoreLaneExpr,
+  type SIMDReplaceExpr,
+  type SIMDShiftExpr,
+  type SIMDShuffleExpr,
+  type SIMDTernaryExpr,
   type StoreExpr,
+  type StructGetExpr,
+  type StructNewExpr,
+  type StructSetExpr,
   type SwitchExpr,
+  type ThrowExpr,
+  type ThrowRefExpr,
+  type TryExpr,
+  type TryTableExpr,
   type UnaryExpr,
   UnaryOp,
-  type Expression,
-  type BinaryExpr,
-  type ConstExpr,
-  type ReturnExpr,
-  type RefEqExpr, type RefI31Expr, type I31GetExpr,
-  type StructNewExpr, type StructGetExpr, type StructSetExpr,
-  type ArrayNewExpr, type ArrayNewFixedExpr, type ArrayNewDataExpr,
-  type ArrayNewElemExpr, type ArrayGetExpr, type ArraySetExpr,
-  type ArrayLenExpr, type RefTestExpr, type RefCastExpr, type BrOnExpr,
-  BrOnOp,
-  type TryTableExpr, type TryExpr, type ThrowExpr, type ThrowRefExpr, type RethrowExpr,
-  type SIMDExtractExpr, type SIMDReplaceExpr, type SIMDShuffleExpr,
-  type SIMDTernaryExpr, type SIMDShiftExpr, type SIMDLoadExpr, type SIMDLoadStoreLaneExpr,
-  SIMDLoadOp, SIMDLoadStoreLaneOp, SIMDTernaryOp,
 } from "../ir/expressions.ts";
-import {
-  type DataSegment,
-  type WasmFunction,
-  type WasmModule,
-  type WasmTag,
-} from "../ir/module.ts";
+import type { DataSegment, WasmFunction, WasmModule, WasmTag } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 import {
-  AbstractHeapType, type HeapType, type RefType, type StorageType,
+  AbstractHeapType,
+  type HeapType,
   isRefType,
+  type RefType,
+  type StorageType,
 } from "../ir/gc-types.ts";
 
 // ---------------------------------------------------------------------------
@@ -288,158 +305,261 @@ const BINARY_TO_OPCODE: Partial<Record<BinaryOp, number>> = {
 
 // SIMD unary ops — 0xFD prefix + U32 sub-opcode
 const SIMD_UNARY_SUBOP: Partial<Record<UnaryOp, number>> = {
-  [UnaryOp.SplatVecI8x16]: 0x0f, [UnaryOp.SplatVecI16x8]: 0x10,
-  [UnaryOp.SplatVecI32x4]: 0x11, [UnaryOp.SplatVecI64x2]: 0x12,
-  [UnaryOp.SplatVecF32x4]: 0x13, [UnaryOp.SplatVecF64x2]: 0x14,
-  [UnaryOp.NotVec128]: 0x4d, [UnaryOp.AnyTrueVec128]: 0x53,
-  [UnaryOp.AbsVecI8x16]: 0x60, [UnaryOp.NegVecI8x16]: 0x61,
-  [UnaryOp.PopcntVecI8x16]: 0x62, [UnaryOp.AllTrueVecI8x16]: 0x63, [UnaryOp.BitmaskVecI8x16]: 0x64,
-  [UnaryOp.CeilVecF32x4]: 0x67, [UnaryOp.FloorVecF32x4]: 0x68,
-  [UnaryOp.TruncVecF32x4]: 0x69, [UnaryOp.NearestVecF32x4]: 0x6a,
-  [UnaryOp.CeilVecF64x2]: 0x74, [UnaryOp.FloorVecF64x2]: 0x75,
-  [UnaryOp.TruncVecF64x2]: 0x7a, [UnaryOp.NearestVecF64x2]: 0x94,
-  [UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8]: 0x7c, [UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8]: 0x7d,
-  [UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4]: 0x7e, [UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4]: 0x7f,
-  [UnaryOp.AbsVecI16x8]: 0x80, [UnaryOp.NegVecI16x8]: 0x81,
-  [UnaryOp.AllTrueVecI16x8]: 0x83, [UnaryOp.BitmaskVecI16x8]: 0x84,
-  [UnaryOp.ExtendLowSVecI8x16ToI16x8]: 0x87, [UnaryOp.ExtendHighSVecI8x16ToI16x8]: 0x88,
-  [UnaryOp.ExtendLowUVecI8x16ToI16x8]: 0x89, [UnaryOp.ExtendHighUVecI8x16ToI16x8]: 0x8a,
-  [UnaryOp.AbsVecI32x4]: 0xa0, [UnaryOp.NegVecI32x4]: 0xa1,
-  [UnaryOp.AllTrueVecI32x4]: 0xa3, [UnaryOp.BitmaskVecI32x4]: 0xa4,
-  [UnaryOp.ExtendLowSVecI16x8ToI32x4]: 0xa7, [UnaryOp.ExtendHighSVecI16x8ToI32x4]: 0xa8,
-  [UnaryOp.ExtendLowUVecI16x8ToI32x4]: 0xa9, [UnaryOp.ExtendHighUVecI16x8ToI32x4]: 0xaa,
-  [UnaryOp.AbsVecI64x2]: 0xc0, [UnaryOp.NegVecI64x2]: 0xc1,
-  [UnaryOp.AllTrueVecI64x2]: 0xc3, [UnaryOp.BitmaskVecI64x2]: 0xc4,
-  [UnaryOp.ExtendLowSVecI32x4ToI64x2]: 0xc7, [UnaryOp.ExtendHighSVecI32x4ToI64x2]: 0xc8,
-  [UnaryOp.ExtendLowUVecI32x4ToI64x2]: 0xc9, [UnaryOp.ExtendHighUVecI32x4ToI64x2]: 0xca,
-  [UnaryOp.DemoteZeroVecF64x2ToF32x4]: 0x5e, [UnaryOp.PromoteLowVecF32x4ToF64x2]: 0x5f,
-  [UnaryOp.AbsVecF32x4]: 0xe0, [UnaryOp.NegVecF32x4]: 0xe1, [UnaryOp.SqrtVecF32x4]: 0xe3,
-  [UnaryOp.AbsVecF64x2]: 0xec, [UnaryOp.NegVecF64x2]: 0xed, [UnaryOp.SqrtVecF64x2]: 0xef,
-  [UnaryOp.TruncSatSVecF32x4ToI32x4]: 0xf8, [UnaryOp.TruncSatUVecF32x4ToI32x4]: 0xf9,
-  [UnaryOp.ConvertSVecI32x4ToF32x4]: 0xfa, [UnaryOp.ConvertUVecI32x4ToF32x4]: 0xfb,
-  [UnaryOp.TruncSatSVecF64x2ToI32x4Zero]: 0xfc, [UnaryOp.TruncSatUVecF64x2ToI32x4Zero]: 0xfd,
-  [UnaryOp.ConvertLowSVecI32x4ToF64x2]: 0xfe, [UnaryOp.ConvertLowUVecI32x4ToF64x2]: 0xff,
+  [UnaryOp.SplatVecI8x16]: 0x0f,
+  [UnaryOp.SplatVecI16x8]: 0x10,
+  [UnaryOp.SplatVecI32x4]: 0x11,
+  [UnaryOp.SplatVecI64x2]: 0x12,
+  [UnaryOp.SplatVecF32x4]: 0x13,
+  [UnaryOp.SplatVecF64x2]: 0x14,
+  [UnaryOp.NotVec128]: 0x4d,
+  [UnaryOp.AnyTrueVec128]: 0x53,
+  [UnaryOp.AbsVecI8x16]: 0x60,
+  [UnaryOp.NegVecI8x16]: 0x61,
+  [UnaryOp.PopcntVecI8x16]: 0x62,
+  [UnaryOp.AllTrueVecI8x16]: 0x63,
+  [UnaryOp.BitmaskVecI8x16]: 0x64,
+  [UnaryOp.CeilVecF32x4]: 0x67,
+  [UnaryOp.FloorVecF32x4]: 0x68,
+  [UnaryOp.TruncVecF32x4]: 0x69,
+  [UnaryOp.NearestVecF32x4]: 0x6a,
+  [UnaryOp.CeilVecF64x2]: 0x74,
+  [UnaryOp.FloorVecF64x2]: 0x75,
+  [UnaryOp.TruncVecF64x2]: 0x7a,
+  [UnaryOp.NearestVecF64x2]: 0x94,
+  [UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8]: 0x7c,
+  [UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8]: 0x7d,
+  [UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4]: 0x7e,
+  [UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4]: 0x7f,
+  [UnaryOp.AbsVecI16x8]: 0x80,
+  [UnaryOp.NegVecI16x8]: 0x81,
+  [UnaryOp.AllTrueVecI16x8]: 0x83,
+  [UnaryOp.BitmaskVecI16x8]: 0x84,
+  [UnaryOp.ExtendLowSVecI8x16ToI16x8]: 0x87,
+  [UnaryOp.ExtendHighSVecI8x16ToI16x8]: 0x88,
+  [UnaryOp.ExtendLowUVecI8x16ToI16x8]: 0x89,
+  [UnaryOp.ExtendHighUVecI8x16ToI16x8]: 0x8a,
+  [UnaryOp.AbsVecI32x4]: 0xa0,
+  [UnaryOp.NegVecI32x4]: 0xa1,
+  [UnaryOp.AllTrueVecI32x4]: 0xa3,
+  [UnaryOp.BitmaskVecI32x4]: 0xa4,
+  [UnaryOp.ExtendLowSVecI16x8ToI32x4]: 0xa7,
+  [UnaryOp.ExtendHighSVecI16x8ToI32x4]: 0xa8,
+  [UnaryOp.ExtendLowUVecI16x8ToI32x4]: 0xa9,
+  [UnaryOp.ExtendHighUVecI16x8ToI32x4]: 0xaa,
+  [UnaryOp.AbsVecI64x2]: 0xc0,
+  [UnaryOp.NegVecI64x2]: 0xc1,
+  [UnaryOp.AllTrueVecI64x2]: 0xc3,
+  [UnaryOp.BitmaskVecI64x2]: 0xc4,
+  [UnaryOp.ExtendLowSVecI32x4ToI64x2]: 0xc7,
+  [UnaryOp.ExtendHighSVecI32x4ToI64x2]: 0xc8,
+  [UnaryOp.ExtendLowUVecI32x4ToI64x2]: 0xc9,
+  [UnaryOp.ExtendHighUVecI32x4ToI64x2]: 0xca,
+  [UnaryOp.DemoteZeroVecF64x2ToF32x4]: 0x5e,
+  [UnaryOp.PromoteLowVecF32x4ToF64x2]: 0x5f,
+  [UnaryOp.AbsVecF32x4]: 0xe0,
+  [UnaryOp.NegVecF32x4]: 0xe1,
+  [UnaryOp.SqrtVecF32x4]: 0xe3,
+  [UnaryOp.AbsVecF64x2]: 0xec,
+  [UnaryOp.NegVecF64x2]: 0xed,
+  [UnaryOp.SqrtVecF64x2]: 0xef,
+  [UnaryOp.TruncSatSVecF32x4ToI32x4]: 0xf8,
+  [UnaryOp.TruncSatUVecF32x4ToI32x4]: 0xf9,
+  [UnaryOp.ConvertSVecI32x4ToF32x4]: 0xfa,
+  [UnaryOp.ConvertUVecI32x4ToF32x4]: 0xfb,
+  [UnaryOp.TruncSatSVecF64x2ToI32x4Zero]: 0xfc,
+  [UnaryOp.TruncSatUVecF64x2ToI32x4Zero]: 0xfd,
+  [UnaryOp.ConvertLowSVecI32x4ToF64x2]: 0xfe,
+  [UnaryOp.ConvertLowUVecI32x4ToF64x2]: 0xff,
 };
 
 // SIMD binary ops — 0xFD prefix + U32 sub-opcode
 const SIMD_BINARY_SUBOP: Partial<Record<BinaryOp, number>> = {
   [BinaryOp.SwizzleVecI8x16]: 0x0e,
-  [BinaryOp.EqVecI8x16]: 0x23, [BinaryOp.NeVecI8x16]: 0x24,
-  [BinaryOp.LtSVecI8x16]: 0x25, [BinaryOp.LtUVecI8x16]: 0x26,
-  [BinaryOp.GtSVecI8x16]: 0x27, [BinaryOp.GtUVecI8x16]: 0x28,
-  [BinaryOp.LeSVecI8x16]: 0x29, [BinaryOp.LeUVecI8x16]: 0x2a,
-  [BinaryOp.GeSVecI8x16]: 0x2b, [BinaryOp.GeUVecI8x16]: 0x2c,
-  [BinaryOp.EqVecI16x8]: 0x2d, [BinaryOp.NeVecI16x8]: 0x2e,
-  [BinaryOp.LtSVecI16x8]: 0x2f, [BinaryOp.LtUVecI16x8]: 0x30,
-  [BinaryOp.GtSVecI16x8]: 0x31, [BinaryOp.GtUVecI16x8]: 0x32,
-  [BinaryOp.LeSVecI16x8]: 0x33, [BinaryOp.LeUVecI16x8]: 0x34,
-  [BinaryOp.GeSVecI16x8]: 0x35, [BinaryOp.GeUVecI16x8]: 0x36,
-  [BinaryOp.EqVecI32x4]: 0x37, [BinaryOp.NeVecI32x4]: 0x38,
-  [BinaryOp.LtSVecI32x4]: 0x39, [BinaryOp.LtUVecI32x4]: 0x3a,
-  [BinaryOp.GtSVecI32x4]: 0x3b, [BinaryOp.GtUVecI32x4]: 0x3c,
-  [BinaryOp.LeSVecI32x4]: 0x3d, [BinaryOp.LeUVecI32x4]: 0x3e,
-  [BinaryOp.GeSVecI32x4]: 0x3f, [BinaryOp.GeUVecI32x4]: 0x40,
-  [BinaryOp.EqVecF32x4]: 0x41, [BinaryOp.NeVecF32x4]: 0x42,
-  [BinaryOp.LtVecF32x4]: 0x43, [BinaryOp.GtVecF32x4]: 0x44,
-  [BinaryOp.LeVecF32x4]: 0x45, [BinaryOp.GeVecF32x4]: 0x46,
-  [BinaryOp.EqVecF64x2]: 0x47, [BinaryOp.NeVecF64x2]: 0x48,
-  [BinaryOp.LtVecF64x2]: 0x49, [BinaryOp.GtVecF64x2]: 0x4a,
-  [BinaryOp.LeVecF64x2]: 0x4b, [BinaryOp.GeVecF64x2]: 0x4c,
-  [BinaryOp.AndVec128]: 0x4e, [BinaryOp.AndNotVec128]: 0x4f,
-  [BinaryOp.OrVec128]: 0x50, [BinaryOp.XorVec128]: 0x51,
-  [BinaryOp.NarrowSVecI16x8ToI8x16]: 0x65, [BinaryOp.NarrowUVecI16x8ToI8x16]: 0x66,
+  [BinaryOp.EqVecI8x16]: 0x23,
+  [BinaryOp.NeVecI8x16]: 0x24,
+  [BinaryOp.LtSVecI8x16]: 0x25,
+  [BinaryOp.LtUVecI8x16]: 0x26,
+  [BinaryOp.GtSVecI8x16]: 0x27,
+  [BinaryOp.GtUVecI8x16]: 0x28,
+  [BinaryOp.LeSVecI8x16]: 0x29,
+  [BinaryOp.LeUVecI8x16]: 0x2a,
+  [BinaryOp.GeSVecI8x16]: 0x2b,
+  [BinaryOp.GeUVecI8x16]: 0x2c,
+  [BinaryOp.EqVecI16x8]: 0x2d,
+  [BinaryOp.NeVecI16x8]: 0x2e,
+  [BinaryOp.LtSVecI16x8]: 0x2f,
+  [BinaryOp.LtUVecI16x8]: 0x30,
+  [BinaryOp.GtSVecI16x8]: 0x31,
+  [BinaryOp.GtUVecI16x8]: 0x32,
+  [BinaryOp.LeSVecI16x8]: 0x33,
+  [BinaryOp.LeUVecI16x8]: 0x34,
+  [BinaryOp.GeSVecI16x8]: 0x35,
+  [BinaryOp.GeUVecI16x8]: 0x36,
+  [BinaryOp.EqVecI32x4]: 0x37,
+  [BinaryOp.NeVecI32x4]: 0x38,
+  [BinaryOp.LtSVecI32x4]: 0x39,
+  [BinaryOp.LtUVecI32x4]: 0x3a,
+  [BinaryOp.GtSVecI32x4]: 0x3b,
+  [BinaryOp.GtUVecI32x4]: 0x3c,
+  [BinaryOp.LeSVecI32x4]: 0x3d,
+  [BinaryOp.LeUVecI32x4]: 0x3e,
+  [BinaryOp.GeSVecI32x4]: 0x3f,
+  [BinaryOp.GeUVecI32x4]: 0x40,
+  [BinaryOp.EqVecF32x4]: 0x41,
+  [BinaryOp.NeVecF32x4]: 0x42,
+  [BinaryOp.LtVecF32x4]: 0x43,
+  [BinaryOp.GtVecF32x4]: 0x44,
+  [BinaryOp.LeVecF32x4]: 0x45,
+  [BinaryOp.GeVecF32x4]: 0x46,
+  [BinaryOp.EqVecF64x2]: 0x47,
+  [BinaryOp.NeVecF64x2]: 0x48,
+  [BinaryOp.LtVecF64x2]: 0x49,
+  [BinaryOp.GtVecF64x2]: 0x4a,
+  [BinaryOp.LeVecF64x2]: 0x4b,
+  [BinaryOp.GeVecF64x2]: 0x4c,
+  [BinaryOp.AndVec128]: 0x4e,
+  [BinaryOp.AndNotVec128]: 0x4f,
+  [BinaryOp.OrVec128]: 0x50,
+  [BinaryOp.XorVec128]: 0x51,
+  [BinaryOp.NarrowSVecI16x8ToI8x16]: 0x65,
+  [BinaryOp.NarrowUVecI16x8ToI8x16]: 0x66,
   [BinaryOp.AddVecI8x16]: 0x6e,
-  [BinaryOp.AddSatSVecI8x16]: 0x6f, [BinaryOp.AddSatUVecI8x16]: 0x70,
+  [BinaryOp.AddSatSVecI8x16]: 0x6f,
+  [BinaryOp.AddSatUVecI8x16]: 0x70,
   [BinaryOp.SubVecI8x16]: 0x71,
-  [BinaryOp.SubSatSVecI8x16]: 0x72, [BinaryOp.SubSatUVecI8x16]: 0x73,
-  [BinaryOp.MinSVecI8x16]: 0x76, [BinaryOp.MinUVecI8x16]: 0x77,
-  [BinaryOp.MaxSVecI8x16]: 0x78, [BinaryOp.MaxUVecI8x16]: 0x79,
+  [BinaryOp.SubSatSVecI8x16]: 0x72,
+  [BinaryOp.SubSatUVecI8x16]: 0x73,
+  [BinaryOp.MinSVecI8x16]: 0x76,
+  [BinaryOp.MinUVecI8x16]: 0x77,
+  [BinaryOp.MaxSVecI8x16]: 0x78,
+  [BinaryOp.MaxUVecI8x16]: 0x79,
   [BinaryOp.AvgrUVecI8x16]: 0x7b,
   [BinaryOp.Q15MulrSatSVecI16x8]: 0x82,
-  [BinaryOp.NarrowSVecI32x4ToI16x8]: 0x85, [BinaryOp.NarrowUVecI32x4ToI16x8]: 0x86,
+  [BinaryOp.NarrowSVecI32x4ToI16x8]: 0x85,
+  [BinaryOp.NarrowUVecI32x4ToI16x8]: 0x86,
   [BinaryOp.AddVecI16x8]: 0x8e,
-  [BinaryOp.AddSatSVecI16x8]: 0x8f, [BinaryOp.AddSatUVecI16x8]: 0x90,
+  [BinaryOp.AddSatSVecI16x8]: 0x8f,
+  [BinaryOp.AddSatUVecI16x8]: 0x90,
   [BinaryOp.SubVecI16x8]: 0x91,
-  [BinaryOp.SubSatSVecI16x8]: 0x92, [BinaryOp.SubSatUVecI16x8]: 0x93,
+  [BinaryOp.SubSatSVecI16x8]: 0x92,
+  [BinaryOp.SubSatUVecI16x8]: 0x93,
   [BinaryOp.MulVecI16x8]: 0x95,
-  [BinaryOp.MinSVecI16x8]: 0x96, [BinaryOp.MinUVecI16x8]: 0x97,
-  [BinaryOp.MaxSVecI16x8]: 0x98, [BinaryOp.MaxUVecI16x8]: 0x99,
+  [BinaryOp.MinSVecI16x8]: 0x96,
+  [BinaryOp.MinUVecI16x8]: 0x97,
+  [BinaryOp.MaxSVecI16x8]: 0x98,
+  [BinaryOp.MaxUVecI16x8]: 0x99,
   [BinaryOp.AvgrUVecI16x8]: 0x9b,
-  [BinaryOp.ExtmulLowSVecI8x16ToI16x8]: 0x9c, [BinaryOp.ExtmulHighSVecI8x16ToI16x8]: 0x9d,
-  [BinaryOp.ExtmulLowUVecI8x16ToI16x8]: 0x9e, [BinaryOp.ExtmulHighUVecI8x16ToI16x8]: 0x9f,
-  [BinaryOp.AddVecI32x4]: 0xae, [BinaryOp.SubVecI32x4]: 0xb1, [BinaryOp.MulVecI32x4]: 0xb5,
-  [BinaryOp.MinSVecI32x4]: 0xb6, [BinaryOp.MinUVecI32x4]: 0xb7,
-  [BinaryOp.MaxSVecI32x4]: 0xb8, [BinaryOp.MaxUVecI32x4]: 0xb9,
+  [BinaryOp.ExtmulLowSVecI8x16ToI16x8]: 0x9c,
+  [BinaryOp.ExtmulHighSVecI8x16ToI16x8]: 0x9d,
+  [BinaryOp.ExtmulLowUVecI8x16ToI16x8]: 0x9e,
+  [BinaryOp.ExtmulHighUVecI8x16ToI16x8]: 0x9f,
+  [BinaryOp.AddVecI32x4]: 0xae,
+  [BinaryOp.SubVecI32x4]: 0xb1,
+  [BinaryOp.MulVecI32x4]: 0xb5,
+  [BinaryOp.MinSVecI32x4]: 0xb6,
+  [BinaryOp.MinUVecI32x4]: 0xb7,
+  [BinaryOp.MaxSVecI32x4]: 0xb8,
+  [BinaryOp.MaxUVecI32x4]: 0xb9,
   [BinaryOp.DotSVecI16x8ToI32x4]: 0xba,
-  [BinaryOp.ExtmulLowSVecI16x8ToI32x4]: 0xbc, [BinaryOp.ExtmulHighSVecI16x8ToI32x4]: 0xbd,
-  [BinaryOp.ExtmulLowUVecI16x8ToI32x4]: 0xbe, [BinaryOp.ExtmulHighUVecI16x8ToI32x4]: 0xbf,
-  [BinaryOp.AddVecI64x2]: 0xce, [BinaryOp.SubVecI64x2]: 0xd1, [BinaryOp.MulVecI64x2]: 0xd5,
-  [BinaryOp.EqVecI64x2]: 0xd6, [BinaryOp.NeVecI64x2]: 0xd7,
-  [BinaryOp.LtSVecI64x2]: 0xd8, [BinaryOp.GtSVecI64x2]: 0xd9,
-  [BinaryOp.LeSVecI64x2]: 0xda, [BinaryOp.GeSVecI64x2]: 0xdb,
-  [BinaryOp.ExtmulLowSVecI32x4ToI64x2]: 0xdc, [BinaryOp.ExtmulHighSVecI32x4ToI64x2]: 0xdd,
-  [BinaryOp.ExtmulLowUVecI32x4ToI64x2]: 0xde, [BinaryOp.ExtmulHighUVecI32x4ToI64x2]: 0xdf,
-  [BinaryOp.AddVecF32x4]: 0xe4, [BinaryOp.SubVecF32x4]: 0xe5,
-  [BinaryOp.MulVecF32x4]: 0xe6, [BinaryOp.DivVecF32x4]: 0xe7,
-  [BinaryOp.MinVecF32x4]: 0xe8, [BinaryOp.MaxVecF32x4]: 0xe9,
-  [BinaryOp.PminVecF32x4]: 0xea, [BinaryOp.PmaxVecF32x4]: 0xeb,
-  [BinaryOp.AddVecF64x2]: 0xf0, [BinaryOp.SubVecF64x2]: 0xf1,
-  [BinaryOp.MulVecF64x2]: 0xf2, [BinaryOp.DivVecF64x2]: 0xf3,
-  [BinaryOp.MinVecF64x2]: 0xf4, [BinaryOp.MaxVecF64x2]: 0xf5,
-  [BinaryOp.PminVecF64x2]: 0xf6, [BinaryOp.PmaxVecF64x2]: 0xf7,
+  [BinaryOp.ExtmulLowSVecI16x8ToI32x4]: 0xbc,
+  [BinaryOp.ExtmulHighSVecI16x8ToI32x4]: 0xbd,
+  [BinaryOp.ExtmulLowUVecI16x8ToI32x4]: 0xbe,
+  [BinaryOp.ExtmulHighUVecI16x8ToI32x4]: 0xbf,
+  [BinaryOp.AddVecI64x2]: 0xce,
+  [BinaryOp.SubVecI64x2]: 0xd1,
+  [BinaryOp.MulVecI64x2]: 0xd5,
+  [BinaryOp.EqVecI64x2]: 0xd6,
+  [BinaryOp.NeVecI64x2]: 0xd7,
+  [BinaryOp.LtSVecI64x2]: 0xd8,
+  [BinaryOp.GtSVecI64x2]: 0xd9,
+  [BinaryOp.LeSVecI64x2]: 0xda,
+  [BinaryOp.GeSVecI64x2]: 0xdb,
+  [BinaryOp.ExtmulLowSVecI32x4ToI64x2]: 0xdc,
+  [BinaryOp.ExtmulHighSVecI32x4ToI64x2]: 0xdd,
+  [BinaryOp.ExtmulLowUVecI32x4ToI64x2]: 0xde,
+  [BinaryOp.ExtmulHighUVecI32x4ToI64x2]: 0xdf,
+  [BinaryOp.AddVecF32x4]: 0xe4,
+  [BinaryOp.SubVecF32x4]: 0xe5,
+  [BinaryOp.MulVecF32x4]: 0xe6,
+  [BinaryOp.DivVecF32x4]: 0xe7,
+  [BinaryOp.MinVecF32x4]: 0xe8,
+  [BinaryOp.MaxVecF32x4]: 0xe9,
+  [BinaryOp.PminVecF32x4]: 0xea,
+  [BinaryOp.PmaxVecF32x4]: 0xeb,
+  [BinaryOp.AddVecF64x2]: 0xf0,
+  [BinaryOp.SubVecF64x2]: 0xf1,
+  [BinaryOp.MulVecF64x2]: 0xf2,
+  [BinaryOp.DivVecF64x2]: 0xf3,
+  [BinaryOp.MinVecF64x2]: 0xf4,
+  [BinaryOp.MaxVecF64x2]: 0xf5,
+  [BinaryOp.PminVecF64x2]: 0xf6,
+  [BinaryOp.PmaxVecF64x2]: 0xf7,
 };
 
 // SIMD shift op to sub-opcode
 const SIMD_SHIFT_SUBOP: Record<string, number> = {
-  "i8x16.shl": 0x6b,  "i8x16.shr_s": 0x6c, "i8x16.shr_u": 0x6d,
-  "i16x8.shl": 0x8b,  "i16x8.shr_s": 0x8c, "i16x8.shr_u": 0x8d,
-  "i32x4.shl": 0xab,  "i32x4.shr_s": 0xac, "i32x4.shr_u": 0xad,
-  "i64x2.shl": 0xcb,  "i64x2.shr_s": 0xcc, "i64x2.shr_u": 0xcd,
+  "i8x16.shl": 0x6b,
+  "i8x16.shr_s": 0x6c,
+  "i8x16.shr_u": 0x6d,
+  "i16x8.shl": 0x8b,
+  "i16x8.shr_s": 0x8c,
+  "i16x8.shr_u": 0x8d,
+  "i32x4.shl": 0xab,
+  "i32x4.shr_s": 0xac,
+  "i32x4.shr_u": 0xad,
+  "i64x2.shl": 0xcb,
+  "i64x2.shr_s": 0xcc,
+  "i64x2.shr_u": 0xcd,
 };
 
 // SIMD extract op to (sub-opcode) — lane immediate follows
 const SIMD_EXTRACT_SUBOP: Record<string, number> = {
-  "i8x16.extract_lane_s": 0x15, "i8x16.extract_lane_u": 0x16,
-  "i16x8.extract_lane_s": 0x18, "i16x8.extract_lane_u": 0x19,
-  "i32x4.extract_lane": 0x1b, "i64x2.extract_lane": 0x1d,
-  "f32x4.extract_lane": 0x1f, "f64x2.extract_lane": 0x21,
+  "i8x16.extract_lane_s": 0x15,
+  "i8x16.extract_lane_u": 0x16,
+  "i16x8.extract_lane_s": 0x18,
+  "i16x8.extract_lane_u": 0x19,
+  "i32x4.extract_lane": 0x1b,
+  "i64x2.extract_lane": 0x1d,
+  "f32x4.extract_lane": 0x1f,
+  "f64x2.extract_lane": 0x21,
 };
 
 // SIMD replace op to sub-opcode
 const SIMD_REPLACE_SUBOP: Record<string, number> = {
-  "i8x16.replace_lane": 0x17, "i16x8.replace_lane": 0x1a,
-  "i32x4.replace_lane": 0x1c, "i64x2.replace_lane": 0x1e,
-  "f32x4.replace_lane": 0x20, "f64x2.replace_lane": 0x22,
+  "i8x16.replace_lane": 0x17,
+  "i16x8.replace_lane": 0x1a,
+  "i32x4.replace_lane": 0x1c,
+  "i64x2.replace_lane": 0x1e,
+  "f32x4.replace_lane": 0x20,
+  "f64x2.replace_lane": 0x22,
 };
 
 // SIMD load op to sub-opcode
 const SIMD_LOAD_SUBOP: Record<string, number> = {
-  "v128.load8x8_s": 0x01,  "v128.load8x8_u": 0x02,
-  "v128.load16x4_s": 0x03, "v128.load16x4_u": 0x04,
-  "v128.load32x2_s": 0x05, "v128.load32x2_u": 0x06,
-  "v128.load8_splat": 0x07, "v128.load16_splat": 0x08,
-  "v128.load32_splat": 0x09, "v128.load64_splat": 0x0a,
-  "v128.load32_zero": 0x5c, "v128.load64_zero": 0x5d,
+  "v128.load8x8_s": 0x01,
+  "v128.load8x8_u": 0x02,
+  "v128.load16x4_s": 0x03,
+  "v128.load16x4_u": 0x04,
+  "v128.load32x2_s": 0x05,
+  "v128.load32x2_u": 0x06,
+  "v128.load8_splat": 0x07,
+  "v128.load16_splat": 0x08,
+  "v128.load32_splat": 0x09,
+  "v128.load64_splat": 0x0a,
+  "v128.load32_zero": 0x5c,
+  "v128.load64_zero": 0x5d,
 };
 
 // SIMD load/store lane op to sub-opcode
 const SIMD_LANE_SUBOP: Record<string, number> = {
-  "v128.load8_lane": 0x54,  "v128.load16_lane": 0x55,
-  "v128.load32_lane": 0x56, "v128.load64_lane": 0x57,
-  "v128.store8_lane": 0x58, "v128.store16_lane": 0x59,
-  "v128.store32_lane": 0x5a, "v128.store64_lane": 0x5b,
-};
-
-// Saturating-truncation unary ops that use the 0xFC prefix
-const SAT_TRUNC_TO_SUBOP: Partial<Record<UnaryOp, number>> = {
-  [UnaryOp.TruncSF32ToI32]: 0,
-  [UnaryOp.TruncUF32ToI32]: 1,
-  [UnaryOp.TruncSF64ToI32]: 2,
-  [UnaryOp.TruncUF64ToI32]: 3,
-  [UnaryOp.TruncSF32ToI64]: 4,
-  [UnaryOp.TruncUF32ToI64]: 5,
-  [UnaryOp.TruncSF64ToI64]: 6,
-  [UnaryOp.TruncUF64ToI64]: 7,
+  "v128.load8_lane": 0x54,
+  "v128.load16_lane": 0x55,
+  "v128.load32_lane": 0x56,
+  "v128.load64_lane": 0x57,
+  "v128.store8_lane": 0x58,
+  "v128.store16_lane": 0x59,
+  "v128.store32_lane": 0x5a,
+  "v128.store64_lane": 0x5b,
 };
 
 // ---------------------------------------------------------------------------
@@ -448,24 +568,42 @@ const SAT_TRUNC_TO_SUBOP: Partial<Record<UnaryOp, number>> = {
 
 function valTypeByte(t: ValType): number {
   switch (t) {
-    case ValType.I32: return 0x7f;
-    case ValType.I64: return 0x7e;
-    case ValType.F32: return 0x7d;
-    case ValType.F64: return 0x7c;
-    case ValType.V128: return 0x7b;
-    case ValType.FuncRef:      return 0x70;
-    case ValType.ExternRef:    return 0x6f;
-    case ValType.AnyRef:       return 0x6e;
-    case ValType.EqRef:        return 0x6d;
-    case ValType.I31Ref:       return 0x6c;
-    case ValType.StructRef:    return 0x6b;
-    case ValType.ArrayRef:     return 0x6a;
-    case ValType.NullRef:      return 0x71;
-    case ValType.NullFuncRef:  return 0x73;
-    case ValType.NullExternRef: return 0x72;
-    case ValType.ExnRef:       return 0x69;
-    case ValType.NullExnRef:   return 0x74;
-    default: return 0x7f;
+    case ValType.I32:
+      return 0x7f;
+    case ValType.I64:
+      return 0x7e;
+    case ValType.F32:
+      return 0x7d;
+    case ValType.F64:
+      return 0x7c;
+    case ValType.V128:
+      return 0x7b;
+    case ValType.FuncRef:
+      return 0x70;
+    case ValType.ExternRef:
+      return 0x6f;
+    case ValType.AnyRef:
+      return 0x6e;
+    case ValType.EqRef:
+      return 0x6d;
+    case ValType.I31Ref:
+      return 0x6c;
+    case ValType.StructRef:
+      return 0x6b;
+    case ValType.ArrayRef:
+      return 0x6a;
+    case ValType.NullRef:
+      return 0x71;
+    case ValType.NullFuncRef:
+      return 0x73;
+    case ValType.NullExternRef:
+      return 0x72;
+    case ValType.ExnRef:
+      return 0x69;
+    case ValType.NullExnRef:
+      return 0x74;
+    default:
+      return 0x7f;
   }
 }
 
@@ -487,17 +625,28 @@ function writeBlockType(w: BinaryWriter, t: Type): void {
 
 function refHeapTypeByte(t: ValType): number {
   switch (t) {
-    case ValType.FuncRef:      return 0x70;
-    case ValType.ExternRef:    return 0x6f;
-    case ValType.AnyRef:       return 0x6e;
-    case ValType.EqRef:        return 0x6d;
-    case ValType.I31Ref:       return 0x6c;
-    case ValType.StructRef:    return 0x6b;
-    case ValType.ArrayRef:     return 0x6a;
-    case ValType.NullRef:      return 0x71;
-    case ValType.NullFuncRef:  return 0x73;
-    case ValType.NullExternRef: return 0x72;
-    default: return 0x6e;
+    case ValType.FuncRef:
+      return 0x70;
+    case ValType.ExternRef:
+      return 0x6f;
+    case ValType.AnyRef:
+      return 0x6e;
+    case ValType.EqRef:
+      return 0x6d;
+    case ValType.I31Ref:
+      return 0x6c;
+    case ValType.StructRef:
+      return 0x6b;
+    case ValType.ArrayRef:
+      return 0x6a;
+    case ValType.NullRef:
+      return 0x71;
+    case ValType.NullFuncRef:
+      return 0x73;
+    case ValType.NullExternRef:
+      return 0x72;
+    default:
+      return 0x6e;
   }
 }
 
@@ -506,18 +655,18 @@ function refHeapTypeByte(t: ValType): number {
 // ---------------------------------------------------------------------------
 
 const ABSTRACT_HEAP_TYPE_BYTE: Record<AbstractHeapType, number> = {
-  [AbstractHeapType.Func]:   0x70,
+  [AbstractHeapType.Func]: 0x70,
   [AbstractHeapType.NoFunc]: 0x73,
-  [AbstractHeapType.Ext]:    0x6f,
-  [AbstractHeapType.NoExt]:  0x72,
-  [AbstractHeapType.Any]:    0x6e,
-  [AbstractHeapType.Eq]:     0x6d,
-  [AbstractHeapType.I31]:    0x6c,
+  [AbstractHeapType.Ext]: 0x6f,
+  [AbstractHeapType.NoExt]: 0x72,
+  [AbstractHeapType.Any]: 0x6e,
+  [AbstractHeapType.Eq]: 0x6d,
+  [AbstractHeapType.I31]: 0x6c,
   [AbstractHeapType.Struct]: 0x6b,
-  [AbstractHeapType.Array]:  0x6a,
-  [AbstractHeapType.None]:   0x71,
-  [AbstractHeapType.Exn]:    0x69,
-  [AbstractHeapType.NoExn]:  0x74,
+  [AbstractHeapType.Array]: 0x6a,
+  [AbstractHeapType.None]: 0x71,
+  [AbstractHeapType.Exn]: 0x69,
+  [AbstractHeapType.NoExn]: 0x74,
 };
 
 function writeHeapType(w: BinaryWriter, h: HeapType): void {
@@ -615,15 +764,21 @@ class WasmEncoder {
 
     this.writeSection(out, 1, (w) => this.encodeTypeSection(w));
     if (this.hasImports()) this.writeSection(out, 2, (w) => this.encodeImportSection(w));
-    if (this.mod.functions.length > 0) this.writeSection(out, 3, (w) => this.encodeFunctionSection(w));
+    if (this.mod.functions.length > 0) {
+      this.writeSection(out, 3, (w) => this.encodeFunctionSection(w));
+    }
     if (this.hasTables()) this.writeSection(out, 4, (w) => this.encodeTableSection(w));
     if (this.hasMemories()) this.writeSection(out, 5, (w) => this.encodeMemorySection(w));
     if (this.mod.tags.length > 0) this.writeSection(out, 13, (w) => this.encodeTagSection(w));
     if (this.mod.globals.length > 0) this.writeSection(out, 6, (w) => this.encodeGlobalSection(w));
     if (this.mod.exports.length > 0) this.writeSection(out, 7, (w) => this.encodeExportSection(w));
-    if (this.mod.elements.length > 0) this.writeSection(out, 9, (w) => this.encodeElementSection(w));
+    if (this.mod.elements.length > 0) {
+      this.writeSection(out, 9, (w) => this.encodeElementSection(w));
+    }
     if (this.mod.functions.length > 0) this.writeSection(out, 10, (w) => this.encodeCodeSection(w));
-    if (this.mod.dataSegments.length > 0) this.writeSection(out, 11, (w) => this.encodeDataSection(w));
+    if (this.mod.dataSegments.length > 0) {
+      this.writeSection(out, 11, (w) => this.encodeDataSection(w));
+    }
 
     return out.toUint8Array();
   }
@@ -772,8 +927,14 @@ class WasmEncoder {
   }
 
   private writeStorageType(w: BinaryWriter, t: StorageType): void {
-    if (t === "i8") { w.writeU8(0x78); return; }
-    if (t === "i16") { w.writeU8(0x77); return; }
+    if (t === "i8") {
+      w.writeU8(0x78);
+      return;
+    }
+    if (t === "i16") {
+      w.writeU8(0x77);
+      return;
+    }
     writeValueType(w, t as ValType | RefType);
   }
 
@@ -787,14 +948,20 @@ class WasmEncoder {
         const dp = d.params[j];
         const p = params[j];
         const dpKey = isRefType(dp) ? ValType.AnyRef : (dp as string);
-        if (dpKey !== p) { match = false; break; }
+        if (dpKey !== p) {
+          match = false;
+          break;
+        }
       }
       if (!match) continue;
       for (let j = 0; j < d.results.length; j++) {
         const dr = d.results[j];
         const r = results[j];
         const drKey = isRefType(dr) ? ValType.AnyRef : (dr as string);
-        if (drKey !== r) { match = false; break; }
+        if (drKey !== r) {
+          match = false;
+          break;
+        }
       }
       if (match) return i;
     }
@@ -826,9 +993,9 @@ class WasmEncoder {
         }
         case "memory": {
           w.writeU8(0x02);
-          const flags = (imp.max !== null && imp.max !== undefined ? 0x01 : 0)
-            | (imp.shared ? 0x02 : 0)
-            | (imp.is64 ? 0x04 : 0);
+          const flags = (imp.max !== null && imp.max !== undefined ? 0x01 : 0) |
+            (imp.shared ? 0x02 : 0) |
+            (imp.is64 ? 0x04 : 0);
           w.writeU8(flags);
           w.writeU32(imp.initial ?? 0);
           if (imp.max !== null && imp.max !== undefined) w.writeU32(imp.max as number);
@@ -921,7 +1088,11 @@ class WasmEncoder {
     for (const seg of this.mod.elements) {
       w.writeU32(0); // kind 0: active, implicit table 0, funcref
       if (seg.offset) this.encodeInitExpr(w, seg.offset);
-      else { w.writeU8(0x41); w.writeI32(0); w.writeU8(0x0b); }
+      else {
+        w.writeU8(0x41);
+        w.writeI32(0);
+        w.writeU8(0x0b);
+      }
       w.writeU32(seg.data.length);
       for (const fname of seg.data) {
         w.writeU32(this.funcIndex.get(fname) ?? 0);
@@ -1100,41 +1271,58 @@ class WasmEncoder {
       case ExpressionKind.Const: {
         const e = expr as ConstExpr;
         const v = e.value;
-        if ("i32" in v) { w.writeU8(0x41); w.writeI32(v.i32); }
-        else if ("i64" in v) { w.writeU8(0x42); w.writeI64(v.i64); }
-        else if ("f32" in v) { w.writeU8(0x43); w.writeF32(v.f32); }
-        else if ("v128" in v) { w.writeU8(0xfd); w.writeU32(0x0c); w.writeBytes((v as { v128: Uint8Array }).v128); }
-        else { w.writeU8(0x44); w.writeF64((v as { f64: number }).f64); }
+        if ("i32" in v) {
+          w.writeU8(0x41);
+          w.writeI32(v.i32);
+        } else if ("i64" in v) {
+          w.writeU8(0x42);
+          w.writeI64(v.i64);
+        } else if ("f32" in v) {
+          w.writeU8(0x43);
+          w.writeF32(v.f32);
+        } else if ("v128" in v) {
+          w.writeU8(0xfd);
+          w.writeU32(0x0c);
+          w.writeBytes((v as { v128: Uint8Array }).v128);
+        } else {
+          w.writeU8(0x44);
+          w.writeF64((v as { f64: number }).f64);
+        }
         break;
       }
 
       case ExpressionKind.LocalGet: {
         const e = expr as LocalGetExpr;
-        w.writeU8(0x20); w.writeU32(e.index);
+        w.writeU8(0x20);
+        w.writeU32(e.index);
         break;
       }
       case ExpressionKind.LocalSet: {
         const e = expr as LocalSetExpr;
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(0x21); w.writeU32(e.index);
+        w.writeU8(0x21);
+        w.writeU32(e.index);
         break;
       }
       case ExpressionKind.LocalTee: {
         const e = expr as LocalTeeExpr;
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(0x22); w.writeU32(e.index);
+        w.writeU8(0x22);
+        w.writeU32(e.index);
         break;
       }
 
       case ExpressionKind.GlobalGet: {
         const e = expr as GlobalGetExpr;
-        w.writeU8(0x23); w.writeU32(this.globalIndex.get(e.name) ?? 0);
+        w.writeU8(0x23);
+        w.writeU32(this.globalIndex.get(e.name) ?? 0);
         break;
       }
       case ExpressionKind.GlobalSet: {
         const e = expr as GlobalSetExpr;
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(0x24); w.writeU32(this.globalIndex.get(e.name) ?? 0);
+        w.writeU8(0x24);
+        w.writeU32(this.globalIndex.get(e.name) ?? 0);
         break;
       }
 
@@ -1143,7 +1331,8 @@ class WasmEncoder {
         this.encodeExpr(w, e.value, labels);
         const simdSub = SIMD_UNARY_SUBOP[e.op];
         if (simdSub !== undefined) {
-          w.writeU8(0xfd); w.writeU32(simdSub);
+          w.writeU8(0xfd);
+          w.writeU32(simdSub);
         } else {
           const opcode = UNARY_TO_OPCODE[e.op];
           if (opcode !== undefined) w.writeU8(opcode);
@@ -1158,7 +1347,8 @@ class WasmEncoder {
         this.encodeExpr(w, e.right, labels);
         const simdSub = SIMD_BINARY_SUBOP[e.op];
         if (simdSub !== undefined) {
-          w.writeU8(0xfd); w.writeU32(simdSub);
+          w.writeU8(0xfd);
+          w.writeU32(simdSub);
         } else {
           const opcode = BINARY_TO_OPCODE[e.op];
           if (opcode !== undefined) w.writeU8(opcode);
@@ -1203,13 +1393,15 @@ class WasmEncoder {
       }
 
       case ExpressionKind.MemorySize: {
-        w.writeU8(0x3f); w.writeU8(0x00);
+        w.writeU8(0x3f);
+        w.writeU8(0x00);
         break;
       }
       case ExpressionKind.MemoryGrow: {
         const e = expr as MemoryGrowExpr;
         this.encodeExpr(w, e.delta, labels);
-        w.writeU8(0x40); w.writeU8(0x00);
+        w.writeU8(0x40);
+        w.writeU8(0x00);
         break;
       }
       case ExpressionKind.MemoryCopy: {
@@ -1217,7 +1409,10 @@ class WasmEncoder {
         this.encodeExpr(w, e.dest, labels);
         this.encodeExpr(w, e.source, labels);
         this.encodeExpr(w, e.size, labels);
-        w.writeU8(0xfc); w.writeU32(10); w.writeU8(0x00); w.writeU8(0x00);
+        w.writeU8(0xfc);
+        w.writeU32(10);
+        w.writeU8(0x00);
+        w.writeU8(0x00);
         break;
       }
       case ExpressionKind.MemoryFill: {
@@ -1225,7 +1420,9 @@ class WasmEncoder {
         this.encodeExpr(w, e.dest, labels);
         this.encodeExpr(w, e.value, labels);
         this.encodeExpr(w, e.size, labels);
-        w.writeU8(0xfc); w.writeU32(11); w.writeU8(0x00);
+        w.writeU8(0xfc);
+        w.writeU32(11);
+        w.writeU8(0x00);
         break;
       }
 
@@ -1279,73 +1476,88 @@ class WasmEncoder {
       case ExpressionKind.RefI31: {
         const e = expr as RefI31Expr;
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(0xfb); w.writeU32(0x1c);
+        w.writeU8(0xfb);
+        w.writeU32(0x1c);
         break;
       }
       case ExpressionKind.I31Get: {
         const e = expr as I31GetExpr;
         this.encodeExpr(w, e.i31, labels);
-        w.writeU8(0xfb); w.writeU32(e.signed ? 0x1d : 0x1e);
+        w.writeU8(0xfb);
+        w.writeU32(e.signed ? 0x1d : 0x1e);
         break;
       }
       case ExpressionKind.StructNew: {
         const e = expr as StructNewExpr;
-        if (!e.defaultInit) for (const op of e.operands) this.encodeExpr(w, op, labels);
-        w.writeU8(0xfb); w.writeU32(e.defaultInit ? 0x01 : 0x00);
+        if (!e.defaultInit) { for (const op of e.operands) this.encodeExpr(w, op, labels); }
+        w.writeU8(0xfb);
+        w.writeU32(e.defaultInit ? 0x01 : 0x00);
         w.writeU32(e.typeIndex);
         break;
       }
       case ExpressionKind.StructGet: {
         const e = expr as StructGetExpr;
         this.encodeExpr(w, e.ref, labels);
-        w.writeU8(0xfb); w.writeU32(e.signed ? 0x03 : 0x02);
-        w.writeU32(e.typeIndex); w.writeU32(e.fieldIndex);
+        w.writeU8(0xfb);
+        w.writeU32(e.signed ? 0x03 : 0x02);
+        w.writeU32(e.typeIndex);
+        w.writeU32(e.fieldIndex);
         break;
       }
       case ExpressionKind.StructSet: {
         const e = expr as StructSetExpr;
         this.encodeExpr(w, e.ref, labels);
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(0xfb); w.writeU32(0x05);
-        w.writeU32(e.typeIndex); w.writeU32(e.fieldIndex);
+        w.writeU8(0xfb);
+        w.writeU32(0x05);
+        w.writeU32(e.typeIndex);
+        w.writeU32(e.fieldIndex);
         break;
       }
       case ExpressionKind.ArrayNew: {
         const e = expr as ArrayNewExpr;
         if (e.init !== null) this.encodeExpr(w, e.init, labels);
         this.encodeExpr(w, e.length, labels);
-        w.writeU8(0xfb); w.writeU32(e.init === null ? 0x07 : 0x06);
+        w.writeU8(0xfb);
+        w.writeU32(e.init === null ? 0x07 : 0x06);
         w.writeU32(e.typeIndex);
         break;
       }
       case ExpressionKind.ArrayNewFixed: {
         const e = expr as ArrayNewFixedExpr;
         for (const v of e.values) this.encodeExpr(w, v, labels);
-        w.writeU8(0xfb); w.writeU32(0x08);
-        w.writeU32(e.typeIndex); w.writeU32(e.values.length);
+        w.writeU8(0xfb);
+        w.writeU32(0x08);
+        w.writeU32(e.typeIndex);
+        w.writeU32(e.values.length);
         break;
       }
       case ExpressionKind.ArrayNewData: {
         const e = expr as ArrayNewDataExpr;
         this.encodeExpr(w, e.offset, labels);
         this.encodeExpr(w, e.length, labels);
-        w.writeU8(0xfb); w.writeU32(0x09);
-        w.writeU32(e.typeIndex); w.writeU32(e.dataSegment);
+        w.writeU8(0xfb);
+        w.writeU32(0x09);
+        w.writeU32(e.typeIndex);
+        w.writeU32(e.dataSegment);
         break;
       }
       case ExpressionKind.ArrayNewElem: {
         const e = expr as ArrayNewElemExpr;
         this.encodeExpr(w, e.offset, labels);
         this.encodeExpr(w, e.length, labels);
-        w.writeU8(0xfb); w.writeU32(0x0a);
-        w.writeU32(e.typeIndex); w.writeU32(e.elemSegment);
+        w.writeU8(0xfb);
+        w.writeU32(0x0a);
+        w.writeU32(e.typeIndex);
+        w.writeU32(e.elemSegment);
         break;
       }
       case ExpressionKind.ArrayGet: {
         const e = expr as ArrayGetExpr;
         this.encodeExpr(w, e.ref, labels);
         this.encodeExpr(w, e.index, labels);
-        w.writeU8(0xfb); w.writeU32(e.signed ? 0x0c : 0x0b);
+        w.writeU8(0xfb);
+        w.writeU32(e.signed ? 0x0c : 0x0b);
         w.writeU32(e.typeIndex);
         break;
       }
@@ -1354,27 +1566,31 @@ class WasmEncoder {
         this.encodeExpr(w, e.ref, labels);
         this.encodeExpr(w, e.index, labels);
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(0xfb); w.writeU32(0x0e);
+        w.writeU8(0xfb);
+        w.writeU32(0x0e);
         w.writeU32(e.typeIndex);
         break;
       }
       case ExpressionKind.ArrayLen: {
         const e = expr as ArrayLenExpr;
         this.encodeExpr(w, e.ref, labels);
-        w.writeU8(0xfb); w.writeU32(0x0f);
+        w.writeU8(0xfb);
+        w.writeU32(0x0f);
         break;
       }
       case ExpressionKind.RefTest: {
         const e = expr as RefTestExpr;
         this.encodeExpr(w, e.ref, labels);
-        w.writeU8(0xfb); w.writeU32(e.nullable ? 0x15 : 0x14);
+        w.writeU8(0xfb);
+        w.writeU32(e.nullable ? 0x15 : 0x14);
         writeHeapType(w, e.castType);
         break;
       }
       case ExpressionKind.RefCast: {
         const e = expr as RefCastExpr;
         this.encodeExpr(w, e.ref, labels);
-        w.writeU8(0xfb); w.writeU32(e.nullable ? 0x17 : 0x16);
+        w.writeU8(0xfb);
+        w.writeU32(e.nullable ? 0x17 : 0x16);
         writeHeapType(w, e.castType);
         break;
       }
@@ -1383,16 +1599,19 @@ class WasmEncoder {
         this.encodeExpr(w, e.ref, labels);
         const depth = this.resolveLabel(labels, e.label);
         if (e.op === BrOnOp.Null) {
-          w.writeU8(0xd5); w.writeU32(depth);
+          w.writeU8(0xd5);
+          w.writeU32(depth);
         } else if (e.op === BrOnOp.NonNull) {
-          w.writeU8(0xd6); w.writeU32(depth);
+          w.writeU8(0xd6);
+          w.writeU32(depth);
         } else {
           w.writeU8(0xfb);
           w.writeU32(e.op === BrOnOp.Cast ? 0x18 : 0x19);
           w.writeU8(e.castNullable ? 0x02 : 0x00);
           w.writeU32(depth);
           const ht = e.castType ?? AbstractHeapType.Any;
-          writeHeapType(w, ht); writeHeapType(w, ht);
+          writeHeapType(w, ht);
+          writeHeapType(w, ht);
         }
         break;
       }
@@ -1480,7 +1699,8 @@ class WasmEncoder {
         const e = expr as SIMDExtractExpr;
         this.encodeExpr(w, e.vec, labels);
         const sub = SIMD_EXTRACT_SUBOP[e.op];
-        w.writeU8(0xfd); w.writeU32(sub ?? 0x15);
+        w.writeU8(0xfd);
+        w.writeU32(sub ?? 0x15);
         w.writeU8(e.lane);
         break;
       }
@@ -1490,7 +1710,8 @@ class WasmEncoder {
         this.encodeExpr(w, e.vec, labels);
         this.encodeExpr(w, e.value, labels);
         const sub = SIMD_REPLACE_SUBOP[e.op];
-        w.writeU8(0xfd); w.writeU32(sub ?? 0x17);
+        w.writeU8(0xfd);
+        w.writeU32(sub ?? 0x17);
         w.writeU8(e.lane);
         break;
       }
@@ -1499,7 +1720,8 @@ class WasmEncoder {
         const e = expr as SIMDShuffleExpr;
         this.encodeExpr(w, e.left, labels);
         this.encodeExpr(w, e.right, labels);
-        w.writeU8(0xfd); w.writeU32(0x0d);
+        w.writeU8(0xfd);
+        w.writeU32(0x0d);
         w.writeBytes(e.mask);
         break;
       }
@@ -1510,7 +1732,8 @@ class WasmEncoder {
         this.encodeExpr(w, e.a, labels);
         this.encodeExpr(w, e.b, labels);
         this.encodeExpr(w, e.c, labels);
-        w.writeU8(0xfd); w.writeU32(0x52);
+        w.writeU8(0xfd);
+        w.writeU32(0x52);
         break;
       }
 
@@ -1519,7 +1742,8 @@ class WasmEncoder {
         this.encodeExpr(w, e.vec, labels);
         this.encodeExpr(w, e.shift, labels);
         const sub = SIMD_SHIFT_SUBOP[e.op];
-        w.writeU8(0xfd); w.writeU32(sub ?? 0x6b);
+        w.writeU8(0xfd);
+        w.writeU32(sub ?? 0x6b);
         break;
       }
 
@@ -1527,7 +1751,8 @@ class WasmEncoder {
         const e = expr as SIMDLoadExpr;
         this.encodeExpr(w, e.ptr, labels);
         const sub = SIMD_LOAD_SUBOP[e.op];
-        w.writeU8(0xfd); w.writeU32(sub ?? 0x01);
+        w.writeU8(0xfd);
+        w.writeU32(sub ?? 0x01);
         w.writeU32(e.align);
         w.writeU32(e.offset);
         break;
@@ -1538,7 +1763,8 @@ class WasmEncoder {
         this.encodeExpr(w, e.ptr, labels);
         this.encodeExpr(w, e.vec, labels);
         const sub = SIMD_LANE_SUBOP[e.op];
-        w.writeU8(0xfd); w.writeU32(sub ?? 0x54);
+        w.writeU8(0xfd);
+        w.writeU32(sub ?? 0x54);
         w.writeU32(e.align);
         w.writeU32(e.offset);
         w.writeU8(e.lane);
@@ -1563,10 +1789,13 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
     case ExpressionKind.Block:
       for (const c of (expr as BlockExpr).children) visit(c);
       break;
-    case ExpressionKind.Loop: visit((expr as LoopExpr).body); break;
+    case ExpressionKind.Loop:
+      visit((expr as LoopExpr).body);
+      break;
     case ExpressionKind.If: {
       const e = expr as IfExpr;
-      visit(e.condition); visit(e.ifTrue);
+      visit(e.condition);
+      visit(e.ifTrue);
       if (e.ifFalse) visit(e.ifFalse);
       break;
     }
@@ -1582,55 +1811,199 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
       if (e.value) visit(e.value);
       break;
     }
-    case ExpressionKind.Return: if ((expr as ReturnExpr).value) visit((expr as ReturnExpr).value!); break;
-    case ExpressionKind.LocalSet: visit((expr as LocalSetExpr).value); break;
-    case ExpressionKind.LocalTee: visit((expr as LocalTeeExpr).value); break;
-    case ExpressionKind.GlobalSet: visit((expr as GlobalSetExpr).value); break;
-    case ExpressionKind.Unary: visit((expr as UnaryExpr).value); break;
-    case ExpressionKind.Binary: { const e = expr as BinaryExpr; visit(e.left); visit(e.right); break; }
-    case ExpressionKind.Select: { const e = expr as SelectExpr; visit(e.ifTrue); visit(e.ifFalse); visit(e.condition); break; }
-    case ExpressionKind.Drop: visit((expr as DropExpr).value); break;
-    case ExpressionKind.Load: visit((expr as LoadExpr).ptr); break;
-    case ExpressionKind.Store: { const e = expr as StoreExpr; visit(e.ptr); visit(e.value); break; }
-    case ExpressionKind.MemoryGrow: visit((expr as MemoryGrowExpr).delta); break;
-    case ExpressionKind.MemoryCopy: { const e = expr as MemoryCopyExpr; visit(e.dest); visit(e.source); visit(e.size); break; }
-    case ExpressionKind.MemoryFill: { const e = expr as MemoryFillExpr; visit(e.dest); visit(e.value); visit(e.size); break; }
-    case ExpressionKind.Call: for (const op of (expr as CallExpr).operands) visit(op); break;
-    case ExpressionKind.CallIndirect: { const e = expr as CallIndirectExpr; for (const op of e.operands) visit(op); visit(e.target); break; }
-    case ExpressionKind.RefIsNull: visit((expr as RefIsNullExpr).value); break;
-    case ExpressionKind.RefEq: { const e = expr as RefEqExpr; visit(e.left); visit(e.right); break; }
-    case ExpressionKind.RefI31: visit((expr as RefI31Expr).value); break;
-    case ExpressionKind.I31Get: visit((expr as I31GetExpr).i31); break;
-    case ExpressionKind.StructNew: for (const op of (expr as StructNewExpr).operands) visit(op); break;
-    case ExpressionKind.StructGet: visit((expr as StructGetExpr).ref); break;
-    case ExpressionKind.StructSet: { const e = expr as StructSetExpr; visit(e.ref); visit(e.value); break; }
-    case ExpressionKind.ArrayNew: { const e = expr as ArrayNewExpr; if (e.init) visit(e.init); visit(e.length); break; }
-    case ExpressionKind.ArrayNewFixed: for (const v of (expr as ArrayNewFixedExpr).values) visit(v); break;
-    case ExpressionKind.ArrayNewData: { const e = expr as ArrayNewDataExpr; visit(e.offset); visit(e.length); break; }
-    case ExpressionKind.ArrayNewElem: { const e = expr as ArrayNewElemExpr; visit(e.offset); visit(e.length); break; }
-    case ExpressionKind.ArrayGet: { const e = expr as ArrayGetExpr; visit(e.ref); visit(e.index); break; }
-    case ExpressionKind.ArraySet: { const e = expr as ArraySetExpr; visit(e.ref); visit(e.index); visit(e.value); break; }
-    case ExpressionKind.ArrayLen: visit((expr as ArrayLenExpr).ref); break;
-    case ExpressionKind.RefTest: visit((expr as RefTestExpr).ref); break;
-    case ExpressionKind.RefCast: visit((expr as RefCastExpr).ref); break;
-    case ExpressionKind.BrOn: visit((expr as BrOnExpr).ref); break;
-    case ExpressionKind.TryTable: visit((expr as TryTableExpr).body); break;
+    case ExpressionKind.Return:
+      if ((expr as ReturnExpr).value) visit((expr as ReturnExpr).value!);
+      break;
+    case ExpressionKind.LocalSet:
+      visit((expr as LocalSetExpr).value);
+      break;
+    case ExpressionKind.LocalTee:
+      visit((expr as LocalTeeExpr).value);
+      break;
+    case ExpressionKind.GlobalSet:
+      visit((expr as GlobalSetExpr).value);
+      break;
+    case ExpressionKind.Unary:
+      visit((expr as UnaryExpr).value);
+      break;
+    case ExpressionKind.Binary: {
+      const e = expr as BinaryExpr;
+      visit(e.left);
+      visit(e.right);
+      break;
+    }
+    case ExpressionKind.Select: {
+      const e = expr as SelectExpr;
+      visit(e.ifTrue);
+      visit(e.ifFalse);
+      visit(e.condition);
+      break;
+    }
+    case ExpressionKind.Drop:
+      visit((expr as DropExpr).value);
+      break;
+    case ExpressionKind.Load:
+      visit((expr as LoadExpr).ptr);
+      break;
+    case ExpressionKind.Store: {
+      const e = expr as StoreExpr;
+      visit(e.ptr);
+      visit(e.value);
+      break;
+    }
+    case ExpressionKind.MemoryGrow:
+      visit((expr as MemoryGrowExpr).delta);
+      break;
+    case ExpressionKind.MemoryCopy: {
+      const e = expr as MemoryCopyExpr;
+      visit(e.dest);
+      visit(e.source);
+      visit(e.size);
+      break;
+    }
+    case ExpressionKind.MemoryFill: {
+      const e = expr as MemoryFillExpr;
+      visit(e.dest);
+      visit(e.value);
+      visit(e.size);
+      break;
+    }
+    case ExpressionKind.Call:
+      for (const op of (expr as CallExpr).operands) visit(op);
+      break;
+    case ExpressionKind.CallIndirect: {
+      const e = expr as CallIndirectExpr;
+      for (const op of e.operands) visit(op);
+      visit(e.target);
+      break;
+    }
+    case ExpressionKind.RefIsNull:
+      visit((expr as RefIsNullExpr).value);
+      break;
+    case ExpressionKind.RefEq: {
+      const e = expr as RefEqExpr;
+      visit(e.left);
+      visit(e.right);
+      break;
+    }
+    case ExpressionKind.RefI31:
+      visit((expr as RefI31Expr).value);
+      break;
+    case ExpressionKind.I31Get:
+      visit((expr as I31GetExpr).i31);
+      break;
+    case ExpressionKind.StructNew:
+      for (const op of (expr as StructNewExpr).operands) visit(op);
+      break;
+    case ExpressionKind.StructGet:
+      visit((expr as StructGetExpr).ref);
+      break;
+    case ExpressionKind.StructSet: {
+      const e = expr as StructSetExpr;
+      visit(e.ref);
+      visit(e.value);
+      break;
+    }
+    case ExpressionKind.ArrayNew: {
+      const e = expr as ArrayNewExpr;
+      if (e.init) visit(e.init);
+      visit(e.length);
+      break;
+    }
+    case ExpressionKind.ArrayNewFixed:
+      for (const v of (expr as ArrayNewFixedExpr).values) visit(v);
+      break;
+    case ExpressionKind.ArrayNewData: {
+      const e = expr as ArrayNewDataExpr;
+      visit(e.offset);
+      visit(e.length);
+      break;
+    }
+    case ExpressionKind.ArrayNewElem: {
+      const e = expr as ArrayNewElemExpr;
+      visit(e.offset);
+      visit(e.length);
+      break;
+    }
+    case ExpressionKind.ArrayGet: {
+      const e = expr as ArrayGetExpr;
+      visit(e.ref);
+      visit(e.index);
+      break;
+    }
+    case ExpressionKind.ArraySet: {
+      const e = expr as ArraySetExpr;
+      visit(e.ref);
+      visit(e.index);
+      visit(e.value);
+      break;
+    }
+    case ExpressionKind.ArrayLen:
+      visit((expr as ArrayLenExpr).ref);
+      break;
+    case ExpressionKind.RefTest:
+      visit((expr as RefTestExpr).ref);
+      break;
+    case ExpressionKind.RefCast:
+      visit((expr as RefCastExpr).ref);
+      break;
+    case ExpressionKind.BrOn:
+      visit((expr as BrOnExpr).ref);
+      break;
+    case ExpressionKind.TryTable:
+      visit((expr as TryTableExpr).body);
+      break;
     case ExpressionKind.Try: {
       const e = expr as TryExpr;
       visit(e.body);
       for (const b of e.catchBodies) visit(b);
       break;
     }
-    case ExpressionKind.Throw: for (const op of (expr as ThrowExpr).operands) visit(op); break;
-    case ExpressionKind.ThrowRef: visit((expr as ThrowRefExpr).exnref); break;
-    case ExpressionKind.SIMDExtract: visit((expr as SIMDExtractExpr).vec); break;
-    case ExpressionKind.SIMDReplace: { const e = expr as SIMDReplaceExpr; visit(e.vec); visit(e.value); break; }
-    case ExpressionKind.SIMDShuffle: { const e = expr as SIMDShuffleExpr; visit(e.left); visit(e.right); break; }
-    case ExpressionKind.SIMDTernary: { const e = expr as SIMDTernaryExpr; visit(e.a); visit(e.b); visit(e.c); break; }
-    case ExpressionKind.SIMDShift: { const e = expr as SIMDShiftExpr; visit(e.vec); visit(e.shift); break; }
-    case ExpressionKind.SIMDLoad: visit((expr as SIMDLoadExpr).ptr); break;
-    case ExpressionKind.SIMDLoadStoreLane: { const e = expr as SIMDLoadStoreLaneExpr; visit(e.ptr); visit(e.vec); break; }
-    default: break;
+    case ExpressionKind.Throw:
+      for (const op of (expr as ThrowExpr).operands) visit(op);
+      break;
+    case ExpressionKind.ThrowRef:
+      visit((expr as ThrowRefExpr).exnref);
+      break;
+    case ExpressionKind.SIMDExtract:
+      visit((expr as SIMDExtractExpr).vec);
+      break;
+    case ExpressionKind.SIMDReplace: {
+      const e = expr as SIMDReplaceExpr;
+      visit(e.vec);
+      visit(e.value);
+      break;
+    }
+    case ExpressionKind.SIMDShuffle: {
+      const e = expr as SIMDShuffleExpr;
+      visit(e.left);
+      visit(e.right);
+      break;
+    }
+    case ExpressionKind.SIMDTernary: {
+      const e = expr as SIMDTernaryExpr;
+      visit(e.a);
+      visit(e.b);
+      visit(e.c);
+      break;
+    }
+    case ExpressionKind.SIMDShift: {
+      const e = expr as SIMDShiftExpr;
+      visit(e.vec);
+      visit(e.shift);
+      break;
+    }
+    case ExpressionKind.SIMDLoad:
+      visit((expr as SIMDLoadExpr).ptr);
+      break;
+    case ExpressionKind.SIMDLoadStoreLane: {
+      const e = expr as SIMDLoadStoreLaneExpr;
+      visit(e.ptr);
+      visit(e.vec);
+      break;
+    }
+    default:
+      break;
   }
 }
 

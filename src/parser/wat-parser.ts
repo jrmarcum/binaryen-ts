@@ -1,4 +1,4 @@
-﻿/**
+/**
  * @module binaryen-ts/parser/wat-parser
  *
  * WAT S-expression tree → `WasmModule` IR parser.
@@ -35,84 +35,111 @@
  */
 
 import {
-  BinaryExpr,
+  type BinaryExpr,
   BinaryOp,
-  BlockExpr,
-  BreakExpr,
-  CallExpr,
-  CallIndirectExpr,
+  type BlockExpr,
+  type BreakExpr,
+  type CallExpr,
+  type CallIndirectExpr,
   type CatchClause,
-  ConstExpr,
-  DropExpr,
-  Expression,
+  type ConstExpr,
+  type DropExpr,
+  type Expression,
   ExpressionKind,
-  GlobalGetExpr,
-  GlobalSetExpr,
-  IfExpr,
-  LocalGetExpr,
-  LocalSetExpr,
-  LocalTeeExpr,
-  LoopExpr,
-  MemoryCopyExpr,
-  MemoryFillExpr,
-  MemoryGrowExpr,
-  MemorySizeExpr,
-  NopExpr,
-  ReturnExpr,
-  SelectExpr,
-  StoreExpr,
-  UnaryExpr,
+  type GlobalGetExpr,
+  type GlobalSetExpr,
+  type IfExpr,
+  type LoadExpr,
+  type LocalGetExpr,
+  type LocalSetExpr,
+  type LocalTeeExpr,
+  type LoopExpr,
+  makeArrayGet,
+  makeArrayLen,
+  makeArrayNew,
+  makeArrayNewDefault,
+  makeArrayNewFixed,
+  makeArraySet,
+  makeI31Get,
+  makeRefCast,
+  makeRefEq,
+  makeRefI31,
+  makeRefTest,
+  makeRethrow,
+  makeSIMDExtract,
+  makeSIMDLoad,
+  makeSIMDLoadStoreLane,
+  makeSIMDReplace,
+  makeSIMDShift,
+  makeSIMDShuffle,
+  makeSIMDTernary,
+  makeStructGet,
+  makeStructNew,
+  makeStructNewDefault,
+  makeStructSet,
+  makeThrow,
+  makeThrowRef,
+  makeTry,
+  makeTryTable,
+  makeV128Const,
+  type MemoryCopyExpr,
+  type MemoryFillExpr,
+  type MemoryGrowExpr,
+  type MemorySizeExpr,
+  type NopExpr,
+  type ReturnExpr,
+  type SelectExpr,
+  type SIMDExtractExpr,
+  SIMDExtractOp,
+  type SIMDLoadExpr,
+  SIMDLoadOp,
+  type SIMDLoadStoreLaneExpr,
+  SIMDLoadStoreLaneOp,
+  type SIMDReplaceExpr,
+  SIMDReplaceOp,
+  type SIMDShiftExpr,
+  SIMDShiftOp,
+  type SIMDShuffleExpr,
+  type SIMDTernaryExpr,
+  SIMDTernaryOp,
+  type StoreExpr,
+  type UnaryExpr,
   UnaryOp,
-  UnreachableExpr,
-  LoadExpr,
-  makeRefEq, makeRefI31, makeI31Get,
-  makeStructNew, makeStructNewDefault, makeStructGet, makeStructSet,
-  makeArrayNew, makeArrayNewDefault, makeArrayNewFixed,
-  makeArrayGet, makeArraySet, makeArrayLen,
-  makeRefTest, makeRefCast, BrOnOp,
-  makeThrow, makeThrowRef, makeRethrow, makeTryTable, makeTry,
-  makeV128Const, makeSIMDExtract, makeSIMDReplace, makeSIMDShuffle,
-  makeSIMDTernary, makeSIMDShift, makeSIMDLoad, makeSIMDLoadStoreLane,
-  SIMDExtractOp, SIMDReplaceOp, SIMDShiftOp, SIMDLoadOp, SIMDLoadStoreLaneOp, SIMDTernaryOp,
-  type SIMDExtractExpr, type SIMDReplaceExpr, type SIMDShuffleExpr,
-  type SIMDTernaryExpr, type SIMDShiftExpr, type SIMDLoadExpr, type SIMDLoadStoreLaneExpr,
+  type UnreachableExpr,
 } from "../ir/expressions.ts";
 import {
-  DataSegment,
-  ElementSegment,
-  Local,
+  type Local,
   ModuleBuilder,
-  WasmExport,
-  WasmFunction,
-  WasmGlobal,
-  WasmImport,
-  WasmMemory,
-  WasmModule,
-  WasmTable,
+  type WasmExport,
+  type WasmImport,
+  type WasmModule,
 } from "../ir/module.ts";
-import { None, Type, Unreachable, ValType } from "../ir/types.ts";
+import { None, type Type, Unreachable, ValType } from "../ir/types.ts";
 import {
-  AbstractHeapType, type HeapType, type RefType, type TypeDef,
-  type StorageType, type FieldType,
+  AbstractHeapType,
+  type FieldType,
+  type HeapType,
+  type RefType,
+  type StorageType,
+  type TypeDef,
 } from "../ir/gc-types.ts";
 import {
-  Atom,
-  SExpr,
-  SList,
+  type Atom,
   atomFloat,
   atomInt,
   atomString,
   atomText,
   buildSExpr,
   buildSExprList,
-  isAtom,
   isListWith,
   listChildren,
   listFrom,
   listHead,
+  type SExpr,
   sExprToString,
+  type SList,
 } from "./sexpr.ts";
-import { TextPos, tokenize } from "./tokenizer.ts";
+import { type TextPos, tokenize } from "./tokenizer.ts";
 
 // ---------------------------------------------------------------------------
 // Public entry points
@@ -229,18 +256,37 @@ class WatModuleParser {
       if (child.kind !== "list") continue;
       const head = listHead(child as SList);
       switch (head) {
-        case "import": this.parseImport(child as SList); break;
-        case "func":   this.collectFunc(child as SList); break;
-        case "global": this.collectGlobal(child as SList); break;
-        case "memory": this.collectMemory(child as SList); break;
-        case "table":  this.collectTable(child as SList); break;
-        case "tag":    this.collectTag(child as SList); break;
-        case "export": /* handled in second pass */ break;
-        case "data":   /* handled in second pass */ break;
-        case "elem":   /* handled in second pass */ break;
-        case "type":   this.collectType(child as SList); break;
-        case "rec":    /* GC recursive types — future */ break;
-        default: break;
+        case "import":
+          this.parseImport(child as SList);
+          break;
+        case "func":
+          this.collectFunc(child as SList);
+          break;
+        case "global":
+          this.collectGlobal(child as SList);
+          break;
+        case "memory":
+          this.collectMemory(child as SList);
+          break;
+        case "table":
+          this.collectTable(child as SList);
+          break;
+        case "tag":
+          this.collectTag(child as SList);
+          break;
+        case "export": /* handled in second pass */
+          break;
+        case "data": /* handled in second pass */
+          break;
+        case "elem": /* handled in second pass */
+          break;
+        case "type":
+          this.collectType(child as SList);
+          break;
+        case "rec": /* GC recursive types — future */
+          break;
+        default:
+          break;
       }
     }
 
@@ -249,9 +295,15 @@ class WatModuleParser {
       if (child.kind !== "list") continue;
       const head = listHead(child as SList);
       switch (head) {
-        case "export": this.parseExport(child as SList); break;
-        case "data":   this.parseData(child as SList); break;
-        case "elem":   this.parseElem(child as SList); break;
+        case "export":
+          this.parseExport(child as SList);
+          break;
+        case "data":
+          this.parseData(child as SList);
+          break;
+        case "elem":
+          this.parseElem(child as SList);
+          break;
       }
     }
 
@@ -350,7 +402,10 @@ class WatModuleParser {
       const p = children[idx] as SList;
       const pChildren = listChildren(p);
       // (param $name type) or (param type...)
-      if (pChildren.length >= 2 && pChildren[0].kind === "atom" && (pChildren[0] as Atom).token.raw.startsWith("$")) {
+      if (
+        pChildren.length >= 2 && pChildren[0].kind === "atom" &&
+        (pChildren[0] as Atom).token.raw.startsWith("$")
+      ) {
         paramNames.set((pChildren[0] as Atom).token.raw, params.length);
         params.push(this.parseValType(pChildren[1]));
       } else {
@@ -372,9 +427,15 @@ class WatModuleParser {
     while (idx < children.length && isListWith(children[idx], "local")) {
       const l = children[idx] as SList;
       const lChildren = listChildren(l);
-      if (lChildren.length >= 2 && lChildren[0].kind === "atom" && (lChildren[0] as Atom).token.raw.startsWith("$")) {
+      if (
+        lChildren.length >= 2 && lChildren[0].kind === "atom" &&
+        (lChildren[0] as Atom).token.raw.startsWith("$")
+      ) {
         localNames.set((lChildren[0] as Atom).token.raw, localIdx++);
-        additionalLocals.push({ type: this.parseValType(lChildren[1]), name: (lChildren[0] as Atom).token.raw });
+        additionalLocals.push({
+          type: this.parseValType(lChildren[1]),
+          name: (lChildren[0] as Atom).token.raw,
+        });
       } else {
         for (const t of lChildren) {
           additionalLocals.push({ type: this.parseValType(t) });
@@ -404,9 +465,12 @@ class WatModuleParser {
       idx++;
     }
 
-    const body = bodyExprs.length === 1
-      ? bodyExprs[0]
-      : { kind: ExpressionKind.Block, type: results[0] ?? None, name: null, children: bodyExprs } as BlockExpr;
+    const body = bodyExprs.length === 1 ? bodyExprs[0] : {
+      kind: ExpressionKind.Block,
+      type: results[0] ?? None,
+      name: null,
+      children: bodyExprs,
+    } as BlockExpr;
 
     this.builder.addFunction(raw.name, params, results, body, additionalLocals);
 
@@ -426,18 +490,26 @@ class WatModuleParser {
     return this.parseListExpr(s as SList, ctx);
   }
 
-  private parseAtomExpr(atom: Atom, ctx: FuncContext): Expression {
+  private parseAtomExpr(atom: Atom, _ctx: FuncContext): Expression {
     // Bare keyword instructions (no parens): unreachable, nop, return, etc.
     switch (atom.token.raw) {
-      case "nop":         return { kind: ExpressionKind.Nop, type: None } as NopExpr;
-      case "unreachable": return { kind: ExpressionKind.Unreachable, type: Unreachable } as UnreachableExpr;
-      case "return":      return { kind: ExpressionKind.Return, type: None, value: null } as ReturnExpr;
-      case "memory.size": return { kind: ExpressionKind.MemorySize, type: ValType.I32 } as MemorySizeExpr;
+      case "nop":
+        return { kind: ExpressionKind.Nop, type: None } as NopExpr;
+      case "unreachable":
+        return { kind: ExpressionKind.Unreachable, type: Unreachable } as UnreachableExpr;
+      case "return":
+        return { kind: ExpressionKind.Return, type: None, value: null } as ReturnExpr;
+      case "memory.size":
+        return { kind: ExpressionKind.MemorySize, type: ValType.I32 } as MemorySizeExpr;
     }
     // Number literal?
     if (atom.token.kind === "integer") {
       // Standalone integers become i32.const (context-dependent in real WAT, defaulting to i32)
-      return { kind: ExpressionKind.Const, type: ValType.I32, value: { i32: Number(atom.token.value ?? 0) } } as ConstExpr;
+      return {
+        kind: ExpressionKind.Const,
+        type: ValType.I32,
+        value: { i32: Number(atom.token.value ?? 0) },
+      } as ConstExpr;
     }
     this.err(`unexpected atom in expression: ${atom.token.raw}`, atom.pos);
   }
@@ -498,7 +570,9 @@ class WatModuleParser {
     // Control flow
     // -----------------------------------------------------------------------
     if (head === "nop") return { kind: ExpressionKind.Nop, type: None } as NopExpr;
-    if (head === "unreachable") return { kind: ExpressionKind.Unreachable, type: Unreachable } as UnreachableExpr;
+    if (head === "unreachable") {
+      return { kind: ExpressionKind.Unreachable, type: Unreachable } as UnreachableExpr;
+    }
     if (head === "return") {
       const value = args[0] ? this.parseExpr(args[0], ctx) : null;
       const type: Type = value ? value.type : None;
@@ -512,12 +586,18 @@ class WatModuleParser {
       const ifTrue = this.parseExpr(args[0], ctx);
       const ifFalse = this.parseExpr(args[1], ctx);
       const condition = this.parseExpr(args[2], ctx);
-      return { kind: ExpressionKind.Select, type: ifTrue.type, ifTrue, ifFalse, condition } as SelectExpr;
+      return {
+        kind: ExpressionKind.Select,
+        type: ifTrue.type,
+        ifTrue,
+        ifFalse,
+        condition,
+      } as SelectExpr;
     }
     if (head === "block") return this.parseBlock(list, ctx);
-    if (head === "loop")  return this.parseLoop(list, ctx);
-    if (head === "if")    return this.parseIf(list, ctx);
-    if (head === "br")    return this.parseBr(args, false, ctx, list.pos);
+    if (head === "loop") return this.parseLoop(list, ctx);
+    if (head === "if") return this.parseIf(list, ctx);
+    if (head === "br") return this.parseBr(args, false, ctx, list.pos);
     if (head === "br_if") return this.parseBr(args, true, ctx, list.pos);
 
     // -----------------------------------------------------------------------
@@ -528,13 +608,25 @@ class WatModuleParser {
       const funcName = nameOrIdx.startsWith("$") ? nameOrIdx : `$f${nameOrIdx}`;
       const operands = args.slice(1).map((a) => this.parseExpr(a, ctx));
       const resultType = this.inferFuncResultType(funcName) ?? None;
-      return { kind: ExpressionKind.Call, type: resultType, target: funcName, operands, isReturn: false } as CallExpr;
+      return {
+        kind: ExpressionKind.Call,
+        type: resultType,
+        target: funcName,
+        operands,
+        isReturn: false,
+      } as CallExpr;
     }
     if (head === "return_call") {
       const nameOrIdx = atomText(args[0]) ?? this.err("return_call: missing reference", list.pos);
       const funcName = nameOrIdx.startsWith("$") ? nameOrIdx : `$f${nameOrIdx}`;
       const operands = args.slice(1).map((a) => this.parseExpr(a, ctx));
-      return { kind: ExpressionKind.Call, type: Unreachable, target: funcName, operands, isReturn: true } as CallExpr;
+      return {
+        kind: ExpressionKind.Call,
+        type: Unreachable,
+        target: funcName,
+        operands,
+        isReturn: true,
+      } as CallExpr;
     }
     if (head === "call_indirect") {
       return this.parseCallIndirect(list, args, ctx);
@@ -543,7 +635,9 @@ class WatModuleParser {
     // -----------------------------------------------------------------------
     // Memory
     // -----------------------------------------------------------------------
-    if (head === "memory.size") return { kind: ExpressionKind.MemorySize, type: ValType.I32 } as MemorySizeExpr;
+    if (head === "memory.size") {
+      return { kind: ExpressionKind.MemorySize, type: ValType.I32 } as MemorySizeExpr;
+    }
     if (head === "memory.grow") {
       const delta = this.parseExpr(args[0], ctx);
       return { kind: ExpressionKind.MemoryGrow, type: ValType.I32, delta } as MemoryGrowExpr;
@@ -788,7 +882,10 @@ class WatModuleParser {
     // In folded form: (if (cond) (then ...) (else ...))
     // In unfolded form: condition is already on the stack
     let condition: Expression | null = null;
-    if (idx < children.length && !isListWith(children[idx], "then") && !isListWith(children[idx], "else")) {
+    if (
+      idx < children.length && !isListWith(children[idx], "then") &&
+      !isListWith(children[idx], "else")
+    ) {
       condition = this.parseExpr(children[idx], ctx);
       idx++;
     }
@@ -797,21 +894,33 @@ class WatModuleParser {
     // then branch
     if (!isListWith(children[idx], "then")) this.err("if: expected (then ...)", list.pos);
     const thenExprs = listChildren(children[idx] as SList).map((e) => this.parseExpr(e, ctx));
-    const ifTrue: Expression = thenExprs.length === 1
-      ? thenExprs[0]
-      : { kind: ExpressionKind.Block, type: results[0] ?? None, name: null, children: thenExprs } as BlockExpr;
+    const ifTrue: Expression = thenExprs.length === 1 ? thenExprs[0] : {
+      kind: ExpressionKind.Block,
+      type: results[0] ?? None,
+      name: null,
+      children: thenExprs,
+    } as BlockExpr;
     idx++;
 
     // else branch (optional)
     let ifFalse: Expression | null = null;
     if (idx < children.length && isListWith(children[idx], "else")) {
       const elseExprs = listChildren(children[idx] as SList).map((e) => this.parseExpr(e, ctx));
-      ifFalse = elseExprs.length === 1
-        ? elseExprs[0]
-        : { kind: ExpressionKind.Block, type: results[0] ?? None, name: null, children: elseExprs } as BlockExpr;
+      ifFalse = elseExprs.length === 1 ? elseExprs[0] : {
+        kind: ExpressionKind.Block,
+        type: results[0] ?? None,
+        name: null,
+        children: elseExprs,
+      } as BlockExpr;
     }
 
-    return { kind: ExpressionKind.If, type: results[0] ?? (ifFalse ? ifTrue.type : None), condition: condition!, ifTrue, ifFalse };
+    return {
+      kind: ExpressionKind.If,
+      type: results[0] ?? (ifFalse ? ifTrue.type : None),
+      condition: condition!,
+      ifTrue,
+      ifFalse,
+    };
   }
 
   private parseBr(args: SExpr[], conditional: boolean, ctx: FuncContext, pos: TextPos): BreakExpr {
@@ -819,7 +928,13 @@ class WatModuleParser {
     const name = this.resolveLabel(labelRef, ctx, pos);
     const condition = conditional ? this.parseExpr(args[1], ctx) : null;
     const value = conditional && args[2] ? this.parseExpr(args[2], ctx) : null;
-    return { kind: ExpressionKind.Break, type: conditional ? None : Unreachable, name, condition, value };
+    return {
+      kind: ExpressionKind.Break,
+      type: conditional ? None : Unreachable,
+      name,
+      condition,
+      value,
+    };
   }
 
   private parseTryTable(list: SList, ctx: FuncContext): Expression {
@@ -853,7 +968,8 @@ class WatModuleParser {
         idx++;
       } else if (clauseHead === "catch_all" || clauseHead === "catch_all_ref") {
         const clauseArgs = listChildren(clauseList);
-        const destRef = atomText(clauseArgs[0]) ?? this.err("catch_all: missing dest label", list.pos);
+        const destRef = atomText(clauseArgs[0]) ??
+          this.err("catch_all: missing dest label", list.pos);
         const dest = this.resolveLabel(destRef, innerCtx, list.pos);
         catches.push({ tag: null, dest, isRef: clauseHead === "catch_all_ref" });
         idx++;
@@ -902,9 +1018,12 @@ class WatModuleParser {
       }
     }
     const bodyType: Type = results[0] ?? (bodyExprs[bodyExprs.length - 1]?.type ?? None);
-    const body: Expression = bodyExprs.length === 1
-      ? bodyExprs[0]
-      : { kind: ExpressionKind.Block, type: bodyType, name: null, children: bodyExprs } as BlockExpr;
+    const body: Expression = bodyExprs.length === 1 ? bodyExprs[0] : {
+      kind: ExpressionKind.Block,
+      type: bodyType,
+      name: null,
+      children: bodyExprs,
+    } as BlockExpr;
     // Catch / catch_all / delegate clauses
     const catchTags: string[] = [];
     const catchBodies: Expression[] = [];
@@ -919,9 +1038,12 @@ class WatModuleParser {
         catchTags.push(tagName);
         const catchExprs = clauseArgs.slice(1).map((e) => this.parseExpr(e, innerCtx));
         catchBodies.push(
-          catchExprs.length === 1
-            ? catchExprs[0]
-            : { kind: ExpressionKind.Block, type: bodyType, name: null, children: catchExprs } as BlockExpr
+          catchExprs.length === 1 ? catchExprs[0] : {
+            kind: ExpressionKind.Block,
+            type: bodyType,
+            name: null,
+            children: catchExprs,
+          } as BlockExpr,
         );
         idx++;
       } else if (clauseHead === "catch_all") {
@@ -929,9 +1051,12 @@ class WatModuleParser {
         const clauseArgs = listChildren(clause);
         const catchExprs = clauseArgs.map((e) => this.parseExpr(e, innerCtx));
         catchBodies.push(
-          catchExprs.length === 1
-            ? catchExprs[0]
-            : { kind: ExpressionKind.Block, type: bodyType, name: null, children: catchExprs } as BlockExpr
+          catchExprs.length === 1 ? catchExprs[0] : {
+            kind: ExpressionKind.Block,
+            type: bodyType,
+            name: null,
+            children: catchExprs,
+          } as BlockExpr,
         );
         idx++;
       } else if (clauseHead === "delegate") {
@@ -946,13 +1071,16 @@ class WatModuleParser {
     }
     return makeTry(label, body, catchTags, catchBodies, delegateTarget, bodyType);
   }
-  private parseCallIndirect(list: SList, args: SExpr[], ctx: FuncContext): CallIndirectExpr {
+  private parseCallIndirect(_list: SList, args: SExpr[], ctx: FuncContext): CallIndirectExpr {
     let idx = 0;
     // Optional table name
     let table = "$0";
     if (args[idx]?.kind === "atom" && !(args[idx] as Atom).token.raw.startsWith("(")) {
       const t = atomText(args[idx]);
-      if (t) { table = t; idx++; }
+      if (t) {
+        table = t;
+        idx++;
+      }
     }
     // (type $name)
     if (idx < args.length && isListWith(args[idx], "type")) idx++;
@@ -986,7 +1114,7 @@ class WatModuleParser {
   // Load / store
   // -------------------------------------------------------------------------
 
-  private parseLoad(head: string, list: SList, args: SExpr[], ctx: FuncContext): LoadExpr {
+  private parseLoad(head: string, _list: SList, args: SExpr[], ctx: FuncContext): LoadExpr {
     const [valTypeStr] = head.split(".");
     const type = valTypeStr as ValType;
     let offset = 0, align = 0, bytes: 1 | 2 | 4 | 8 | 16 = 4;
@@ -994,8 +1122,16 @@ class WatModuleParser {
     // offset= and align= keywords
     while (argIdx < args.length && args[argIdx].kind === "atom") {
       const raw = (args[argIdx] as Atom).token.raw;
-      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
-      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      if (raw.startsWith("offset=")) {
+        offset = parseInt(raw.slice(7));
+        argIdx++;
+        continue;
+      }
+      if (raw.startsWith("align=")) {
+        align = parseInt(raw.slice(6));
+        argIdx++;
+        continue;
+      }
       break;
     }
     bytes = loadBytes(head);
@@ -1004,15 +1140,21 @@ class WatModuleParser {
     return { kind: ExpressionKind.Load, type, bytes, signed, offset, align, ptr };
   }
 
-  private parseStore(head: string, list: SList, args: SExpr[], ctx: FuncContext): StoreExpr {
-    const [valTypeStr] = head.split(".");
-    const type = valTypeStr as ValType;
+  private parseStore(head: string, _list: SList, args: SExpr[], ctx: FuncContext): StoreExpr {
     let offset = 0, align = 0;
     let argIdx = 0;
     while (argIdx < args.length && args[argIdx].kind === "atom") {
       const raw = (args[argIdx] as Atom).token.raw;
-      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
-      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      if (raw.startsWith("offset=")) {
+        offset = parseInt(raw.slice(7));
+        argIdx++;
+        continue;
+      }
+      if (raw.startsWith("align=")) {
+        align = parseInt(raw.slice(6));
+        argIdx++;
+        continue;
+      }
       break;
     }
     const bytes = storeBytes(head);
@@ -1040,7 +1182,9 @@ class WatModuleParser {
       for (let i = 0; i < 4; i++) dv.setInt32(i * 4, vals[i] ?? 0, true);
     } else if (laneType === "i64x2") {
       const dv = new DataView(bytes.buffer);
-      for (let i = 0; i < 2; i++) dv.setBigInt64(i * 8, BigInt(atomInt(args[1 + i] as Atom) ?? 0), true);
+      for (let i = 0; i < 2; i++) {
+        dv.setBigInt64(i * 8, BigInt(atomInt(args[1 + i] as Atom) ?? 0), true);
+      }
     } else if (laneType === "f32x4") {
       const dv = new DataView(bytes.buffer);
       for (let i = 0; i < 4; i++) dv.setFloat32(i * 4, atomFloat(args[1 + i] as Atom) ?? 0, true);
@@ -1100,8 +1244,16 @@ class WatModuleParser {
     let offset = 0, align = 0, argIdx = 0;
     while (argIdx < args.length && args[argIdx].kind === "atom") {
       const raw = (args[argIdx] as Atom).token.raw;
-      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
-      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      if (raw.startsWith("offset=")) {
+        offset = parseInt(raw.slice(7));
+        argIdx++;
+        continue;
+      }
+      if (raw.startsWith("align=")) {
+        align = parseInt(raw.slice(6));
+        argIdx++;
+        continue;
+      }
       break;
     }
     const ptr = this.parseExpr(args[argIdx], ctx);
@@ -1116,8 +1268,16 @@ class WatModuleParser {
     // Skip any leading memargs
     while (argIdx < args.length && args[argIdx].kind === "atom") {
       const raw = (args[argIdx] as Atom).token.raw;
-      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
-      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      if (raw.startsWith("offset=")) {
+        offset = parseInt(raw.slice(7));
+        argIdx++;
+        continue;
+      }
+      if (raw.startsWith("align=")) {
+        align = parseInt(raw.slice(6));
+        argIdx++;
+        continue;
+      }
       break;
     }
     // Lane is the next integer atom
@@ -1126,13 +1286,28 @@ class WatModuleParser {
     // Skip any trailing memargs
     while (argIdx < args.length && args[argIdx].kind === "atom") {
       const raw = (args[argIdx] as Atom).token.raw;
-      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
-      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      if (raw.startsWith("offset=")) {
+        offset = parseInt(raw.slice(7));
+        argIdx++;
+        continue;
+      }
+      if (raw.startsWith("align=")) {
+        align = parseInt(raw.slice(6));
+        argIdx++;
+        continue;
+      }
       break;
     }
     const ptr = this.parseExpr(args[argIdx], ctx);
     const vec = this.parseExpr(args[argIdx + 1], ctx);
-    return makeSIMDLoadStoreLane(SIMD_LANE_OPS[head] as SIMDLoadStoreLaneOp, ptr, vec, offset, align, lane);
+    return makeSIMDLoadStoreLane(
+      SIMD_LANE_OPS[head] as SIMDLoadStoreLaneOp,
+      ptr,
+      vec,
+      offset,
+      align,
+      lane,
+    );
   }
 
   // -------------------------------------------------------------------------
@@ -1215,11 +1390,13 @@ class WatModuleParser {
 
   private parseExport(list: SList): void {
     const children = listChildren(list);
-    const exportName = atomString(children[0]) ?? this.err("export: expected name string", list.pos);
+    const exportName = atomString(children[0]) ??
+      this.err("export: expected name string", list.pos);
     if (children[1]?.kind !== "list") this.err("export: expected descriptor list", list.pos);
     const desc = children[1] as SList;
     const head = listHead(desc) as WasmExport["kind"] | null;
-    const internalRef = atomText(desc.children[1]) ?? this.err("export: expected internal name", list.pos);
+    const internalRef = atomText(desc.children[1]) ??
+      this.err("export: expected internal name", list.pos);
     if (!head) this.err("export: missing kind", list.pos);
     this.builder.addExport(exportName, internalRef, head);
   }
@@ -1244,7 +1421,14 @@ class WatModuleParser {
       const child = children[idx] as SList;
       const head = listHead(child);
       if (head === "offset" || head === "i32.const") {
-        const dummyCtx: FuncContext = { params: [], locals: [], localNames: new Map(), labels: new Map(), labelDepth: 0, results: [] };
+        const dummyCtx: FuncContext = {
+          params: [],
+          locals: [],
+          localNames: new Map(),
+          labels: new Map(),
+          labelDepth: 0,
+          results: [],
+        };
         offset = head === "offset"
           ? this.parseExpr(listChildren(child)[0], dummyCtx)
           : this.parseExpr(child, dummyCtx);
@@ -1279,7 +1463,9 @@ class WatModuleParser {
   // Type helpers
   // -------------------------------------------------------------------------
 
-  private parseFuncType(list: SList): { name: string | null; params: ValType[]; results: ValType[] } {
+  private parseFuncType(
+    list: SList,
+  ): { name: string | null; params: ValType[]; results: ValType[] } {
     const children = listChildren(list);
     let idx = 0;
     let name: string | null = null;
@@ -1385,11 +1571,16 @@ class WatModuleParser {
     if (!raw) return AbstractHeapType.Any;
     if (raw.startsWith("$")) return this.typeNames.get(raw) ?? AbstractHeapType.Any;
     const abstractMap: Record<string, AbstractHeapType> = {
-      func: AbstractHeapType.Func, nofunc: AbstractHeapType.NoFunc,
-      ext: AbstractHeapType.Ext, noext: AbstractHeapType.NoExt,
-      any: AbstractHeapType.Any, eq: AbstractHeapType.Eq,
-      i31: AbstractHeapType.I31, struct: AbstractHeapType.Struct,
-      array: AbstractHeapType.Array, none: AbstractHeapType.None,
+      func: AbstractHeapType.Func,
+      nofunc: AbstractHeapType.NoFunc,
+      ext: AbstractHeapType.Ext,
+      noext: AbstractHeapType.NoExt,
+      any: AbstractHeapType.Any,
+      eq: AbstractHeapType.Eq,
+      i31: AbstractHeapType.I31,
+      struct: AbstractHeapType.Struct,
+      array: AbstractHeapType.Array,
+      none: AbstractHeapType.None,
     };
     return abstractMap[raw] ?? (isNaN(Number(raw)) ? AbstractHeapType.Any : Number(raw));
   }
@@ -1418,16 +1609,24 @@ class WatModuleParser {
     if (raw in ValType) return raw as ValType;
     // Handle string variants
     const map: Record<string, ValType> = {
-      i32: ValType.I32, i64: ValType.I64,
-      f32: ValType.F32, f64: ValType.F64,
+      i32: ValType.I32,
+      i64: ValType.I64,
+      f32: ValType.F32,
+      f64: ValType.F64,
       v128: ValType.V128,
-      funcref: ValType.FuncRef, externref: ValType.ExternRef,
-      anyref: ValType.AnyRef, eqref: ValType.EqRef,
-      i31ref: ValType.I31Ref, structref: ValType.StructRef,
-      arrayref: ValType.ArrayRef, stringref: ValType.StringRef,
-      nullfuncref: ValType.NullFuncRef, nullexternref: ValType.NullExternRef,
+      funcref: ValType.FuncRef,
+      externref: ValType.ExternRef,
+      anyref: ValType.AnyRef,
+      eqref: ValType.EqRef,
+      i31ref: ValType.I31Ref,
+      structref: ValType.StructRef,
+      arrayref: ValType.ArrayRef,
+      stringref: ValType.StringRef,
+      nullfuncref: ValType.NullFuncRef,
+      nullexternref: ValType.NullExternRef,
       nullref: ValType.NullRef,
-      exnref: ValType.ExnRef, nullexnref: ValType.NullExnRef,
+      exnref: ValType.ExnRef,
+      nullexnref: ValType.NullExnRef,
     };
     return map[raw] ?? null;
   }
@@ -1436,7 +1635,11 @@ class WatModuleParser {
   // Name resolution helpers
   // -------------------------------------------------------------------------
 
-  private resolveLocal(s: SExpr | undefined, ctx: FuncContext, instr: string): { index: number; type: ValType } {
+  private resolveLocal(
+    s: SExpr | undefined,
+    ctx: FuncContext,
+    instr: string,
+  ): { index: number; type: ValType } {
     if (!s) this.err(`${instr}: missing local index`);
     const raw = atomText(s!);
     let index: number;
@@ -1563,208 +1766,385 @@ const SIMD_REPLACE_OPS: Record<string, SIMDReplaceOp> = {
   "f64x2.replace_lane": SIMDReplaceOp.ReplaceLaneVecF64x2,
 };
 const SIMD_SHIFT_OPS: Record<string, SIMDShiftOp> = {
-  "i8x16.shl": SIMDShiftOp.ShlVecI8x16, "i8x16.shr_s": SIMDShiftOp.ShrSVecI8x16, "i8x16.shr_u": SIMDShiftOp.ShrUVecI8x16,
-  "i16x8.shl": SIMDShiftOp.ShlVecI16x8, "i16x8.shr_s": SIMDShiftOp.ShrSVecI16x8, "i16x8.shr_u": SIMDShiftOp.ShrUVecI16x8,
-  "i32x4.shl": SIMDShiftOp.ShlVecI32x4, "i32x4.shr_s": SIMDShiftOp.ShrSVecI32x4, "i32x4.shr_u": SIMDShiftOp.ShrUVecI32x4,
-  "i64x2.shl": SIMDShiftOp.ShlVecI64x2, "i64x2.shr_s": SIMDShiftOp.ShrSVecI64x2, "i64x2.shr_u": SIMDShiftOp.ShrUVecI64x2,
+  "i8x16.shl": SIMDShiftOp.ShlVecI8x16,
+  "i8x16.shr_s": SIMDShiftOp.ShrSVecI8x16,
+  "i8x16.shr_u": SIMDShiftOp.ShrUVecI8x16,
+  "i16x8.shl": SIMDShiftOp.ShlVecI16x8,
+  "i16x8.shr_s": SIMDShiftOp.ShrSVecI16x8,
+  "i16x8.shr_u": SIMDShiftOp.ShrUVecI16x8,
+  "i32x4.shl": SIMDShiftOp.ShlVecI32x4,
+  "i32x4.shr_s": SIMDShiftOp.ShrSVecI32x4,
+  "i32x4.shr_u": SIMDShiftOp.ShrUVecI32x4,
+  "i64x2.shl": SIMDShiftOp.ShlVecI64x2,
+  "i64x2.shr_s": SIMDShiftOp.ShrSVecI64x2,
+  "i64x2.shr_u": SIMDShiftOp.ShrUVecI64x2,
 };
 const SIMD_LOAD_OPS: Record<string, SIMDLoadOp> = {
-  "v128.load8_splat": SIMDLoadOp.Load8SplatVec128, "v128.load16_splat": SIMDLoadOp.Load16SplatVec128,
-  "v128.load32_splat": SIMDLoadOp.Load32SplatVec128, "v128.load64_splat": SIMDLoadOp.Load64SplatVec128,
-  "v128.load8x8_s": SIMDLoadOp.Load8x8SVec128, "v128.load8x8_u": SIMDLoadOp.Load8x8UVec128,
-  "v128.load16x4_s": SIMDLoadOp.Load16x4SVec128, "v128.load16x4_u": SIMDLoadOp.Load16x4UVec128,
-  "v128.load32x2_s": SIMDLoadOp.Load32x2SVec128, "v128.load32x2_u": SIMDLoadOp.Load32x2UVec128,
-  "v128.load32_zero": SIMDLoadOp.Load32ZeroVec128, "v128.load64_zero": SIMDLoadOp.Load64ZeroVec128,
+  "v128.load8_splat": SIMDLoadOp.Load8SplatVec128,
+  "v128.load16_splat": SIMDLoadOp.Load16SplatVec128,
+  "v128.load32_splat": SIMDLoadOp.Load32SplatVec128,
+  "v128.load64_splat": SIMDLoadOp.Load64SplatVec128,
+  "v128.load8x8_s": SIMDLoadOp.Load8x8SVec128,
+  "v128.load8x8_u": SIMDLoadOp.Load8x8UVec128,
+  "v128.load16x4_s": SIMDLoadOp.Load16x4SVec128,
+  "v128.load16x4_u": SIMDLoadOp.Load16x4UVec128,
+  "v128.load32x2_s": SIMDLoadOp.Load32x2SVec128,
+  "v128.load32x2_u": SIMDLoadOp.Load32x2UVec128,
+  "v128.load32_zero": SIMDLoadOp.Load32ZeroVec128,
+  "v128.load64_zero": SIMDLoadOp.Load64ZeroVec128,
 };
 const SIMD_LANE_OPS: Record<string, SIMDLoadStoreLaneOp> = {
-  "v128.load8_lane": SIMDLoadStoreLaneOp.Load8LaneVec128, "v128.load16_lane": SIMDLoadStoreLaneOp.Load16LaneVec128,
-  "v128.load32_lane": SIMDLoadStoreLaneOp.Load32LaneVec128, "v128.load64_lane": SIMDLoadStoreLaneOp.Load64LaneVec128,
-  "v128.store8_lane": SIMDLoadStoreLaneOp.Store8LaneVec128, "v128.store16_lane": SIMDLoadStoreLaneOp.Store16LaneVec128,
-  "v128.store32_lane": SIMDLoadStoreLaneOp.Store32LaneVec128, "v128.store64_lane": SIMDLoadStoreLaneOp.Store64LaneVec128,
+  "v128.load8_lane": SIMDLoadStoreLaneOp.Load8LaneVec128,
+  "v128.load16_lane": SIMDLoadStoreLaneOp.Load16LaneVec128,
+  "v128.load32_lane": SIMDLoadStoreLaneOp.Load32LaneVec128,
+  "v128.load64_lane": SIMDLoadStoreLaneOp.Load64LaneVec128,
+  "v128.store8_lane": SIMDLoadStoreLaneOp.Store8LaneVec128,
+  "v128.store16_lane": SIMDLoadStoreLaneOp.Store16LaneVec128,
+  "v128.store32_lane": SIMDLoadStoreLaneOp.Store32LaneVec128,
+  "v128.store64_lane": SIMDLoadStoreLaneOp.Store64LaneVec128,
 };
 
 const UNARY_OPS: Record<string, UnaryOp> = {
-  "i32.clz": UnaryOp.ClzI32, "i32.ctz": UnaryOp.CtzI32, "i32.popcnt": UnaryOp.PopcntI32,
+  "i32.clz": UnaryOp.ClzI32,
+  "i32.ctz": UnaryOp.CtzI32,
+  "i32.popcnt": UnaryOp.PopcntI32,
   "i32.eqz": UnaryOp.EqzI32,
-  "i64.clz": UnaryOp.ClzI64, "i64.ctz": UnaryOp.CtzI64, "i64.popcnt": UnaryOp.PopcntI64,
+  "i64.clz": UnaryOp.ClzI64,
+  "i64.ctz": UnaryOp.CtzI64,
+  "i64.popcnt": UnaryOp.PopcntI64,
   "i64.eqz": UnaryOp.EqzI64,
-  "f32.abs": UnaryOp.AbsF32, "f32.neg": UnaryOp.NegF32, "f32.ceil": UnaryOp.CeilF32,
-  "f32.floor": UnaryOp.FloorF32, "f32.trunc": UnaryOp.TruncF32, "f32.nearest": UnaryOp.NearestF32,
+  "f32.abs": UnaryOp.AbsF32,
+  "f32.neg": UnaryOp.NegF32,
+  "f32.ceil": UnaryOp.CeilF32,
+  "f32.floor": UnaryOp.FloorF32,
+  "f32.trunc": UnaryOp.TruncF32,
+  "f32.nearest": UnaryOp.NearestF32,
   "f32.sqrt": UnaryOp.SqrtF32,
-  "f64.abs": UnaryOp.AbsF64, "f64.neg": UnaryOp.NegF64, "f64.ceil": UnaryOp.CeilF64,
-  "f64.floor": UnaryOp.FloorF64, "f64.trunc": UnaryOp.TruncF64, "f64.nearest": UnaryOp.NearestF64,
+  "f64.abs": UnaryOp.AbsF64,
+  "f64.neg": UnaryOp.NegF64,
+  "f64.ceil": UnaryOp.CeilF64,
+  "f64.floor": UnaryOp.FloorF64,
+  "f64.trunc": UnaryOp.TruncF64,
+  "f64.nearest": UnaryOp.NearestF64,
   "f64.sqrt": UnaryOp.SqrtF64,
-  "i64.extend_i32_s": UnaryOp.ExtendSI32, "i64.extend_i32_u": UnaryOp.ExtendUI32,
+  "i64.extend_i32_s": UnaryOp.ExtendSI32,
+  "i64.extend_i32_u": UnaryOp.ExtendUI32,
   "i32.wrap_i64": UnaryOp.WrapI64,
-  "i32.trunc_f32_s": UnaryOp.TruncSF32ToI32, "i32.trunc_f32_u": UnaryOp.TruncUF32ToI32,
-  "i32.trunc_f64_s": UnaryOp.TruncSF64ToI32, "i32.trunc_f64_u": UnaryOp.TruncUF64ToI32,
-  "i64.trunc_f32_s": UnaryOp.TruncSF32ToI64, "i64.trunc_f32_u": UnaryOp.TruncUF32ToI64,
-  "i64.trunc_f64_s": UnaryOp.TruncSF64ToI64, "i64.trunc_f64_u": UnaryOp.TruncUF64ToI64,
-  "f64.promote_f32": UnaryOp.PromoteF32, "f32.demote_f64": UnaryOp.DemoteF64,
-  "f32.convert_i32_s": UnaryOp.ConvertSI32ToF32, "f32.convert_i32_u": UnaryOp.ConvertUI32ToF32,
-  "f32.convert_i64_s": UnaryOp.ConvertSI64ToF32, "f32.convert_i64_u": UnaryOp.ConvertUI64ToF32,
-  "f64.convert_i32_s": UnaryOp.ConvertSI32ToF64, "f64.convert_i32_u": UnaryOp.ConvertUI32ToF64,
-  "f64.convert_i64_s": UnaryOp.ConvertSI64ToF64, "f64.convert_i64_u": UnaryOp.ConvertUI64ToF64,
-  "f32.reinterpret_i32": UnaryOp.ReinterpretI32, "f64.reinterpret_i64": UnaryOp.ReinterpretI64,
-  "i32.reinterpret_f32": UnaryOp.ReinterpretF32, "i64.reinterpret_f64": UnaryOp.ReinterpretF64,
-  "i32.extend8_s": UnaryOp.ExtendS8I32, "i32.extend16_s": UnaryOp.ExtendS16I32,
-  "i64.extend8_s": UnaryOp.ExtendS8I64, "i64.extend16_s": UnaryOp.ExtendS16I64,
+  "i32.trunc_f32_s": UnaryOp.TruncSF32ToI32,
+  "i32.trunc_f32_u": UnaryOp.TruncUF32ToI32,
+  "i32.trunc_f64_s": UnaryOp.TruncSF64ToI32,
+  "i32.trunc_f64_u": UnaryOp.TruncUF64ToI32,
+  "i64.trunc_f32_s": UnaryOp.TruncSF32ToI64,
+  "i64.trunc_f32_u": UnaryOp.TruncUF32ToI64,
+  "i64.trunc_f64_s": UnaryOp.TruncSF64ToI64,
+  "i64.trunc_f64_u": UnaryOp.TruncUF64ToI64,
+  "f64.promote_f32": UnaryOp.PromoteF32,
+  "f32.demote_f64": UnaryOp.DemoteF64,
+  "f32.convert_i32_s": UnaryOp.ConvertSI32ToF32,
+  "f32.convert_i32_u": UnaryOp.ConvertUI32ToF32,
+  "f32.convert_i64_s": UnaryOp.ConvertSI64ToF32,
+  "f32.convert_i64_u": UnaryOp.ConvertUI64ToF32,
+  "f64.convert_i32_s": UnaryOp.ConvertSI32ToF64,
+  "f64.convert_i32_u": UnaryOp.ConvertUI32ToF64,
+  "f64.convert_i64_s": UnaryOp.ConvertSI64ToF64,
+  "f64.convert_i64_u": UnaryOp.ConvertUI64ToF64,
+  "f32.reinterpret_i32": UnaryOp.ReinterpretI32,
+  "f64.reinterpret_i64": UnaryOp.ReinterpretI64,
+  "i32.reinterpret_f32": UnaryOp.ReinterpretF32,
+  "i64.reinterpret_f64": UnaryOp.ReinterpretF64,
+  "i32.extend8_s": UnaryOp.ExtendS8I32,
+  "i32.extend16_s": UnaryOp.ExtendS16I32,
+  "i64.extend8_s": UnaryOp.ExtendS8I64,
+  "i64.extend16_s": UnaryOp.ExtendS16I64,
   "i64.extend32_s": UnaryOp.ExtendS32I64,
   // SIMD splats
-  "i8x16.splat": UnaryOp.SplatVecI8x16, "i16x8.splat": UnaryOp.SplatVecI16x8,
-  "i32x4.splat": UnaryOp.SplatVecI32x4, "i64x2.splat": UnaryOp.SplatVecI64x2,
-  "f32x4.splat": UnaryOp.SplatVecF32x4, "f64x2.splat": UnaryOp.SplatVecF64x2,
+  "i8x16.splat": UnaryOp.SplatVecI8x16,
+  "i16x8.splat": UnaryOp.SplatVecI16x8,
+  "i32x4.splat": UnaryOp.SplatVecI32x4,
+  "i64x2.splat": UnaryOp.SplatVecI64x2,
+  "f32x4.splat": UnaryOp.SplatVecF32x4,
+  "f64x2.splat": UnaryOp.SplatVecF64x2,
   // SIMD v128 bitwise/logical
-  "v128.not": UnaryOp.NotVec128, "v128.any_true": UnaryOp.AnyTrueVec128,
+  "v128.not": UnaryOp.NotVec128,
+  "v128.any_true": UnaryOp.AnyTrueVec128,
   // SIMD i8x16
-  "i8x16.abs": UnaryOp.AbsVecI8x16, "i8x16.neg": UnaryOp.NegVecI8x16,
-  "i8x16.popcnt": UnaryOp.PopcntVecI8x16, "i8x16.all_true": UnaryOp.AllTrueVecI8x16, "i8x16.bitmask": UnaryOp.BitmaskVecI8x16,
+  "i8x16.abs": UnaryOp.AbsVecI8x16,
+  "i8x16.neg": UnaryOp.NegVecI8x16,
+  "i8x16.popcnt": UnaryOp.PopcntVecI8x16,
+  "i8x16.all_true": UnaryOp.AllTrueVecI8x16,
+  "i8x16.bitmask": UnaryOp.BitmaskVecI8x16,
   // SIMD i16x8
-  "i16x8.abs": UnaryOp.AbsVecI16x8, "i16x8.neg": UnaryOp.NegVecI16x8,
-  "i16x8.all_true": UnaryOp.AllTrueVecI16x8, "i16x8.bitmask": UnaryOp.BitmaskVecI16x8,
-  "i16x8.extend_low_i8x16_s": UnaryOp.ExtendLowSVecI8x16ToI16x8, "i16x8.extend_high_i8x16_s": UnaryOp.ExtendHighSVecI8x16ToI16x8,
-  "i16x8.extend_low_i8x16_u": UnaryOp.ExtendLowUVecI8x16ToI16x8, "i16x8.extend_high_i8x16_u": UnaryOp.ExtendHighUVecI8x16ToI16x8,
+  "i16x8.abs": UnaryOp.AbsVecI16x8,
+  "i16x8.neg": UnaryOp.NegVecI16x8,
+  "i16x8.all_true": UnaryOp.AllTrueVecI16x8,
+  "i16x8.bitmask": UnaryOp.BitmaskVecI16x8,
+  "i16x8.extend_low_i8x16_s": UnaryOp.ExtendLowSVecI8x16ToI16x8,
+  "i16x8.extend_high_i8x16_s": UnaryOp.ExtendHighSVecI8x16ToI16x8,
+  "i16x8.extend_low_i8x16_u": UnaryOp.ExtendLowUVecI8x16ToI16x8,
+  "i16x8.extend_high_i8x16_u": UnaryOp.ExtendHighUVecI8x16ToI16x8,
   "i16x8.extadd_pairwise_i8x16_s": UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8,
   "i16x8.extadd_pairwise_i8x16_u": UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8,
   // SIMD i32x4
-  "i32x4.abs": UnaryOp.AbsVecI32x4, "i32x4.neg": UnaryOp.NegVecI32x4,
-  "i32x4.all_true": UnaryOp.AllTrueVecI32x4, "i32x4.bitmask": UnaryOp.BitmaskVecI32x4,
-  "i32x4.extend_low_i16x8_s": UnaryOp.ExtendLowSVecI16x8ToI32x4, "i32x4.extend_high_i16x8_s": UnaryOp.ExtendHighSVecI16x8ToI32x4,
-  "i32x4.extend_low_i16x8_u": UnaryOp.ExtendLowUVecI16x8ToI32x4, "i32x4.extend_high_i16x8_u": UnaryOp.ExtendHighUVecI16x8ToI32x4,
+  "i32x4.abs": UnaryOp.AbsVecI32x4,
+  "i32x4.neg": UnaryOp.NegVecI32x4,
+  "i32x4.all_true": UnaryOp.AllTrueVecI32x4,
+  "i32x4.bitmask": UnaryOp.BitmaskVecI32x4,
+  "i32x4.extend_low_i16x8_s": UnaryOp.ExtendLowSVecI16x8ToI32x4,
+  "i32x4.extend_high_i16x8_s": UnaryOp.ExtendHighSVecI16x8ToI32x4,
+  "i32x4.extend_low_i16x8_u": UnaryOp.ExtendLowUVecI16x8ToI32x4,
+  "i32x4.extend_high_i16x8_u": UnaryOp.ExtendHighUVecI16x8ToI32x4,
   "i32x4.extadd_pairwise_i16x8_s": UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4,
   "i32x4.extadd_pairwise_i16x8_u": UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4,
   // SIMD i64x2
-  "i64x2.abs": UnaryOp.AbsVecI64x2, "i64x2.neg": UnaryOp.NegVecI64x2,
-  "i64x2.all_true": UnaryOp.AllTrueVecI64x2, "i64x2.bitmask": UnaryOp.BitmaskVecI64x2,
-  "i64x2.extend_low_i32x4_s": UnaryOp.ExtendLowSVecI32x4ToI64x2, "i64x2.extend_high_i32x4_s": UnaryOp.ExtendHighSVecI32x4ToI64x2,
-  "i64x2.extend_low_i32x4_u": UnaryOp.ExtendLowUVecI32x4ToI64x2, "i64x2.extend_high_i32x4_u": UnaryOp.ExtendHighUVecI32x4ToI64x2,
+  "i64x2.abs": UnaryOp.AbsVecI64x2,
+  "i64x2.neg": UnaryOp.NegVecI64x2,
+  "i64x2.all_true": UnaryOp.AllTrueVecI64x2,
+  "i64x2.bitmask": UnaryOp.BitmaskVecI64x2,
+  "i64x2.extend_low_i32x4_s": UnaryOp.ExtendLowSVecI32x4ToI64x2,
+  "i64x2.extend_high_i32x4_s": UnaryOp.ExtendHighSVecI32x4ToI64x2,
+  "i64x2.extend_low_i32x4_u": UnaryOp.ExtendLowUVecI32x4ToI64x2,
+  "i64x2.extend_high_i32x4_u": UnaryOp.ExtendHighUVecI32x4ToI64x2,
   // SIMD f32x4
-  "f32x4.abs": UnaryOp.AbsVecF32x4, "f32x4.neg": UnaryOp.NegVecF32x4, "f32x4.sqrt": UnaryOp.SqrtVecF32x4,
-  "f32x4.ceil": UnaryOp.CeilVecF32x4, "f32x4.floor": UnaryOp.FloorVecF32x4,
-  "f32x4.trunc": UnaryOp.TruncVecF32x4, "f32x4.nearest": UnaryOp.NearestVecF32x4,
-  "f32x4.convert_i32x4_s": UnaryOp.ConvertSVecI32x4ToF32x4, "f32x4.convert_i32x4_u": UnaryOp.ConvertUVecI32x4ToF32x4,
+  "f32x4.abs": UnaryOp.AbsVecF32x4,
+  "f32x4.neg": UnaryOp.NegVecF32x4,
+  "f32x4.sqrt": UnaryOp.SqrtVecF32x4,
+  "f32x4.ceil": UnaryOp.CeilVecF32x4,
+  "f32x4.floor": UnaryOp.FloorVecF32x4,
+  "f32x4.trunc": UnaryOp.TruncVecF32x4,
+  "f32x4.nearest": UnaryOp.NearestVecF32x4,
+  "f32x4.convert_i32x4_s": UnaryOp.ConvertSVecI32x4ToF32x4,
+  "f32x4.convert_i32x4_u": UnaryOp.ConvertUVecI32x4ToF32x4,
   "f32x4.demote_f64x2_zero": UnaryOp.DemoteZeroVecF64x2ToF32x4,
   // SIMD f64x2
-  "f64x2.abs": UnaryOp.AbsVecF64x2, "f64x2.neg": UnaryOp.NegVecF64x2, "f64x2.sqrt": UnaryOp.SqrtVecF64x2,
-  "f64x2.ceil": UnaryOp.CeilVecF64x2, "f64x2.floor": UnaryOp.FloorVecF64x2,
-  "f64x2.trunc": UnaryOp.TruncVecF64x2, "f64x2.nearest": UnaryOp.NearestVecF64x2,
+  "f64x2.abs": UnaryOp.AbsVecF64x2,
+  "f64x2.neg": UnaryOp.NegVecF64x2,
+  "f64x2.sqrt": UnaryOp.SqrtVecF64x2,
+  "f64x2.ceil": UnaryOp.CeilVecF64x2,
+  "f64x2.floor": UnaryOp.FloorVecF64x2,
+  "f64x2.trunc": UnaryOp.TruncVecF64x2,
+  "f64x2.nearest": UnaryOp.NearestVecF64x2,
   "f64x2.promote_low_f32x4": UnaryOp.PromoteLowVecF32x4ToF64x2,
-  "f64x2.convert_low_i32x4_s": UnaryOp.ConvertLowSVecI32x4ToF64x2, "f64x2.convert_low_i32x4_u": UnaryOp.ConvertLowUVecI32x4ToF64x2,
+  "f64x2.convert_low_i32x4_s": UnaryOp.ConvertLowSVecI32x4ToF64x2,
+  "f64x2.convert_low_i32x4_u": UnaryOp.ConvertLowUVecI32x4ToF64x2,
   // SIMD trunc_sat (conversion)
-  "i32x4.trunc_sat_f32x4_s": UnaryOp.TruncSatSVecF32x4ToI32x4, "i32x4.trunc_sat_f32x4_u": UnaryOp.TruncSatUVecF32x4ToI32x4,
+  "i32x4.trunc_sat_f32x4_s": UnaryOp.TruncSatSVecF32x4ToI32x4,
+  "i32x4.trunc_sat_f32x4_u": UnaryOp.TruncSatUVecF32x4ToI32x4,
   "i32x4.trunc_sat_f64x2_s_zero": UnaryOp.TruncSatSVecF64x2ToI32x4Zero,
   "i32x4.trunc_sat_f64x2_u_zero": UnaryOp.TruncSatUVecF64x2ToI32x4Zero,
 };
 
 const BINARY_OPS: Record<string, BinaryOp> = {
-  "i32.add": BinaryOp.AddI32, "i32.sub": BinaryOp.SubI32, "i32.mul": BinaryOp.MulI32,
-  "i32.div_s": BinaryOp.DivSI32, "i32.div_u": BinaryOp.DivUI32,
-  "i32.rem_s": BinaryOp.RemSI32, "i32.rem_u": BinaryOp.RemUI32,
-  "i32.and": BinaryOp.AndI32, "i32.or": BinaryOp.OrI32, "i32.xor": BinaryOp.XorI32,
-  "i32.shl": BinaryOp.ShlI32, "i32.shr_s": BinaryOp.ShrSI32, "i32.shr_u": BinaryOp.ShrUI32,
-  "i32.rotl": BinaryOp.RotlI32, "i32.rotr": BinaryOp.RotrI32,
-  "i32.eq": BinaryOp.EqI32, "i32.ne": BinaryOp.NeI32,
-  "i32.lt_s": BinaryOp.LtSI32, "i32.lt_u": BinaryOp.LtUI32,
-  "i32.le_s": BinaryOp.LeSI32, "i32.le_u": BinaryOp.LeUI32,
-  "i32.gt_s": BinaryOp.GtSI32, "i32.gt_u": BinaryOp.GtUI32,
-  "i32.ge_s": BinaryOp.GeSI32, "i32.ge_u": BinaryOp.GeUI32,
-  "i64.add": BinaryOp.AddI64, "i64.sub": BinaryOp.SubI64, "i64.mul": BinaryOp.MulI64,
-  "i64.div_s": BinaryOp.DivSI64, "i64.div_u": BinaryOp.DivUI64,
-  "i64.rem_s": BinaryOp.RemSI64, "i64.rem_u": BinaryOp.RemUI64,
-  "i64.and": BinaryOp.AndI64, "i64.or": BinaryOp.OrI64, "i64.xor": BinaryOp.XorI64,
-  "i64.shl": BinaryOp.ShlI64, "i64.shr_s": BinaryOp.ShrSI64, "i64.shr_u": BinaryOp.ShrUI64,
-  "i64.rotl": BinaryOp.RotlI64, "i64.rotr": BinaryOp.RotrI64,
-  "i64.eq": BinaryOp.EqI64, "i64.ne": BinaryOp.NeI64,
-  "i64.lt_s": BinaryOp.LtSI64, "i64.lt_u": BinaryOp.LtUI64,
-  "i64.le_s": BinaryOp.LeSI64, "i64.le_u": BinaryOp.LeUI64,
-  "i64.gt_s": BinaryOp.GtSI64, "i64.gt_u": BinaryOp.GtUI64,
-  "i64.ge_s": BinaryOp.GeSI64, "i64.ge_u": BinaryOp.GeUI64,
-  "f32.add": BinaryOp.AddF32, "f32.sub": BinaryOp.SubF32, "f32.mul": BinaryOp.MulF32,
-  "f32.div": BinaryOp.DivF32, "f32.copysign": BinaryOp.CopySignF32,
-  "f32.min": BinaryOp.MinF32, "f32.max": BinaryOp.MaxF32,
-  "f32.eq": BinaryOp.EqF32, "f32.ne": BinaryOp.NeF32,
-  "f32.lt": BinaryOp.LtF32, "f32.le": BinaryOp.LeF32,
-  "f32.gt": BinaryOp.GtF32, "f32.ge": BinaryOp.GeF32,
-  "f64.add": BinaryOp.AddF64, "f64.sub": BinaryOp.SubF64, "f64.mul": BinaryOp.MulF64,
-  "f64.div": BinaryOp.DivF64, "f64.copysign": BinaryOp.CopySignF64,
-  "f64.min": BinaryOp.MinF64, "f64.max": BinaryOp.MaxF64,
-  "f64.eq": BinaryOp.EqF64, "f64.ne": BinaryOp.NeF64,
-  "f64.lt": BinaryOp.LtF64, "f64.le": BinaryOp.LeF64,
-  "f64.gt": BinaryOp.GtF64, "f64.ge": BinaryOp.GeF64,
+  "i32.add": BinaryOp.AddI32,
+  "i32.sub": BinaryOp.SubI32,
+  "i32.mul": BinaryOp.MulI32,
+  "i32.div_s": BinaryOp.DivSI32,
+  "i32.div_u": BinaryOp.DivUI32,
+  "i32.rem_s": BinaryOp.RemSI32,
+  "i32.rem_u": BinaryOp.RemUI32,
+  "i32.and": BinaryOp.AndI32,
+  "i32.or": BinaryOp.OrI32,
+  "i32.xor": BinaryOp.XorI32,
+  "i32.shl": BinaryOp.ShlI32,
+  "i32.shr_s": BinaryOp.ShrSI32,
+  "i32.shr_u": BinaryOp.ShrUI32,
+  "i32.rotl": BinaryOp.RotlI32,
+  "i32.rotr": BinaryOp.RotrI32,
+  "i32.eq": BinaryOp.EqI32,
+  "i32.ne": BinaryOp.NeI32,
+  "i32.lt_s": BinaryOp.LtSI32,
+  "i32.lt_u": BinaryOp.LtUI32,
+  "i32.le_s": BinaryOp.LeSI32,
+  "i32.le_u": BinaryOp.LeUI32,
+  "i32.gt_s": BinaryOp.GtSI32,
+  "i32.gt_u": BinaryOp.GtUI32,
+  "i32.ge_s": BinaryOp.GeSI32,
+  "i32.ge_u": BinaryOp.GeUI32,
+  "i64.add": BinaryOp.AddI64,
+  "i64.sub": BinaryOp.SubI64,
+  "i64.mul": BinaryOp.MulI64,
+  "i64.div_s": BinaryOp.DivSI64,
+  "i64.div_u": BinaryOp.DivUI64,
+  "i64.rem_s": BinaryOp.RemSI64,
+  "i64.rem_u": BinaryOp.RemUI64,
+  "i64.and": BinaryOp.AndI64,
+  "i64.or": BinaryOp.OrI64,
+  "i64.xor": BinaryOp.XorI64,
+  "i64.shl": BinaryOp.ShlI64,
+  "i64.shr_s": BinaryOp.ShrSI64,
+  "i64.shr_u": BinaryOp.ShrUI64,
+  "i64.rotl": BinaryOp.RotlI64,
+  "i64.rotr": BinaryOp.RotrI64,
+  "i64.eq": BinaryOp.EqI64,
+  "i64.ne": BinaryOp.NeI64,
+  "i64.lt_s": BinaryOp.LtSI64,
+  "i64.lt_u": BinaryOp.LtUI64,
+  "i64.le_s": BinaryOp.LeSI64,
+  "i64.le_u": BinaryOp.LeUI64,
+  "i64.gt_s": BinaryOp.GtSI64,
+  "i64.gt_u": BinaryOp.GtUI64,
+  "i64.ge_s": BinaryOp.GeSI64,
+  "i64.ge_u": BinaryOp.GeUI64,
+  "f32.add": BinaryOp.AddF32,
+  "f32.sub": BinaryOp.SubF32,
+  "f32.mul": BinaryOp.MulF32,
+  "f32.div": BinaryOp.DivF32,
+  "f32.copysign": BinaryOp.CopySignF32,
+  "f32.min": BinaryOp.MinF32,
+  "f32.max": BinaryOp.MaxF32,
+  "f32.eq": BinaryOp.EqF32,
+  "f32.ne": BinaryOp.NeF32,
+  "f32.lt": BinaryOp.LtF32,
+  "f32.le": BinaryOp.LeF32,
+  "f32.gt": BinaryOp.GtF32,
+  "f32.ge": BinaryOp.GeF32,
+  "f64.add": BinaryOp.AddF64,
+  "f64.sub": BinaryOp.SubF64,
+  "f64.mul": BinaryOp.MulF64,
+  "f64.div": BinaryOp.DivF64,
+  "f64.copysign": BinaryOp.CopySignF64,
+  "f64.min": BinaryOp.MinF64,
+  "f64.max": BinaryOp.MaxF64,
+  "f64.eq": BinaryOp.EqF64,
+  "f64.ne": BinaryOp.NeF64,
+  "f64.lt": BinaryOp.LtF64,
+  "f64.le": BinaryOp.LeF64,
+  "f64.gt": BinaryOp.GtF64,
+  "f64.ge": BinaryOp.GeF64,
   // SIMD swizzle
   "i8x16.swizzle": BinaryOp.SwizzleVecI8x16,
   // SIMD v128 bitwise
-  "v128.and": BinaryOp.AndVec128, "v128.andnot": BinaryOp.AndNotVec128,
-  "v128.or": BinaryOp.OrVec128, "v128.xor": BinaryOp.XorVec128,
+  "v128.and": BinaryOp.AndVec128,
+  "v128.andnot": BinaryOp.AndNotVec128,
+  "v128.or": BinaryOp.OrVec128,
+  "v128.xor": BinaryOp.XorVec128,
   // SIMD i8x16 binary
-  "i8x16.eq": BinaryOp.EqVecI8x16, "i8x16.ne": BinaryOp.NeVecI8x16,
-  "i8x16.lt_s": BinaryOp.LtSVecI8x16, "i8x16.lt_u": BinaryOp.LtUVecI8x16,
-  "i8x16.gt_s": BinaryOp.GtSVecI8x16, "i8x16.gt_u": BinaryOp.GtUVecI8x16,
-  "i8x16.le_s": BinaryOp.LeSVecI8x16, "i8x16.le_u": BinaryOp.LeUVecI8x16,
-  "i8x16.ge_s": BinaryOp.GeSVecI8x16, "i8x16.ge_u": BinaryOp.GeUVecI8x16,
-  "i8x16.add": BinaryOp.AddVecI8x16, "i8x16.sub": BinaryOp.SubVecI8x16,
-  "i8x16.add_sat_s": BinaryOp.AddSatSVecI8x16, "i8x16.add_sat_u": BinaryOp.AddSatUVecI8x16,
-  "i8x16.sub_sat_s": BinaryOp.SubSatSVecI8x16, "i8x16.sub_sat_u": BinaryOp.SubSatUVecI8x16,
-  "i8x16.min_s": BinaryOp.MinSVecI8x16, "i8x16.min_u": BinaryOp.MinUVecI8x16,
-  "i8x16.max_s": BinaryOp.MaxSVecI8x16, "i8x16.max_u": BinaryOp.MaxUVecI8x16,
+  "i8x16.eq": BinaryOp.EqVecI8x16,
+  "i8x16.ne": BinaryOp.NeVecI8x16,
+  "i8x16.lt_s": BinaryOp.LtSVecI8x16,
+  "i8x16.lt_u": BinaryOp.LtUVecI8x16,
+  "i8x16.gt_s": BinaryOp.GtSVecI8x16,
+  "i8x16.gt_u": BinaryOp.GtUVecI8x16,
+  "i8x16.le_s": BinaryOp.LeSVecI8x16,
+  "i8x16.le_u": BinaryOp.LeUVecI8x16,
+  "i8x16.ge_s": BinaryOp.GeSVecI8x16,
+  "i8x16.ge_u": BinaryOp.GeUVecI8x16,
+  "i8x16.add": BinaryOp.AddVecI8x16,
+  "i8x16.sub": BinaryOp.SubVecI8x16,
+  "i8x16.add_sat_s": BinaryOp.AddSatSVecI8x16,
+  "i8x16.add_sat_u": BinaryOp.AddSatUVecI8x16,
+  "i8x16.sub_sat_s": BinaryOp.SubSatSVecI8x16,
+  "i8x16.sub_sat_u": BinaryOp.SubSatUVecI8x16,
+  "i8x16.min_s": BinaryOp.MinSVecI8x16,
+  "i8x16.min_u": BinaryOp.MinUVecI8x16,
+  "i8x16.max_s": BinaryOp.MaxSVecI8x16,
+  "i8x16.max_u": BinaryOp.MaxUVecI8x16,
   "i8x16.avgr_u": BinaryOp.AvgrUVecI8x16,
-  "i8x16.narrow_i16x8_s": BinaryOp.NarrowSVecI16x8ToI8x16, "i8x16.narrow_i16x8_u": BinaryOp.NarrowUVecI16x8ToI8x16,
+  "i8x16.narrow_i16x8_s": BinaryOp.NarrowSVecI16x8ToI8x16,
+  "i8x16.narrow_i16x8_u": BinaryOp.NarrowUVecI16x8ToI8x16,
   // SIMD i16x8 binary
-  "i16x8.eq": BinaryOp.EqVecI16x8, "i16x8.ne": BinaryOp.NeVecI16x8,
-  "i16x8.lt_s": BinaryOp.LtSVecI16x8, "i16x8.lt_u": BinaryOp.LtUVecI16x8,
-  "i16x8.gt_s": BinaryOp.GtSVecI16x8, "i16x8.gt_u": BinaryOp.GtUVecI16x8,
-  "i16x8.le_s": BinaryOp.LeSVecI16x8, "i16x8.le_u": BinaryOp.LeUVecI16x8,
-  "i16x8.ge_s": BinaryOp.GeSVecI16x8, "i16x8.ge_u": BinaryOp.GeUVecI16x8,
-  "i16x8.add": BinaryOp.AddVecI16x8, "i16x8.sub": BinaryOp.SubVecI16x8, "i16x8.mul": BinaryOp.MulVecI16x8,
-  "i16x8.add_sat_s": BinaryOp.AddSatSVecI16x8, "i16x8.add_sat_u": BinaryOp.AddSatUVecI16x8,
-  "i16x8.sub_sat_s": BinaryOp.SubSatSVecI16x8, "i16x8.sub_sat_u": BinaryOp.SubSatUVecI16x8,
-  "i16x8.min_s": BinaryOp.MinSVecI16x8, "i16x8.min_u": BinaryOp.MinUVecI16x8,
-  "i16x8.max_s": BinaryOp.MaxSVecI16x8, "i16x8.max_u": BinaryOp.MaxUVecI16x8,
+  "i16x8.eq": BinaryOp.EqVecI16x8,
+  "i16x8.ne": BinaryOp.NeVecI16x8,
+  "i16x8.lt_s": BinaryOp.LtSVecI16x8,
+  "i16x8.lt_u": BinaryOp.LtUVecI16x8,
+  "i16x8.gt_s": BinaryOp.GtSVecI16x8,
+  "i16x8.gt_u": BinaryOp.GtUVecI16x8,
+  "i16x8.le_s": BinaryOp.LeSVecI16x8,
+  "i16x8.le_u": BinaryOp.LeUVecI16x8,
+  "i16x8.ge_s": BinaryOp.GeSVecI16x8,
+  "i16x8.ge_u": BinaryOp.GeUVecI16x8,
+  "i16x8.add": BinaryOp.AddVecI16x8,
+  "i16x8.sub": BinaryOp.SubVecI16x8,
+  "i16x8.mul": BinaryOp.MulVecI16x8,
+  "i16x8.add_sat_s": BinaryOp.AddSatSVecI16x8,
+  "i16x8.add_sat_u": BinaryOp.AddSatUVecI16x8,
+  "i16x8.sub_sat_s": BinaryOp.SubSatSVecI16x8,
+  "i16x8.sub_sat_u": BinaryOp.SubSatUVecI16x8,
+  "i16x8.min_s": BinaryOp.MinSVecI16x8,
+  "i16x8.min_u": BinaryOp.MinUVecI16x8,
+  "i16x8.max_s": BinaryOp.MaxSVecI16x8,
+  "i16x8.max_u": BinaryOp.MaxUVecI16x8,
   "i16x8.avgr_u": BinaryOp.AvgrUVecI16x8,
   "i16x8.q15mulr_sat_s": BinaryOp.Q15MulrSatSVecI16x8,
-  "i16x8.narrow_i32x4_s": BinaryOp.NarrowSVecI32x4ToI16x8, "i16x8.narrow_i32x4_u": BinaryOp.NarrowUVecI32x4ToI16x8,
-  "i16x8.extmul_low_i8x16_s": BinaryOp.ExtmulLowSVecI8x16ToI16x8, "i16x8.extmul_high_i8x16_s": BinaryOp.ExtmulHighSVecI8x16ToI16x8,
-  "i16x8.extmul_low_i8x16_u": BinaryOp.ExtmulLowUVecI8x16ToI16x8, "i16x8.extmul_high_i8x16_u": BinaryOp.ExtmulHighUVecI8x16ToI16x8,
+  "i16x8.narrow_i32x4_s": BinaryOp.NarrowSVecI32x4ToI16x8,
+  "i16x8.narrow_i32x4_u": BinaryOp.NarrowUVecI32x4ToI16x8,
+  "i16x8.extmul_low_i8x16_s": BinaryOp.ExtmulLowSVecI8x16ToI16x8,
+  "i16x8.extmul_high_i8x16_s": BinaryOp.ExtmulHighSVecI8x16ToI16x8,
+  "i16x8.extmul_low_i8x16_u": BinaryOp.ExtmulLowUVecI8x16ToI16x8,
+  "i16x8.extmul_high_i8x16_u": BinaryOp.ExtmulHighUVecI8x16ToI16x8,
   // SIMD i32x4 binary
-  "i32x4.eq": BinaryOp.EqVecI32x4, "i32x4.ne": BinaryOp.NeVecI32x4,
-  "i32x4.lt_s": BinaryOp.LtSVecI32x4, "i32x4.lt_u": BinaryOp.LtUVecI32x4,
-  "i32x4.gt_s": BinaryOp.GtSVecI32x4, "i32x4.gt_u": BinaryOp.GtUVecI32x4,
-  "i32x4.le_s": BinaryOp.LeSVecI32x4, "i32x4.le_u": BinaryOp.LeUVecI32x4,
-  "i32x4.ge_s": BinaryOp.GeSVecI32x4, "i32x4.ge_u": BinaryOp.GeUVecI32x4,
-  "i32x4.add": BinaryOp.AddVecI32x4, "i32x4.sub": BinaryOp.SubVecI32x4, "i32x4.mul": BinaryOp.MulVecI32x4,
-  "i32x4.min_s": BinaryOp.MinSVecI32x4, "i32x4.min_u": BinaryOp.MinUVecI32x4,
-  "i32x4.max_s": BinaryOp.MaxSVecI32x4, "i32x4.max_u": BinaryOp.MaxUVecI32x4,
+  "i32x4.eq": BinaryOp.EqVecI32x4,
+  "i32x4.ne": BinaryOp.NeVecI32x4,
+  "i32x4.lt_s": BinaryOp.LtSVecI32x4,
+  "i32x4.lt_u": BinaryOp.LtUVecI32x4,
+  "i32x4.gt_s": BinaryOp.GtSVecI32x4,
+  "i32x4.gt_u": BinaryOp.GtUVecI32x4,
+  "i32x4.le_s": BinaryOp.LeSVecI32x4,
+  "i32x4.le_u": BinaryOp.LeUVecI32x4,
+  "i32x4.ge_s": BinaryOp.GeSVecI32x4,
+  "i32x4.ge_u": BinaryOp.GeUVecI32x4,
+  "i32x4.add": BinaryOp.AddVecI32x4,
+  "i32x4.sub": BinaryOp.SubVecI32x4,
+  "i32x4.mul": BinaryOp.MulVecI32x4,
+  "i32x4.min_s": BinaryOp.MinSVecI32x4,
+  "i32x4.min_u": BinaryOp.MinUVecI32x4,
+  "i32x4.max_s": BinaryOp.MaxSVecI32x4,
+  "i32x4.max_u": BinaryOp.MaxUVecI32x4,
   "i32x4.dot_i16x8_s": BinaryOp.DotSVecI16x8ToI32x4,
-  "i32x4.extmul_low_i16x8_s": BinaryOp.ExtmulLowSVecI16x8ToI32x4, "i32x4.extmul_high_i16x8_s": BinaryOp.ExtmulHighSVecI16x8ToI32x4,
-  "i32x4.extmul_low_i16x8_u": BinaryOp.ExtmulLowUVecI16x8ToI32x4, "i32x4.extmul_high_i16x8_u": BinaryOp.ExtmulHighUVecI16x8ToI32x4,
+  "i32x4.extmul_low_i16x8_s": BinaryOp.ExtmulLowSVecI16x8ToI32x4,
+  "i32x4.extmul_high_i16x8_s": BinaryOp.ExtmulHighSVecI16x8ToI32x4,
+  "i32x4.extmul_low_i16x8_u": BinaryOp.ExtmulLowUVecI16x8ToI32x4,
+  "i32x4.extmul_high_i16x8_u": BinaryOp.ExtmulHighUVecI16x8ToI32x4,
   // SIMD i64x2 binary
-  "i64x2.eq": BinaryOp.EqVecI64x2, "i64x2.ne": BinaryOp.NeVecI64x2,
-  "i64x2.lt_s": BinaryOp.LtSVecI64x2, "i64x2.gt_s": BinaryOp.GtSVecI64x2,
-  "i64x2.le_s": BinaryOp.LeSVecI64x2, "i64x2.ge_s": BinaryOp.GeSVecI64x2,
-  "i64x2.add": BinaryOp.AddVecI64x2, "i64x2.sub": BinaryOp.SubVecI64x2, "i64x2.mul": BinaryOp.MulVecI64x2,
-  "i64x2.extmul_low_i32x4_s": BinaryOp.ExtmulLowSVecI32x4ToI64x2, "i64x2.extmul_high_i32x4_s": BinaryOp.ExtmulHighSVecI32x4ToI64x2,
-  "i64x2.extmul_low_i32x4_u": BinaryOp.ExtmulLowUVecI32x4ToI64x2, "i64x2.extmul_high_i32x4_u": BinaryOp.ExtmulHighUVecI32x4ToI64x2,
+  "i64x2.eq": BinaryOp.EqVecI64x2,
+  "i64x2.ne": BinaryOp.NeVecI64x2,
+  "i64x2.lt_s": BinaryOp.LtSVecI64x2,
+  "i64x2.gt_s": BinaryOp.GtSVecI64x2,
+  "i64x2.le_s": BinaryOp.LeSVecI64x2,
+  "i64x2.ge_s": BinaryOp.GeSVecI64x2,
+  "i64x2.add": BinaryOp.AddVecI64x2,
+  "i64x2.sub": BinaryOp.SubVecI64x2,
+  "i64x2.mul": BinaryOp.MulVecI64x2,
+  "i64x2.extmul_low_i32x4_s": BinaryOp.ExtmulLowSVecI32x4ToI64x2,
+  "i64x2.extmul_high_i32x4_s": BinaryOp.ExtmulHighSVecI32x4ToI64x2,
+  "i64x2.extmul_low_i32x4_u": BinaryOp.ExtmulLowUVecI32x4ToI64x2,
+  "i64x2.extmul_high_i32x4_u": BinaryOp.ExtmulHighUVecI32x4ToI64x2,
   // SIMD f32x4 binary
-  "f32x4.eq": BinaryOp.EqVecF32x4, "f32x4.ne": BinaryOp.NeVecF32x4,
-  "f32x4.lt": BinaryOp.LtVecF32x4, "f32x4.gt": BinaryOp.GtVecF32x4,
-  "f32x4.le": BinaryOp.LeVecF32x4, "f32x4.ge": BinaryOp.GeVecF32x4,
-  "f32x4.add": BinaryOp.AddVecF32x4, "f32x4.sub": BinaryOp.SubVecF32x4,
-  "f32x4.mul": BinaryOp.MulVecF32x4, "f32x4.div": BinaryOp.DivVecF32x4,
-  "f32x4.min": BinaryOp.MinVecF32x4, "f32x4.max": BinaryOp.MaxVecF32x4,
-  "f32x4.pmin": BinaryOp.PminVecF32x4, "f32x4.pmax": BinaryOp.PmaxVecF32x4,
+  "f32x4.eq": BinaryOp.EqVecF32x4,
+  "f32x4.ne": BinaryOp.NeVecF32x4,
+  "f32x4.lt": BinaryOp.LtVecF32x4,
+  "f32x4.gt": BinaryOp.GtVecF32x4,
+  "f32x4.le": BinaryOp.LeVecF32x4,
+  "f32x4.ge": BinaryOp.GeVecF32x4,
+  "f32x4.add": BinaryOp.AddVecF32x4,
+  "f32x4.sub": BinaryOp.SubVecF32x4,
+  "f32x4.mul": BinaryOp.MulVecF32x4,
+  "f32x4.div": BinaryOp.DivVecF32x4,
+  "f32x4.min": BinaryOp.MinVecF32x4,
+  "f32x4.max": BinaryOp.MaxVecF32x4,
+  "f32x4.pmin": BinaryOp.PminVecF32x4,
+  "f32x4.pmax": BinaryOp.PmaxVecF32x4,
   // SIMD f64x2 binary
-  "f64x2.eq": BinaryOp.EqVecF64x2, "f64x2.ne": BinaryOp.NeVecF64x2,
-  "f64x2.lt": BinaryOp.LtVecF64x2, "f64x2.gt": BinaryOp.GtVecF64x2,
-  "f64x2.le": BinaryOp.LeVecF64x2, "f64x2.ge": BinaryOp.GeVecF64x2,
-  "f64x2.add": BinaryOp.AddVecF64x2, "f64x2.sub": BinaryOp.SubVecF64x2,
-  "f64x2.mul": BinaryOp.MulVecF64x2, "f64x2.div": BinaryOp.DivVecF64x2,
-  "f64x2.min": BinaryOp.MinVecF64x2, "f64x2.max": BinaryOp.MaxVecF64x2,
-  "f64x2.pmin": BinaryOp.PminVecF64x2, "f64x2.pmax": BinaryOp.PmaxVecF64x2,
+  "f64x2.eq": BinaryOp.EqVecF64x2,
+  "f64x2.ne": BinaryOp.NeVecF64x2,
+  "f64x2.lt": BinaryOp.LtVecF64x2,
+  "f64x2.gt": BinaryOp.GtVecF64x2,
+  "f64x2.le": BinaryOp.LeVecF64x2,
+  "f64x2.ge": BinaryOp.GeVecF64x2,
+  "f64x2.add": BinaryOp.AddVecF64x2,
+  "f64x2.sub": BinaryOp.SubVecF64x2,
+  "f64x2.mul": BinaryOp.MulVecF64x2,
+  "f64x2.div": BinaryOp.DivVecF64x2,
+  "f64x2.min": BinaryOp.MinVecF64x2,
+  "f64x2.max": BinaryOp.MaxVecF64x2,
+  "f64x2.pmin": BinaryOp.PminVecF64x2,
+  "f64x2.pmax": BinaryOp.PmaxVecF64x2,
 };
 
 function inferUnaryResultType(op: string): ValType {
   // SIMD ops that return i32 (reduction ops)
-  if (op.endsWith(".all_true") || op.endsWith(".bitmask") || op === "v128.any_true") return ValType.I32;
+  if (op.endsWith(".all_true") || op.endsWith(".bitmask") || op === "v128.any_true") {
+    return ValType.I32;
+  }
   // SIMD ops — everything else returns v128
   const simdPrefixes = ["i8x16.", "i16x8.", "i32x4.", "i64x2.", "f32x4.", "f64x2.", "v128."];
   if (simdPrefixes.some((p) => op.startsWith(p))) return ValType.V128;
@@ -1782,7 +2162,22 @@ function inferBinaryResultType(op: string): ValType {
   const simdPrefixes = ["i8x16.", "i16x8.", "i32x4.", "i64x2.", "f32x4.", "f64x2.", "v128."];
   if (simdPrefixes.some((p) => op.startsWith(p))) return ValType.V128;
   // Scalar comparison ops return i32
-  const cmpSuffixes = [".eq", ".ne", ".lt", ".le", ".gt", ".ge", ".lt_s", ".lt_u", ".le_s", ".le_u", ".gt_s", ".gt_u", ".ge_s", ".ge_u"];
+  const cmpSuffixes = [
+    ".eq",
+    ".ne",
+    ".lt",
+    ".le",
+    ".gt",
+    ".ge",
+    ".lt_s",
+    ".lt_u",
+    ".le_s",
+    ".le_u",
+    ".gt_s",
+    ".gt_u",
+    ".ge_s",
+    ".ge_u",
+  ];
   if (cmpSuffixes.some((s) => op.endsWith(s))) return ValType.I32;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
@@ -1792,18 +2187,18 @@ function inferBinaryResultType(op: string): ValType {
 }
 
 function loadBytes(head: string): 1 | 2 | 4 | 8 | 16 {
-  if (head.includes("load8"))  return 1;
+  if (head.includes("load8")) return 1;
   if (head.includes("load16")) return 2;
   if (head.includes("load32")) return 4;
   if (head.includes("load64")) return 8;
-  if (head.includes("v128"))   return 16;
+  if (head.includes("v128")) return 16;
   if (head.startsWith("i32") || head.startsWith("f32")) return 4;
   if (head.startsWith("i64") || head.startsWith("f64")) return 8;
   return 4;
 }
 
 function storeBytes(head: string): 1 | 2 | 4 | 8 | 16 {
-  if (head.includes("store8"))  return 1;
+  if (head.includes("store8")) return 1;
   if (head.includes("store16")) return 2;
   if (head.includes("store32")) return 4;
   if (head.includes("store64")) return 8;

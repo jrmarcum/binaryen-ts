@@ -20,7 +20,7 @@ import {
   assertNotEquals,
   assertRejects,
   assertStrictEquals,
-} from "jsr:@std/assert";
+} from "@std/assert";
 
 import { DEMO_BYTES, DEMO_KERNEL_EXPORTS } from "../../src/wasm/index.ts";
 import {

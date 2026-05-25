@@ -24,7 +24,7 @@
  * @license MIT
  */
 
-import { WasmModule } from "../ir/module.ts";
+import type { WasmModule } from "../ir/module.ts";
 
 // ---------------------------------------------------------------------------
 // Pass interface

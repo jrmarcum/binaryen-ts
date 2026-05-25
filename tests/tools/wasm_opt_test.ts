@@ -12,12 +12,12 @@
  * @license MIT
  */
 
-import { assert, assertEquals, assertInstanceOf } from "jsr:@std/assert";
+import { assert, assertEquals, assertInstanceOf } from "@std/assert";
 
 import {
   BinaryOp,
-  BlockExpr,
-  Expression,
+  type BlockExpr,
+  type Expression,
   ExpressionKind,
   makeBinary,
   makeBlock,
@@ -29,11 +29,7 @@ import {
   makeReturn,
   makeUnreachable,
 } from "../../src/ir/expressions.ts";
-import {
-  ModuleBuilder,
-  WasmFunction,
-  WasmModule,
-} from "../../src/ir/module.ts";
+import { ModuleBuilder, type WasmFunction, type WasmModule } from "../../src/ir/module.ts";
 import { None, ValType } from "../../src/ir/types.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { parseWasm } from "../../src/binary/index.ts";
@@ -126,20 +122,22 @@ Deno.test("listPasses includes RemoveUnusedNames", () => {
 
 Deno.test("listPasses includes all Phase 4-5 passes", () => {
   const passes = listPasses();
-  for (const expected of [
-    "DCE",
-    "Vacuum",
-    "RemoveUnusedBrs",
-    "RemoveUnusedNames",
-    "OptimizeInstructions",
-    "CoalesceLocals",
-    "SimplifyLocals",
-    "LocalCSE",
-    "RemoveUnusedModuleElements",
-    "PickLoadSigns",
-    "Inlining",
-    "InliningOptimizing",
-  ]) {
+  for (
+    const expected of [
+      "DCE",
+      "Vacuum",
+      "RemoveUnusedBrs",
+      "RemoveUnusedNames",
+      "OptimizeInstructions",
+      "CoalesceLocals",
+      "SimplifyLocals",
+      "LocalCSE",
+      "RemoveUnusedModuleElements",
+      "PickLoadSigns",
+      "Inlining",
+      "InliningOptimizing",
+    ]
+  ) {
     assert(passes.includes(expected), `Pass ${expected} must be registered`);
   }
 });
@@ -227,9 +225,7 @@ Deno.test("RemoveUnusedNames: strips outer name but keeps inner used name", () =
 
 Deno.test("wasmOpt: native path returns valid WASM magic bytes", async () => {
   const input = buildAddWasm();
-  const result = await withTempWasm(input, (path) =>
-    wasmOpt(path, { optimizeLevel: 0 })
-  );
+  const result = await withTempWasm(input, (path) => wasmOpt(path, { optimizeLevel: 0 }));
   assertInstanceOf(result, Uint8Array);
   assertEquals(result[0], 0x00);
   assertEquals(result[1], 0x61);
@@ -239,9 +235,7 @@ Deno.test("wasmOpt: native path returns valid WASM magic bytes", async () => {
 
 Deno.test("wasmOpt: output is re-parseable as valid WASM module", async () => {
   const input = buildAddWasm();
-  const result = await withTempWasm(input, (path) =>
-    wasmOpt(path, { optimizeLevel: 2 })
-  );
+  const result = await withTempWasm(input, (path) => wasmOpt(path, { optimizeLevel: 2 }));
   assertInstanceOf(result, Uint8Array);
   const mod = parseWasm(result as Uint8Array);
   assertEquals(mod.functions.length, 1);
@@ -256,9 +250,7 @@ Deno.test("wasmOpt: -O1 applies DCE and removes dead code", async () => {
   assertEquals(inputMod.functions[0].body.kind, ExpressionKind.Block);
   assertEquals((inputMod.functions[0].body as BlockExpr).children.length, 3);
 
-  const result = await withTempWasm(input, (path) =>
-    wasmOpt(path, { optimizeLevel: 1 })
-  );
+  const result = await withTempWasm(input, (path) => wasmOpt(path, { optimizeLevel: 1 }));
   assertInstanceOf(result, Uint8Array);
 
   const optimized = parseWasm(result as Uint8Array);
@@ -275,9 +267,7 @@ Deno.test("wasmOpt: explicit passes override default pass set", async () => {
   // With only Vacuum specified, DCE-specific logic won't run;
   // function structure should still be present and valid
   const input = buildAddWasm();
-  const result = await withTempWasm(input, (path) =>
-    wasmOpt(path, { passes: ["Vacuum"] })
-  );
+  const result = await withTempWasm(input, (path) => wasmOpt(path, { passes: ["Vacuum"] }));
   assertInstanceOf(result, Uint8Array);
   const mod = parseWasm(result as Uint8Array);
   assertEquals(mod.functions.length, 1, "function should still be present after Vacuum pass");
@@ -300,9 +290,7 @@ Deno.test("wasmOpt: empty module round-trips cleanly", async () => {
     heapTypes: [],
     hasGC: false,
   });
-  const result = await withTempWasm(input, (path) =>
-    wasmOpt(path, { optimizeLevel: 2 })
-  );
+  const result = await withTempWasm(input, (path) => wasmOpt(path, { optimizeLevel: 2 }));
   assertInstanceOf(result, Uint8Array);
   // Minimum valid WASM: 8-byte header
   assert((result as Uint8Array).byteLength >= 8);
@@ -315,8 +303,7 @@ Deno.test("wasmOpt: passArgs are accepted without error", async () => {
     wasmOpt(path, {
       optimizeLevel: 1,
       passArgs: { "inlining@maxSize": "10" },
-    })
-  );
+    }));
   assertInstanceOf(result, Uint8Array);
 });
 
@@ -334,9 +321,7 @@ Deno.test("wasmOpt: -O2 with RemoveUnusedNames strips block names", async () => 
     .build();
   const input = encodeWasm(mod);
 
-  const result = await withTempWasm(input, (path) =>
-    wasmOpt(path, { optimizeLevel: 2 })
-  );
+  const result = await withTempWasm(input, (path) => wasmOpt(path, { optimizeLevel: 2 }));
   assertInstanceOf(result, Uint8Array);
 
   const optimized = parseWasm(result as Uint8Array);

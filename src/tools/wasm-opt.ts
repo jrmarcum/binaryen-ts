@@ -29,13 +29,8 @@ import { parseWasm } from "../binary/index.ts";
 import { encodeWasm } from "../encoder/index.ts";
 import { parseWat } from "../parser/wat-parser.ts";
 import { BinaryenInterop } from "../interop/binaryen-js.ts";
-import {
-  defaultPassOptions,
-  listPasses,
-  PassRunner,
-  shrinkPassOptions,
-} from "../passes/index.ts";
-import { PassOptions } from "../passes/pass.ts";
+import { defaultPassOptions, listPasses, PassRunner, shrinkPassOptions } from "../passes/index.ts";
+import type { PassOptions } from "../passes/pass.ts";
 import { ModuleBuilder } from "../ir/module.ts";
 
 // ---------------------------------------------------------------------------
@@ -206,9 +201,7 @@ function _nativeOptimize(
     );
   }
 
-  const module = isWat
-    ? parseWat(new TextDecoder().decode(inputBytes))
-    : parseWasm(inputBytes);
+  const module = isWat ? parseWat(new TextDecoder().decode(inputBytes)) : parseWasm(inputBytes);
 
   const passOpts: PassOptions = {
     optimizeLevel: opts.optimizeLevel,
