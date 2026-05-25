@@ -317,9 +317,15 @@ deno task test
 # Format
 deno task fmt
 
-# CI bundle (check + test)
+# Lint
+deno task lint
+
+# CI bundle (check + test) — mirrors what GitHub Actions runs, minus fmt/lint/publish dry-run
 deno task ci
 ```
+
+`deno fmt` and `deno lint` are configured to skip the `upstream/` and `wabt-ts/` submodules, so
+local runs see the same file set CI does (CI checkout does not pull submodules).
 
 ## Publishing
 
@@ -345,6 +351,12 @@ Actions. The pipeline:
 
    JSR detects the GitHub Actions OIDC token and stamps the release with provenance automatically.
    No publish token is required.
+
+5. After the JSR publish succeeds, the workflow runs `gh release create` with `--generate-notes` to
+   automatically create a matching
+   [GitHub Release](https://github.com/jrmarcum/binaryen-ts/releases) for the tag. Release notes are
+   derived from commit messages and PR titles since the previous tag, and can be edited on GitHub
+   after the fact.
 
 Local dry-run (verifies the manifest without publishing):
 
