@@ -11,12 +11,25 @@
  * This script refuses to run unless `GITHUB_ACTIONS=true` is set in the
  * environment (which GitHub Actions does automatically for every workflow
  * step). Inside CI, it delegates to `deno publish` and forwards the exit
- * code. See CLAUDE.md "Do not run `deno publish` locally" for full rationale.
+ * code. Outside CI, it prints the release flow with the actual current
+ * version from `deno.json` substituted in, so the suggested git commands
+ * are copy-pasteable. See CLAUDE.md "Do not run `deno publish` locally"
+ * for full rationale.
  *
  * @license MIT
  */
 
+import { nextVersion, readCurrentVersion } from "./version.ts";
+
 if (Deno.env.get("GITHUB_ACTIONS") !== "true") {
+  const current = await readCurrentVersion();
+  let next: string;
+  try {
+    next = nextVersion(current);
+  } catch {
+    next = "X.Y.Z";
+  }
+
   console.error(
     [
       "Refusing to run `deno publish` outside GitHub Actions.",
@@ -27,11 +40,14 @@ if (Deno.env.get("GITHUB_ACTIONS") !== "true") {
       "provenance, a version cannot be retro-fixed — only superseded by a",
       "version bump + re-publish via the workflow.",
       "",
+      `Current version (from deno.json): v${current}`,
+      `Next version (bump rule):         v${next}`,
+      "",
       "Correct release flow:",
-      "  1. Bump `version` in deno.json on a clean main branch",
-      '  2. git commit -am "bump to vX.Y.Z"',
-      "  3. git tag vX.Y.Z",
-      "  4. git push origin main vX.Y.Z",
+      "  1. deno task bump                  # writes the next version to deno.json",
+      `  2. git commit -am "bump to v${next}"`,
+      `  3. git tag v${next}`,
+      `  4. git push origin main v${next}`,
       "",
       "The .github/workflows/publish.yml workflow takes it from there.",
       "",

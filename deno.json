@@ -1,6 +1,6 @@
 {
   "name": "@jrmarcum/binaryen-ts",
-  "version": "1.0.5",
+  "version": "1.0.6",
   "license": "MIT",
   "exports": {
     ".": "./main.ts",
@@ -22,8 +22,9 @@
     "check": "deno check src/**/*.ts main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint",
-    "publish": "deno run --allow-env --allow-run scripts/guarded_publish.ts",
+    "publish": "deno run --allow-env --allow-read --allow-run scripts/guarded_publish.ts",
     "publish:dry": "deno publish --dry-run --allow-dirty",
+    "bump": "deno run --allow-read --allow-write scripts/bump_version.ts",
     "ci": "deno task check && deno task test"
   },
   "publish": {
