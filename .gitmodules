@@ -1,6 +1,0 @@
-[submodule "upstream"]
-	path = upstream
-	url = https://github.com/WebAssembly/binaryen.git
-[submodule "wabt-ts"]
-	path = wabt-ts
-	url = https://github.com/jrmarcum/wabt-ts.git
