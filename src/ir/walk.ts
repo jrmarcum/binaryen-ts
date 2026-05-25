@@ -245,6 +245,25 @@ function _mapChildren(
     case ExpressionKind.BrOn:
       return { ...expr, ref: mapExpression(expr.ref, fn) };
 
+    case ExpressionKind.TryTable:
+      return {
+        ...expr,
+        body: mapExpression(expr.body, fn),
+      };
+
+    case ExpressionKind.Try:
+      return {
+        ...expr,
+        body: mapExpression(expr.body, fn),
+        catchBodies: expr.catchBodies.map((b) => mapExpression(b, fn)),
+      };
+
+    case ExpressionKind.Throw:
+      return { ...expr, operands: expr.operands.map((o) => mapExpression(o, fn)) };
+
+    case ExpressionKind.ThrowRef:
+      return { ...expr, exnref: mapExpression(expr.exnref, fn) };
+
     // Leaf nodes — no children to transform
     case ExpressionKind.Nop:
     case ExpressionKind.Unreachable:
@@ -254,6 +273,8 @@ function _mapChildren(
     case ExpressionKind.MemorySize:
     case ExpressionKind.RefNull:
     case ExpressionKind.RefFunc:
+    case ExpressionKind.Rethrow:
+    case ExpressionKind.Pop:
       return expr;
 
     default:
@@ -392,6 +413,19 @@ function _visitChildren(
     case ExpressionKind.RefCast:
     case ExpressionKind.BrOn:
       visit(expr.ref);
+      break;
+    case ExpressionKind.TryTable:
+      visit(expr.body);
+      break;
+    case ExpressionKind.Try:
+      visit(expr.body);
+      expr.catchBodies.forEach(visit);
+      break;
+    case ExpressionKind.Throw:
+      expr.operands.forEach(visit);
+      break;
+    case ExpressionKind.ThrowRef:
+      visit(expr.exnref);
       break;
     default:
       break;

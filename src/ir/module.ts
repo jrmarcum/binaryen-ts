@@ -150,6 +150,17 @@ export interface WasmTable {
 }
 
 /**
+ * A WASM exception tag (EH proposal).
+ * A tag defines the type of an exception — its payload is a list of value types.
+ */
+export interface WasmTag {
+  /** Internal name (used in `throw` and `try_table` catch clauses). */
+  name: string;
+  /** Exception payload parameter types. */
+  params: ValType[];
+}
+
+/**
  * An element segment (populates a table).
  */
 export interface ElementSegment {
@@ -176,6 +187,8 @@ export interface WasmModule {
   dataSegments: DataSegment[];
   imports: WasmImport[];
   exports: WasmExport[];
+  /** Exception tags (EH proposal). */
+  tags: WasmTag[];
   /** Whether the module uses the WASM exception-handling proposal. */
   hasExceptionHandling: boolean;
   /** Whether the module uses the memory64 proposal. */
@@ -216,6 +229,7 @@ export class ModuleBuilder {
   private readonly _dataSegments: DataSegment[] = [];
   private readonly _imports: WasmImport[] = [];
   private readonly _exports: WasmExport[] = [];
+  private readonly _tags: WasmTag[] = [];
   private _hasEH = false;
   private _hasMemory64 = false;
   private _hasMultiMemory = false;
@@ -445,6 +459,22 @@ export class ModuleBuilder {
   // Feature flags
   // -------------------------------------------------------------------------
 
+  // -------------------------------------------------------------------------
+  // Tags (EH proposal)
+  // -------------------------------------------------------------------------
+
+  /**
+   * Adds an exception tag.
+   *
+   * @param name - Internal tag name (e.g. `"$MyError"`).
+   * @param params - The exception payload types.
+   */
+  addTag(name: string, params: ValType[]): this {
+    this._tags.push({ name, params });
+    this._hasEH = true;
+    return this;
+  }
+
   /** Enables the exception-handling proposal. */
   enableExceptionHandling(): this {
     this._hasEH = true;
@@ -486,6 +516,7 @@ export class ModuleBuilder {
       dataSegments: [...this._dataSegments],
       imports: [...this._imports],
       exports: [...this._exports],
+      tags: [...this._tags],
       heapTypes: [...this._heapTypes],
       hasExceptionHandling: this._hasEH,
       hasMemory64: this._hasMemory64,

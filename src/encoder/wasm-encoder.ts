@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @module binaryen-ts/encoder/wasm-encoder
  *
  * WASM binary encoder: serializes a {@link WasmModule} IR tree into a `.wasm` binary.
@@ -46,11 +46,13 @@ import {
   type ArrayNewElemExpr, type ArrayGetExpr, type ArraySetExpr,
   type ArrayLenExpr, type RefTestExpr, type RefCastExpr, type BrOnExpr,
   BrOnOp,
+  type TryTableExpr, type TryExpr, type ThrowExpr, type ThrowRefExpr, type RethrowExpr,
 } from "../ir/expressions.ts";
 import {
   type DataSegment,
   type WasmFunction,
   type WasmModule,
+  type WasmTag,
 } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 import {
@@ -304,8 +306,18 @@ function valTypeByte(t: ValType): number {
     case ValType.F32: return 0x7d;
     case ValType.F64: return 0x7c;
     case ValType.V128: return 0x7b;
-    case ValType.FuncRef: return 0x70;
-    case ValType.ExternRef: return 0x6f;
+    case ValType.FuncRef:      return 0x70;
+    case ValType.ExternRef:    return 0x6f;
+    case ValType.AnyRef:       return 0x6e;
+    case ValType.EqRef:        return 0x6d;
+    case ValType.I31Ref:       return 0x6c;
+    case ValType.StructRef:    return 0x6b;
+    case ValType.ArrayRef:     return 0x6a;
+    case ValType.NullRef:      return 0x71;
+    case ValType.NullFuncRef:  return 0x73;
+    case ValType.NullExternRef: return 0x72;
+    case ValType.ExnRef:       return 0x69;
+    case ValType.NullExnRef:   return 0x74;
     default: return 0x7f;
   }
 }
@@ -437,6 +449,7 @@ class WasmEncoder {
   private funcIndex = new Map<string, number>();
   private globalIndex = new Map<string, number>();
   private tableIndex = new Map<string, number>();
+  private tagIndex = new Map<string, number>();
 
   private types: FuncTypeEntry[] = [];
   private typeKeyToIndex = new Map<string, number>();
@@ -458,6 +471,7 @@ class WasmEncoder {
     if (this.mod.functions.length > 0) this.writeSection(out, 3, (w) => this.encodeFunctionSection(w));
     if (this.hasTables()) this.writeSection(out, 4, (w) => this.encodeTableSection(w));
     if (this.hasMemories()) this.writeSection(out, 5, (w) => this.encodeMemorySection(w));
+    if (this.mod.tags.length > 0) this.writeSection(out, 13, (w) => this.encodeTagSection(w));
     if (this.mod.globals.length > 0) this.writeSection(out, 6, (w) => this.encodeGlobalSection(w));
     if (this.mod.exports.length > 0) this.writeSection(out, 7, (w) => this.encodeExportSection(w));
     if (this.mod.elements.length > 0) this.writeSection(out, 9, (w) => this.encodeElementSection(w));
@@ -495,6 +509,11 @@ class WasmEncoder {
     for (const t of this.mod.tables) {
       this.tableIndex.set(t.name, ti++);
     }
+
+    let tagi = 0;
+    for (const tag of this.mod.tags) {
+      this.tagIndex.set(tag.name, tagi++);
+    }
   }
 
   // ---------------------------------------------------------------------------
@@ -515,6 +534,10 @@ class WasmEncoder {
     }
     for (const fn of this.mod.functions) {
       addType(fn.params, fn.results);
+    }
+    // Tags use function-type signatures (params only, no results)
+    for (const tag of this.mod.tags) {
+      addType(tag.params, []);
     }
     // Scan for call_indirect type references
     for (const fn of this.mod.functions) {
@@ -766,6 +789,14 @@ class WasmEncoder {
       this.encodeFunctionBody(body, fn);
       w.writeU32(body.byteLength);
       w.writeAll(body);
+    }
+  }
+
+  private encodeTagSection(w: BinaryWriter): void {
+    w.writeU32(this.mod.tags.length);
+    for (const tag of this.mod.tags) {
+      w.writeU8(0); // reserved attribute byte
+      w.writeU32(this.getTypeIndex(tag.params, []));
     }
   }
 
@@ -1214,6 +1245,85 @@ class WasmEncoder {
         break;
       }
 
+      case ExpressionKind.TryTable: {
+        const e = expr as TryTableExpr;
+        w.writeU8(0x1f); // try_table
+        writeBlockType(w, e.type);
+        w.writeU32(e.catches.length);
+        labels.push(e.name ?? "");
+        for (const c of e.catches) {
+          if (c.tag !== null) {
+            w.writeU8(c.isRef ? 0x01 : 0x00); // catch / catch_ref
+            w.writeU32(this.tagIndex.get(c.tag) ?? 0);
+          } else {
+            w.writeU8(c.isRef ? 0x03 : 0x02); // catch_all / catch_all_ref
+          }
+          w.writeU32(this.resolveLabel(labels, c.dest));
+        }
+        this.encodeExpr(w, e.body, labels);
+        labels.pop();
+        w.writeU8(0x0b);
+        break;
+      }
+
+      case ExpressionKind.Try: {
+        const e = expr as TryExpr;
+        if (e.delegateTarget !== null) {
+          // try...delegate: emitted as try body + delegate opcode (no end)
+          w.writeU8(0x06); // try
+          writeBlockType(w, e.type);
+          labels.push(e.name ?? "");
+          this.encodeExpr(w, e.body, labels);
+          labels.pop();
+          w.writeU8(0x18); // delegate
+          w.writeU32(this.resolveLabel(labels, e.delegateTarget));
+        } else {
+          w.writeU8(0x06); // try
+          writeBlockType(w, e.type);
+          labels.push(e.name ?? "");
+          this.encodeExpr(w, e.body, labels);
+          for (let i = 0; i < e.catchTags.length; i++) {
+            if (e.catchTags[i] === "") {
+              w.writeU8(0x19); // catch_all
+            } else {
+              w.writeU8(0x07); // catch
+              w.writeU32(this.tagIndex.get(e.catchTags[i]) ?? 0);
+            }
+            this.encodeExpr(w, e.catchBodies[i], labels);
+          }
+          labels.pop();
+          w.writeU8(0x0b);
+        }
+        break;
+      }
+
+      case ExpressionKind.Throw: {
+        const e = expr as ThrowExpr;
+        for (const op of e.operands) this.encodeExpr(w, op, labels);
+        w.writeU8(0x08);
+        w.writeU32(this.tagIndex.get(e.tag) ?? 0);
+        break;
+      }
+
+      case ExpressionKind.ThrowRef: {
+        const e = expr as ThrowRefExpr;
+        this.encodeExpr(w, e.exnref, labels);
+        w.writeU8(0x0a);
+        break;
+      }
+
+      case ExpressionKind.Rethrow: {
+        const e = expr as RethrowExpr;
+        w.writeU8(0x09);
+        w.writeU32(this.resolveLabel(labels, e.target));
+        break;
+      }
+
+      case ExpressionKind.Pop: {
+        // Pop is a pseudo-instruction; not emitted in the binary format
+        break;
+      }
+
       default: {
         // Unknown / unsupported expression kind — emit nop
         w.writeU8(0x01);
@@ -1283,6 +1393,15 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
     case ExpressionKind.RefTest: visit((expr as RefTestExpr).ref); break;
     case ExpressionKind.RefCast: visit((expr as RefCastExpr).ref); break;
     case ExpressionKind.BrOn: visit((expr as BrOnExpr).ref); break;
+    case ExpressionKind.TryTable: visit((expr as TryTableExpr).body); break;
+    case ExpressionKind.Try: {
+      const e = expr as TryExpr;
+      visit(e.body);
+      for (const b of e.catchBodies) visit(b);
+      break;
+    }
+    case ExpressionKind.Throw: for (const op of (expr as ThrowExpr).operands) visit(op); break;
+    case ExpressionKind.ThrowRef: visit((expr as ThrowRefExpr).exnref); break;
     default: break;
   }
 }
@@ -1326,6 +1445,7 @@ export function encodeWasm(mod: WasmModule): Uint8Array {
   return new WasmEncoder(mod).encode();
 }
 
-// Re-export the unused DataSegment type to satisfy import completeness
+// Suppress unused-import lint for type-only imports used in module type
 type _DS = DataSegment;
+type _WT = WasmTag;
 void (undefined as unknown as _DS);

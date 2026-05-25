@@ -1,4 +1,4 @@
-# binaryen-ts — Port Task List
+﻿# binaryen-ts — Port Task List
 
 This document tracks the work required to fully port Binaryen from C++ to TypeScript.
 Each phase builds on the previous. The upstream C++ reference is at `upstream/`.
@@ -102,7 +102,7 @@ Implementation files: `src/binary/reader.ts` (LEB128 + raw reads), `src/binary/w
 **Known gaps for future phases**:
 
 - `table.get` / `table.set` stubbed as `nop` (table instructions)
-- EH opcodes not yet decoded (Phase 8)
+- EH opcodes decoded (Phase 8 ✅); see `tests/binary/eh_test.ts`
 - GC struct/array opcodes — fully decoded (Phase 7 ✅); see `tests/binary/gc_parser_test.ts`
 - Round-trip test (parse binary → IR → encode binary → re-parse → compare) — complete (Phase 7 ✅)
 
@@ -141,7 +141,7 @@ Reference: `upstream/src/wasm-binary.h`
 - `if` block labels: encoded with an empty label string (no impact on correctness)
 - Saturating-truncation ops (`0xFC` prefix trunc) emitted as regular trunc (correct semantics, non-trapping flavor lost)
 - GC expression kinds — fully encoded (Phase 7 ✅)
-- EH / SIMD expression kinds fall through to nop (Phase 8, 9)
+- EH expression kinds fully encoded (Phase 8 ✅); SIMD falls through to nop (Phase 9)
 
 ---
 
@@ -294,20 +294,31 @@ Reference: `upstream/src/wasm.h` (GC expression types)
   - [x] `ref.test` round-trips
   - [x] IR-built struct type encodes and parses
   - [x] IR-built array type encodes and parses
-- [x] Total: 141/141 tests passing (all previous tests unaffected)
+- [x] Total: 141/141 tests passing (all previous tests unaffected; suite grew to 154/154 after Phase 8)
 
 ---
 
-## Phase 8 — Exception Handling Proposal
+## Phase 8 — Exception Handling Proposal ✅ COMPLETE
 
 Reference: `upstream/src/passes/` (EH-related passes)
 
 **Goal**: Full support for the WASM exception-handling proposal.
 
-- [ ] `try`, `catch`, `throw`, `rethrow`, `throw_ref` expressions in parser/printer
-- [ ] `try_table` with `catch` clauses
-- [ ] EH-aware DCE (pop instruction support)
-- [ ] `Vacuum` extension for EH pop fixup
+- [x] EH IR types: `ExnRef`, `NullExnRef` in `ValType`; `WasmTag` + `tags[]` in `WasmModule`
+- [x] EH expression nodes: `TryTableExpr`, `TryExpr`, `ThrowExpr`, `ThrowRefExpr`, `RethrowExpr`, `PopExpr`
+- [x] Factory functions: `makeTryTable`, `makeTry`, `makeThrow`, `makeThrowRef`, `makeRethrow`, `makePop`
+- [x] `walk.ts` extended with EH traversal (`mapExpression` + `walkExpression`)
+- [x] Binary parser: tag section (id=13), `throw` (0x08), `rethrow` (0x09), `throw_ref` (0x0a), `try` (0x06), `catch` (0x07), `catch_all` (0x19), `delegate` (0x18), `try_table` (0x1f)
+- [x] Binary encoder: tag section emission, all EH instruction encoding, `Pop` preserved as no-op
+- [x] WAT parser: `tag` collection, `throw`, `throw_ref`, `rethrow`, `try_table`, `try` expression parsing
+- [x] Tests: 13 EH tests (tag decode, throw, try_table, throw_ref, round-trips), all passing
+- [x] `Vacuum` pass: `Pop` nodes not filtered (different kind from `Nop` — preserved by default)
+
+**Known gaps / deferred**:
+
+- Old EH `try`/`catch` WAT parser: `(do ...)` wrapped body form only; inline body unsupported
+- EH-aware DCE (pop instruction liveness) — deferred
+- EH passes from upstream (`WasmExceptionHandling` pass) — deferred
 
 ---
 

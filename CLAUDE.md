@@ -1,4 +1,4 @@
-# CLAUDE.md — Project Context for Claude Code
+﻿# CLAUDE.md — Project Context for Claude Code
 
 ## Project Overview
 
@@ -258,7 +258,8 @@ binaryen-ts/
 | 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, 14/14 tests passing |
 | 6 | ✅ Done | `wasm-opt` native CLI + RemoveUnusedNames pass — 14/14 tests passing |
 | 7 | ✅ Done | GC proposal — heap types, struct/array/ref instructions, binary parser + encoder + WAT parser, 141/141 tests |
-| 8+ | Planned | EH, SIMD, wasic compilation |
+| 8 | ✅ Done | EH proposal — tags, throw/throw_ref/rethrow/try_table, binary parser + encoder + WAT parser, 13/13 tests |
+| 9+ | Planned | SIMD, wasic compilation |
 
 ### Key Design Decisions
 
@@ -371,6 +372,23 @@ Key design decisions:
 - **WAT parser `collectType`**: runs in the first pass alongside imports/globals/etc. Accumulates `typeNames: Map<string, number>` mapping `$name` → heapTypes index. Called via `case "type": this.collectType(child as SList)`.
 - **`0xFB` prefix sub-opcodes**: struct.new=0x00, struct.new_default=0x01, struct.get=0x02, struct.get_s=0x03, struct.get_u=0x04, struct.set=0x05, array.new=0x06, array.new_default=0x07, array.new_fixed=0x08, array.get=0x0b, array.get_s=0x0c, array.get_u=0x0d, array.set=0x0e, array.len=0x0f, ref.test=0x14, ref.test_null=0x15, ref.cast=0x16, ref.cast_null=0x17, br_on_cast=0x18, br_on_cast_fail=0x19, ref.i31=0x1c, i31.get_s=0x1d, i31.get_u=0x1e. `ref.eq`=0xd3 (no 0xFB prefix).
 - **Tests in `tests/binary/gc_parser_test.ts`**: hand-crafted binary modules for struct, array, and ref.test; 7 parser tests + 8 encoder round-trip tests = 15 total.
+
+#### EH proposal design (Phase 8)
+
+`src/ir/types.ts`, `src/ir/module.ts`, `src/ir/expressions.ts`, `src/binary/wasm-parser.ts`, `src/encoder/wasm-encoder.ts`, `src/parser/wat-parser.ts` extended.
+
+Key design decisions:
+
+- **`ExnRef` / `NullExnRef`**: Added to `ValType` enum; byte 0x69 (SLEB128 -23) and 0x74; `isRef()` updated.
+- **`WasmTag` interface**: `{ name: string; params: ValType[] }`; `WasmModule.tags: WasmTag[]`; `ModuleBuilder.addTag()` sets `_hasEH = true`.
+- **Tag section (id=13)**: Emitted between memory (id=5) and globals (id=6) — follows upstream Binaryen ordering.
+- **EH expression nodes**: `TryTableExpr` (new EH), `TryExpr` (old EH), `ThrowExpr`, `ThrowRefExpr`, `RethrowExpr`, `PopExpr`. Factory functions: `makeTryTable`, `makeTry`, `makeThrow`, `makeThrowRef`, `makeRethrow`, `makePop`.
+- **`CatchClause`**: `{ tag: string | null; dest: string; isRef: boolean }` — tag=null for catch_all variants, isRef=true for catch_ref/catch_all_ref.
+- **Binary decoder EH opcodes**: 0x06 (try frame push), 0x07 (catch transition), 0x08 (throw), 0x09 (rethrow), 0x0a (throw_ref), 0x18 (delegate), 0x19 (catch_all), 0x1f (try_table). `ControlFrameKind` extended to include "try", "catch", "try_table".
+- **try_table catch depth resolution**: Raw catch clause data (tag indices + label depths) is read BEFORE the frame is pushed; depths are resolved AFTER the frame is pushed (depth 0 = the try_table block itself).
+- **`Pop` pseudo-instruction**: Used as EH catch binding placeholder; encoded as no-op (not emitted to binary); preserved by Vacuum pass (different kind from Nop).
+- **WAT parser EH support**: `tag` collected in first pass (`collectTag()`); `throw`, `throw_ref`, `rethrow`, `try_table`, `try` parsed in `parseListExpr`; `parseTryTable()` and `parseTry()` handle both new and old EH syntax.
+- **Tests in `tests/binary/eh_test.ts`**: hand-crafted binary modules for throw, try_table, throw_ref; 8 parser tests + 5 encoder round-trip tests = 13 total.
 
 #### Upstream C++ reference
 

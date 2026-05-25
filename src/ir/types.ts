@@ -73,6 +73,10 @@ export enum ValType {
   NullExternRef = "nullexternref",
   /** Null any reference (bottom type) */
   NullRef = "nullref",
+  /** Exception reference (EH proposal) */
+  ExnRef = "exnref",
+  /** Null exception reference (bottom type, EH proposal) */
+  NullExnRef = "nullexnref",
 }
 
 // ---------------------------------------------------------------------------
@@ -179,7 +183,9 @@ export function isRef(t: Type): boolean {
     t === ValType.StringRef ||
     t === ValType.NullFuncRef ||
     t === ValType.NullExternRef ||
-    t === ValType.NullRef
+    t === ValType.NullRef ||
+    t === ValType.ExnRef ||
+    t === ValType.NullExnRef
   );
 }
 

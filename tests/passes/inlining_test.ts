@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @module binaryen-ts/tests/passes/inlining_test
  *
  * Tests for the Phase 5 Inlining pass.
@@ -38,6 +38,7 @@ function emptyModule(): WasmModule {
     globals: [],
     memories: [],
     tables: [],
+    tags: [],
     elements: [],
     dataSegments: [],
     imports: [],

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @module binaryen-ts/parser/wat-parser
  *
  * WAT S-expression tree → `WasmModule` IR parser.
@@ -41,6 +41,7 @@ import {
   BreakExpr,
   CallExpr,
   CallIndirectExpr,
+  type CatchClause,
   ConstExpr,
   DropExpr,
   Expression,
@@ -69,6 +70,7 @@ import {
   makeArrayNew, makeArrayNewDefault, makeArrayNewFixed,
   makeArrayGet, makeArraySet, makeArrayLen,
   makeRefTest, makeRefCast, BrOnOp,
+  makeThrow, makeThrowRef, makeRethrow, makeTryTable, makeTry,
 } from "../ir/expressions.ts";
 import {
   DataSegment,
@@ -194,6 +196,9 @@ class WatModuleParser {
   // GC type name → heapTypes index
   private typeNames = new Map<string, number>();
 
+  // EH tag name → tag index
+  private tagNames = new Map<string, number>();
+
   // All function-level definitions collected before building
   private rawFunctions: RawFunc[] = [];
 
@@ -224,6 +229,7 @@ class WatModuleParser {
         case "global": this.collectGlobal(child as SList); break;
         case "memory": this.collectMemory(child as SList); break;
         case "table":  this.collectTable(child as SList); break;
+        case "tag":    this.collectTag(child as SList); break;
         case "export": /* handled in second pass */ break;
         case "data":   /* handled in second pass */ break;
         case "elem":   /* handled in second pass */ break;
@@ -668,6 +674,31 @@ class WatModuleParser {
       return makeRefCast(ref, ht, nullable, resultType);
     }
 
+    // -----------------------------------------------------------------------
+    // Exception Handling proposal
+    // -----------------------------------------------------------------------
+    if (head === "throw") {
+      const tagRef = atomText(args[0]) ?? this.err("throw: missing tag reference", list.pos);
+      const tagName = tagRef.startsWith("$") ? tagRef : `$tag${tagRef}`;
+      const operands = args.slice(1).map((a) => this.parseExpr(a, ctx));
+      return makeThrow(tagName, operands);
+    }
+    if (head === "throw_ref") {
+      const exnref = this.parseExpr(args[0], ctx);
+      return makeThrowRef(exnref);
+    }
+    if (head === "rethrow") {
+      const labelRef = atomText(args[0]) ?? this.err("rethrow: missing depth", list.pos);
+      const target = this.resolveLabel(labelRef, ctx, list.pos);
+      return makeRethrow(target);
+    }
+    if (head === "try_table") {
+      return this.parseTryTable(list, ctx);
+    }
+    if (head === "try") {
+      return this.parseTry(list, ctx);
+    }
+
     // Unrecognized — wrap in a nop with a comment for now
     // TODO: extend as more instructions are added
     return { kind: ExpressionKind.Nop, type: None } as NopExpr;
@@ -774,6 +805,130 @@ class WatModuleParser {
     return { kind: ExpressionKind.Break, type: conditional ? None : Unreachable, name, condition, value };
   }
 
+  private parseTryTable(list: SList, ctx: FuncContext): Expression {
+    const children = listChildren(list);
+    let idx = 0;
+    // Optional label
+    let label: string | null = null;
+    if (children[idx]?.kind === "atom" && (children[idx] as Atom).token.raw.startsWith("$")) {
+      label = (children[idx] as Atom).token.raw;
+      idx++;
+    }
+    // Optional result type
+    const results: ValType[] = [];
+    while (idx < children.length && isListWith(children[idx], "result")) {
+      for (const t of listChildren(children[idx] as SList)) results.push(this.parseValType(t));
+      idx++;
+    }
+    // Catch clauses before body
+    const catches: CatchClause[] = [];
+    const innerCtx = this.pushLabel(label, ctx);
+    while (idx < children.length && children[idx].kind === "list") {
+      const clauseList = children[idx] as SList;
+      const clauseHead = listHead(clauseList);
+      if (clauseHead === "catch" || clauseHead === "catch_ref") {
+        const clauseArgs = listChildren(clauseList);
+        const tagRef = atomText(clauseArgs[0]) ?? this.err("catch: missing tag", list.pos);
+        const tagName = tagRef.startsWith("$") ? tagRef : `$tag${tagRef}`;
+        const destRef = atomText(clauseArgs[1]) ?? this.err("catch: missing dest label", list.pos);
+        const dest = this.resolveLabel(destRef, innerCtx, list.pos);
+        catches.push({ tag: tagName, dest, isRef: clauseHead === "catch_ref" });
+        idx++;
+      } else if (clauseHead === "catch_all" || clauseHead === "catch_all_ref") {
+        const clauseArgs = listChildren(clauseList);
+        const destRef = atomText(clauseArgs[0]) ?? this.err("catch_all: missing dest label", list.pos);
+        const dest = this.resolveLabel(destRef, innerCtx, list.pos);
+        catches.push({ tag: null, dest, isRef: clauseHead === "catch_all_ref" });
+        idx++;
+      } else {
+        break;
+      }
+    }
+    // Body expressions
+    const bodyExprs: Expression[] = [];
+    while (idx < children.length) {
+      bodyExprs.push(this.parseExpr(children[idx], innerCtx));
+      idx++;
+    }
+    const type: Type = results[0] ?? (bodyExprs[bodyExprs.length - 1]?.type ?? None);
+    const body: Expression = bodyExprs.length === 1
+      ? bodyExprs[0]
+      : { kind: ExpressionKind.Block, type, name: null, children: bodyExprs } as BlockExpr;
+    return makeTryTable(label, body, catches, type);
+  }
+
+  private parseTry(list: SList, ctx: FuncContext): Expression {
+    const children = listChildren(list);
+    let idx = 0;
+    // Optional label
+    let label: string | null = null;
+    if (children[idx]?.kind === "atom" && (children[idx] as Atom).token.raw.startsWith("$")) {
+      label = (children[idx] as Atom).token.raw;
+      idx++;
+    }
+    // Optional result type
+    const results: ValType[] = [];
+    while (idx < children.length && isListWith(children[idx], "result")) {
+      for (const t of listChildren(children[idx] as SList)) results.push(this.parseValType(t));
+      idx++;
+    }
+    const innerCtx = this.pushLabel(label, ctx);
+    // Body: (do ...) block or raw instructions
+    let bodyExprs: Expression[] = [];
+    if (idx < children.length && isListWith(children[idx], "do")) {
+      bodyExprs = listChildren(children[idx] as SList).map((e) => this.parseExpr(e, innerCtx));
+      idx++;
+    } else {
+      while (idx < children.length && children[idx].kind !== "list") {
+        bodyExprs.push(this.parseExpr(children[idx], innerCtx));
+        idx++;
+      }
+    }
+    const bodyType: Type = results[0] ?? (bodyExprs[bodyExprs.length - 1]?.type ?? None);
+    const body: Expression = bodyExprs.length === 1
+      ? bodyExprs[0]
+      : { kind: ExpressionKind.Block, type: bodyType, name: null, children: bodyExprs } as BlockExpr;
+    // Catch / catch_all / delegate clauses
+    const catchTags: string[] = [];
+    const catchBodies: Expression[] = [];
+    let delegateTarget: string | null = null;
+    while (idx < children.length) {
+      const clause = children[idx] as SList;
+      const clauseHead = listHead(clause);
+      if (clauseHead === "catch") {
+        const clauseArgs = listChildren(clause);
+        const tagRef = atomText(clauseArgs[0]) ?? this.err("catch: missing tag", list.pos);
+        const tagName = tagRef.startsWith("$") ? tagRef : `$tag${tagRef}`;
+        catchTags.push(tagName);
+        const catchExprs = clauseArgs.slice(1).map((e) => this.parseExpr(e, innerCtx));
+        catchBodies.push(
+          catchExprs.length === 1
+            ? catchExprs[0]
+            : { kind: ExpressionKind.Block, type: bodyType, name: null, children: catchExprs } as BlockExpr
+        );
+        idx++;
+      } else if (clauseHead === "catch_all") {
+        catchTags.push("$__catch_all");
+        const clauseArgs = listChildren(clause);
+        const catchExprs = clauseArgs.map((e) => this.parseExpr(e, innerCtx));
+        catchBodies.push(
+          catchExprs.length === 1
+            ? catchExprs[0]
+            : { kind: ExpressionKind.Block, type: bodyType, name: null, children: catchExprs } as BlockExpr
+        );
+        idx++;
+      } else if (clauseHead === "delegate") {
+        const clauseArgs = listChildren(clause);
+        const depthRef = atomText(clauseArgs[0]) ?? "0";
+        delegateTarget = this.resolveLabel(depthRef, innerCtx, list.pos);
+        idx++;
+        break;
+      } else {
+        break;
+      }
+    }
+    return makeTry(label, body, catchTags, catchBodies, delegateTarget, bodyType);
+  }
   private parseCallIndirect(list: SList, args: SExpr[], ctx: FuncContext): CallIndirectExpr {
     let idx = 0;
     // Optional table name
@@ -902,6 +1057,25 @@ class WatModuleParser {
       ? (this.tryParseValType(children[idx + 2]) ?? ValType.FuncRef)
       : (this.tryParseValType(children[idx + 1]) ?? ValType.FuncRef);
     this.builder.addTable(name ?? "$table0", refType, initial, max);
+  }
+
+  private collectTag(list: SList): void {
+    const children = listChildren(list);
+    let idx = 0;
+    let name: string | null = null;
+    if (children[idx]?.kind === "atom" && (children[idx] as Atom).token.raw.startsWith("$")) {
+      name = (children[idx] as Atom).token.raw;
+      idx++;
+    }
+    const tagIndex = this.tagNames.size;
+    if (name) this.tagNames.set(name, tagIndex);
+    // Parse (param ...) list for tag type
+    const params: ValType[] = [];
+    while (idx < children.length && isListWith(children[idx], "param")) {
+      for (const t of listChildren(children[idx] as SList)) params.push(this.parseValType(t));
+      idx++;
+    }
+    this.builder.addTag(name ?? `$tag${tagIndex}`, params);
   }
 
   // -------------------------------------------------------------------------
@@ -1122,6 +1296,7 @@ class WatModuleParser {
       arrayref: ValType.ArrayRef, stringref: ValType.StringRef,
       nullfuncref: ValType.NullFuncRef, nullexternref: ValType.NullExternRef,
       nullref: ValType.NullRef,
+      exnref: ValType.ExnRef, nullexnref: ValType.NullExnRef,
     };
     return map[raw] ?? null;
   }

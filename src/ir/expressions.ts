@@ -638,6 +638,72 @@ export interface BrOnExpr extends ExprBase {
 }
 
 // ---------------------------------------------------------------------------
+// Exception handling (EH proposal)
+// ---------------------------------------------------------------------------
+
+/**
+ * A catch clause in a `try_table` expression.
+ * Mirrors the four catch opcode variants (0x00–0x03) from the EH proposal.
+ */
+export interface CatchClause {
+  /** Tag name, or `null` for `catch_all` / `catch_all_ref`. */
+  tag: string | null;
+  /** Branch label to jump to when this clause matches. */
+  dest: string;
+  /** `true` for `catch_ref` and `catch_all_ref` (sends an exnref). */
+  isRef: boolean;
+}
+
+/** `try_table` expression (new EH proposal). */
+export interface TryTableExpr extends ExprBase {
+  kind: ExpressionKind.TryTable;
+  /** Optional label for the try_table block itself. */
+  name: string | null;
+  /** The protected body. */
+  body: Expression;
+  catches: CatchClause[];
+}
+
+/** `try` expression (old/legacy EH). */
+export interface TryExpr extends ExprBase {
+  kind: ExpressionKind.Try;
+  /** Label (targetable by `delegate`). */
+  name: string | null;
+  body: Expression;
+  /** Parallel arrays: catchTags[i] is the tag for catchBodies[i].
+   *  An empty string tag signals `catch_all`. */
+  catchTags: string[];
+  catchBodies: Expression[];
+  /** Set for the `delegate` variant; depth to delegate to. */
+  delegateTarget: string | null;
+}
+
+/** `throw $tag operands*` expression. Always has type `unreachable`. */
+export interface ThrowExpr extends ExprBase {
+  kind: ExpressionKind.Throw;
+  tag: string;
+  operands: Expression[];
+}
+
+/** `throw_ref $exnref` expression (new EH). Always has type `unreachable`. */
+export interface ThrowRefExpr extends ExprBase {
+  kind: ExpressionKind.ThrowRef;
+  exnref: Expression;
+}
+
+/** `rethrow $depth` expression (old EH). Always has type `unreachable`. */
+export interface RethrowExpr extends ExprBase {
+  kind: ExpressionKind.Rethrow;
+  /** Label of the enclosing try whose caught exception to rethrow. */
+  target: string;
+}
+
+/** `pop` pseudo-instruction — implicit value producer at start of catch handlers. */
+export interface PopExpr extends ExprBase {
+  kind: ExpressionKind.Pop;
+}
+
+// ---------------------------------------------------------------------------
 // Top-level Expression union
 // ---------------------------------------------------------------------------
 
@@ -690,7 +756,13 @@ export type Expression =
   | ArrayLenExpr
   | RefTestExpr
   | RefCastExpr
-  | BrOnExpr;
+  | BrOnExpr
+  | TryTableExpr
+  | TryExpr
+  | ThrowExpr
+  | ThrowRefExpr
+  | RethrowExpr
+  | PopExpr;
 
 // ---------------------------------------------------------------------------
 // Builder helpers (factory functions)
@@ -1023,6 +1095,48 @@ export function makeBrOn(
   castType?: HeapType, castNullable?: boolean,
 ): BrOnExpr {
   return { kind: ExpressionKind.BrOn, type: resultType, op, label, ref, castType, castNullable };
+}
+
+/** Creates a `try_table` expression. */
+export function makeTryTable(
+  name: string | null,
+  body: Expression,
+  catches: CatchClause[],
+  resultType: Type,
+): TryTableExpr {
+  return { kind: ExpressionKind.TryTable, type: resultType, name, body, catches };
+}
+
+/** Creates a `try` expression (old EH). */
+export function makeTry(
+  name: string | null,
+  body: Expression,
+  catchTags: string[],
+  catchBodies: Expression[],
+  delegateTarget: string | null,
+  resultType: Type,
+): TryExpr {
+  return { kind: ExpressionKind.Try, type: resultType, name, body, catchTags, catchBodies, delegateTarget };
+}
+
+/** Creates a `throw $tag operands*` expression. */
+export function makeThrow(tag: string, operands: Expression[]): ThrowExpr {
+  return { kind: ExpressionKind.Throw, type: Unreachable, tag, operands };
+}
+
+/** Creates a `throw_ref` expression. */
+export function makeThrowRef(exnref: Expression): ThrowRefExpr {
+  return { kind: ExpressionKind.ThrowRef, type: Unreachable, exnref };
+}
+
+/** Creates a `rethrow $depth` expression (old EH). */
+export function makeRethrow(target: string): RethrowExpr {
+  return { kind: ExpressionKind.Rethrow, type: Unreachable, target };
+}
+
+/** Creates a `pop` pseudo-instruction. */
+export function makePop(type: Type): PopExpr {
+  return { kind: ExpressionKind.Pop, type };
 }
 
 // ---------------------------------------------------------------------------

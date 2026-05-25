@@ -1,4 +1,4 @@
-/**
+﻿/**
  * @module binaryen-ts/tests/passes/passes_test
  *
  * Tests for all Phase 4 optimization passes.
@@ -51,6 +51,7 @@ function emptyModule(): WasmModule {
     globals: [],
     memories: [],
     tables: [],
+    tags: [],
     elements: [],
     dataSegments: [],
     imports: [],
@@ -469,6 +470,7 @@ Deno.test("RemoveUnusedModuleElements: unreachable function is removed", () => {
     globals: [],
     memories: [],
     tables: [],
+    tags: [],
     elements: [],
     dataSegments: [],
     imports: [],
@@ -515,6 +517,7 @@ Deno.test("RemoveUnusedModuleElements: callee of exported function is kept", () 
     globals: [],
     memories: [],
     tables: [],
+    tags: [],
     elements: [],
     dataSegments: [],
     imports: [],
@@ -550,6 +553,7 @@ Deno.test("RemoveUnusedModuleElements: dead global is removed", () => {
     ],
     memories: [],
     tables: [],
+    tags: [],
     elements: [],
     dataSegments: [],
     imports: [],

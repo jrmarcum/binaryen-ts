@@ -18,6 +18,7 @@ import {
 import {
   BinaryOp,
   makeBinary,
+  type CatchClause,
   type Expression,
   makeBlock,
   makeBreak,
@@ -41,13 +42,19 @@ import {
   makeMemoryGrow,
   makeMemorySize,
   makeNop,
+  makePop,
   makeRefFunc,
   makeRefIsNull,
   makeRefNull,
   makeReturn,
+  makeRethrow,
   makeSelect,
   makeStore,
   makeSwitch,
+  makeThrow,
+  makeThrowRef,
+  makeTry,
+  makeTryTable,
   makeUnary,
   makeUnreachable,
   UnaryOp,
@@ -84,6 +91,7 @@ const SECTION_ELEMENT = 9;
 const SECTION_CODE = 10;
 const SECTION_DATA = 11;
 const SECTION_DATA_COUNT = 12;
+const SECTION_TAG = 13;
 
 // ---------------------------------------------------------------------------
 // Internal types
@@ -99,7 +107,7 @@ interface GlobalInfo {
   mutable: boolean;
 }
 
-type ControlFrameKind = "block" | "loop" | "if" | "else" | "func";
+type ControlFrameKind = "block" | "loop" | "if" | "else" | "func" | "try" | "catch" | "try_table";
 
 interface ControlFrame {
   kind: ControlFrameKind;
@@ -108,6 +116,18 @@ interface ControlFrame {
   exprs: Expression[];
   ifCondition?: Expression;
   thenExprs?: Expression[];
+  // try / catch state
+  tryBody?: Expression[];
+  catchTags?: string[];
+  catchBodies?: Expression[][];
+  delegateTarget?: string | null;
+  // try_table state
+  tryCatches?: CatchClause[];
+}
+
+interface TagInfo {
+  name: string;
+  params: ValType[];
 }
 
 interface DecoderCtx {
@@ -117,6 +137,7 @@ interface DecoderCtx {
   funcTypeIndices: number[];
   globalInfos: GlobalInfo[];
   tableNames: string[];
+  tagInfos: TagInfo[];
 }
 
 // ---------------------------------------------------------------------------
@@ -303,6 +324,8 @@ function readValueType(r: BinaryReader): ValType | RefType {
     case 0x73: return ValType.NullFuncRef;
     case 0x72: return ValType.NullExternRef;
     case 0x71: return ValType.NullRef;
+    case 0x69: return ValType.ExnRef;
+    case 0x74: return ValType.NullExnRef;
     // Typed reference: (ref null $T) = 0x63, (ref $T) = 0x64
     case 0x63: return { heap: readHeapType(r), nullable: true };
     case 0x64: return { heap: readHeapType(r), nullable: false };
@@ -321,10 +344,11 @@ function readValTypeByte(r: BinaryReader): ValType {
 function readBlockType(r: BinaryReader): (ValType | RefType)[] {
   const b = r.peekU8();
   if (b === 0x40) { r.readU8(); return []; }
-  // Any value type byte (MVP + GC ref types)
+  // Any value type byte (MVP + GC + EH ref types)
   if (b === 0x7f || b === 0x7e || b === 0x7d || b === 0x7c || b === 0x7b ||
       b === 0x70 || b === 0x6f || b === 0x6e || b === 0x6d || b === 0x6c ||
       b === 0x6b || b === 0x6a || b === 0x73 || b === 0x72 || b === 0x71 ||
+      b === 0x69 || b === 0x74 ||
       b === 0x63 || b === 0x64) {
     return [readValueType(r)];
   }
@@ -365,6 +389,7 @@ class WasmParser {
   private funcTypeIndices: number[] = [];
   private globalInfos: GlobalInfo[] = [];
   private tableNames: string[] = [];
+  private tagInfos: TagInfo[] = [];
 
   constructor(bytes: Uint8Array) {
     this.r = new BinaryReader(bytes);
@@ -374,8 +399,13 @@ class WasmParser {
     this.readHeader();
     this.readSections();
     const mod = this.builder.build();
-    // Attach heap type definitions collected from the type section
-    return { ...mod, heapTypes: this.heapTypeDefs, hasGC: this.heapTypeDefs.length > 0 };
+    return {
+      ...mod,
+      heapTypes: this.heapTypeDefs,
+      hasGC: this.heapTypeDefs.length > 0,
+      tags: this.tagInfos.map((t, i) => ({ name: `$tag${i}`, params: t.params })),
+      hasExceptionHandling: this.tagInfos.length > 0 || mod.hasExceptionHandling,
+    };
   }
 
 
@@ -407,6 +437,7 @@ class WasmParser {
         case SECTION_CODE:     this.readCodeSection(); break;
         case SECTION_DATA:     this.readDataSection(); break;
         case SECTION_DATA_COUNT: this.r.readU32(); break;
+        case SECTION_TAG:      this.readTagSection(); break;
         case SECTION_CUSTOM:   this.readCustomSection(start, end); break;
         default:               this.r.seek(end); break;
       }
@@ -641,6 +672,7 @@ class WasmParser {
       funcTypeIndices: this.funcTypeIndices,
       globalInfos: this.globalInfos,
       tableNames: this.tableNames,
+      tagInfos: this.tagInfos,
     };
     for (let i = 0; i < count; i++) {
       const bodySize = this.r.readU32();
@@ -678,6 +710,16 @@ class WasmParser {
         const data = this.r.readBytes(dataLen);
         this.builder.addDataSegment(`$data${i}`, offset, data);
       }
+    }
+  }
+
+  private readTagSection(): void {
+    const count = this.r.readU32();
+    for (let i = 0; i < count; i++) {
+      this.r.readU8(); // reserved attribute byte (must be 0)
+      const typeIdx = this.r.readU32();
+      const ft = this.funcTypes[typeIdx] ?? { params: [], results: [] };
+      this.tagInfos.push({ name: `$tag${this.tagInfos.length}`, params: ft.params });
     }
   }
 
@@ -804,6 +846,50 @@ class WasmParser {
           }
           break;
         }
+
+        case 0x06: { // try (old EH)
+          const rts = readBlockType(r);
+          frames.push({
+            kind: "try", label: freshLabel(), resultTypes: rts, exprs: [],
+            catchTags: [], catchBodies: [], delegateTarget: null,
+          });
+          break;
+        }
+        case 0x07: { // catch $tag (old EH)
+          const tagIdx = r.readU32();
+          const tagName = ctx.tagInfos[tagIdx]?.name ?? `$tag${tagIdx}`;
+          const frame = frames[frames.length - 1];
+          if (frame.kind === "try" || frame.kind === "catch") {
+            // save current body
+            if (frame.kind === "try") {
+              frame.tryBody = frame.exprs;
+            } else {
+              frame.catchBodies!.push(frame.exprs);
+            }
+            frame.exprs = [makePop(ValType.I32)]; // Pop pseudo-instruction as placeholder
+            frame.catchTags!.push(tagName);
+            frame.kind = "catch" as ControlFrameKind;
+          }
+          break;
+        }
+        case 0x08: { // throw $tag
+          const tagIdx = r.readU32();
+          const tagName = ctx.tagInfos[tagIdx]?.name ?? `$tag${tagIdx}`;
+          const tagParams = ctx.tagInfos[tagIdx]?.params ?? [];
+          const operands = popN(tagParams.length);
+          push(makeThrow(tagName, operands));
+          break;
+        }
+        case 0x09: { // rethrow $depth (old EH)
+          const depth = r.readU32();
+          push(makeRethrow(resolveLabel(frames, depth)));
+          break;
+        }
+        case 0x0a: { // throw_ref (new EH)
+          push(makeThrowRef(pop()));
+          break;
+        }
+
         case 0x0b: { // end
           if (frames[frames.length - 1].kind === "func") {
             break decode; // leave func frame on stack for body assembly
@@ -825,6 +911,18 @@ class WasmParser {
           } else if (frame.kind === "loop") {
             const body = sealFrame(frame);
             push(makeLoop(frame.label, body, resultType));
+          } else if (frame.kind === "try" || frame.kind === "catch") {
+            const tryBodyExprs = frame.kind === "try" ? frame.exprs : (frame.tryBody ?? []);
+            const tryBody = tryBodyExprs.length === 1 ? tryBodyExprs[0] : makeBlock(tryBodyExprs, null);
+            const allCatchBodies = [...(frame.catchBodies ?? [])];
+            if (frame.kind === "catch") allCatchBodies.push(frame.exprs);
+            const catchBodyExprs = allCatchBodies.map((ce) =>
+              ce.length === 1 ? ce[0] : makeBlock(ce, null)
+            );
+            push(makeTry(frame.label, tryBody, frame.catchTags ?? [], catchBodyExprs, null, resultType));
+          } else if (frame.kind === "try_table") {
+            const body = sealFrame(frame);
+            push(makeTryTable(frame.label, body, frame.tryCatches ?? [], resultType));
           } else {
             const body = sealFrame(frame);
             if (frame.exprs.length > 0 || frame.label) {
@@ -882,6 +980,54 @@ class WasmParser {
           const operands = popN(cft.params.length);
           const tableName = ctx.tableNames[0] ?? "$table0";
           push(makeCallIndirect(tableName, target, operands, cft.params, cft.results));
+          break;
+        }
+
+        case 0x18: { // delegate $depth (old EH — ends the try without end opcode)
+          const depth = r.readU32();
+          const frame = frames.pop()!;
+          const rts = frame.resultTypes;
+          const resultType: Type = rts.length === 0 ? None : rts.length === 1 ? rts[0] : rts;
+          const tryBody = frame.exprs.length === 1 ? frame.exprs[0] : makeBlock(frame.exprs, null);
+          push(makeTry(frame.label, tryBody, [], [], resolveLabel(frames, depth), resultType));
+          break;
+        }
+        case 0x19: { // catch_all (old EH)
+          const frame = frames[frames.length - 1];
+          if (frame.kind === "try" || frame.kind === "catch") {
+            if (frame.kind === "try") {
+              frame.tryBody = frame.exprs;
+            } else {
+              frame.catchBodies!.push(frame.exprs);
+            }
+            frame.exprs = [];
+            frame.catchTags!.push(""); // empty string = catch_all
+            frame.kind = "catch" as ControlFrameKind;
+          }
+          break;
+        }
+        case 0x1f: { // try_table blocktype (numHandlers handlers) (new EH)
+          const rts = readBlockType(r);
+          const numHandlers = r.readU32();
+          // Read catch clause data (tag+depth pairs) before pushing frame
+          const catchData: Array<{ tag: string | null; depth: number; isRef: boolean }> = [];
+          for (let i = 0; i < numHandlers; i++) {
+            const code = r.readU8();
+            let tag: string | null = null;
+            if (code === 0x00 || code === 0x01) { // catch / catch_ref
+              const tidx = r.readU32();
+              tag = ctx.tagInfos[tidx]?.name ?? `$tag${tidx}`;
+            }
+            const depth = r.readU32();
+            const isRef = code === 0x01 || code === 0x03;
+            catchData.push({ tag, depth, isRef });
+          }
+          // Push the frame first — catch dest depths are relative to this frame at depth 0
+          frames.push({ kind: "try_table", label: freshLabel(), resultTypes: rts, exprs: [], tryCatches: [] });
+          const catches: CatchClause[] = catchData.map(({ tag, depth, isRef }) => ({
+            tag, dest: resolveLabel(frames, depth), isRef,
+          }));
+          frames[frames.length - 1].tryCatches = catches;
           break;
         }
 
