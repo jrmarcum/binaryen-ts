@@ -47,6 +47,9 @@ import {
   type ArrayLenExpr, type RefTestExpr, type RefCastExpr, type BrOnExpr,
   BrOnOp,
   type TryTableExpr, type TryExpr, type ThrowExpr, type ThrowRefExpr, type RethrowExpr,
+  type SIMDExtractExpr, type SIMDReplaceExpr, type SIMDShuffleExpr,
+  type SIMDTernaryExpr, type SIMDShiftExpr, type SIMDLoadExpr, type SIMDLoadStoreLaneExpr,
+  SIMDLoadOp, SIMDLoadStoreLaneOp, SIMDTernaryOp,
 } from "../ir/expressions.ts";
 import {
   type DataSegment,
@@ -281,6 +284,150 @@ const BINARY_TO_OPCODE: Partial<Record<BinaryOp, number>> = {
   [BinaryOp.MinF64]: 0xa4,
   [BinaryOp.MaxF64]: 0xa5,
   [BinaryOp.CopySignF64]: 0xa6,
+};
+
+// SIMD unary ops — 0xFD prefix + U32 sub-opcode
+const SIMD_UNARY_SUBOP: Partial<Record<UnaryOp, number>> = {
+  [UnaryOp.SplatVecI8x16]: 0x0f, [UnaryOp.SplatVecI16x8]: 0x10,
+  [UnaryOp.SplatVecI32x4]: 0x11, [UnaryOp.SplatVecI64x2]: 0x12,
+  [UnaryOp.SplatVecF32x4]: 0x13, [UnaryOp.SplatVecF64x2]: 0x14,
+  [UnaryOp.NotVec128]: 0x4d, [UnaryOp.AnyTrueVec128]: 0x53,
+  [UnaryOp.AbsVecI8x16]: 0x60, [UnaryOp.NegVecI8x16]: 0x61,
+  [UnaryOp.PopcntVecI8x16]: 0x62, [UnaryOp.AllTrueVecI8x16]: 0x63, [UnaryOp.BitmaskVecI8x16]: 0x64,
+  [UnaryOp.CeilVecF32x4]: 0x67, [UnaryOp.FloorVecF32x4]: 0x68,
+  [UnaryOp.TruncVecF32x4]: 0x69, [UnaryOp.NearestVecF32x4]: 0x6a,
+  [UnaryOp.CeilVecF64x2]: 0x74, [UnaryOp.FloorVecF64x2]: 0x75,
+  [UnaryOp.TruncVecF64x2]: 0x7a, [UnaryOp.NearestVecF64x2]: 0x94,
+  [UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8]: 0x7c, [UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8]: 0x7d,
+  [UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4]: 0x7e, [UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4]: 0x7f,
+  [UnaryOp.AbsVecI16x8]: 0x80, [UnaryOp.NegVecI16x8]: 0x81,
+  [UnaryOp.AllTrueVecI16x8]: 0x83, [UnaryOp.BitmaskVecI16x8]: 0x84,
+  [UnaryOp.ExtendLowSVecI8x16ToI16x8]: 0x87, [UnaryOp.ExtendHighSVecI8x16ToI16x8]: 0x88,
+  [UnaryOp.ExtendLowUVecI8x16ToI16x8]: 0x89, [UnaryOp.ExtendHighUVecI8x16ToI16x8]: 0x8a,
+  [UnaryOp.AbsVecI32x4]: 0xa0, [UnaryOp.NegVecI32x4]: 0xa1,
+  [UnaryOp.AllTrueVecI32x4]: 0xa3, [UnaryOp.BitmaskVecI32x4]: 0xa4,
+  [UnaryOp.ExtendLowSVecI16x8ToI32x4]: 0xa7, [UnaryOp.ExtendHighSVecI16x8ToI32x4]: 0xa8,
+  [UnaryOp.ExtendLowUVecI16x8ToI32x4]: 0xa9, [UnaryOp.ExtendHighUVecI16x8ToI32x4]: 0xaa,
+  [UnaryOp.AbsVecI64x2]: 0xc0, [UnaryOp.NegVecI64x2]: 0xc1,
+  [UnaryOp.AllTrueVecI64x2]: 0xc3, [UnaryOp.BitmaskVecI64x2]: 0xc4,
+  [UnaryOp.ExtendLowSVecI32x4ToI64x2]: 0xc7, [UnaryOp.ExtendHighSVecI32x4ToI64x2]: 0xc8,
+  [UnaryOp.ExtendLowUVecI32x4ToI64x2]: 0xc9, [UnaryOp.ExtendHighUVecI32x4ToI64x2]: 0xca,
+  [UnaryOp.DemoteZeroVecF64x2ToF32x4]: 0x5e, [UnaryOp.PromoteLowVecF32x4ToF64x2]: 0x5f,
+  [UnaryOp.AbsVecF32x4]: 0xe0, [UnaryOp.NegVecF32x4]: 0xe1, [UnaryOp.SqrtVecF32x4]: 0xe3,
+  [UnaryOp.AbsVecF64x2]: 0xec, [UnaryOp.NegVecF64x2]: 0xed, [UnaryOp.SqrtVecF64x2]: 0xef,
+  [UnaryOp.TruncSatSVecF32x4ToI32x4]: 0xf8, [UnaryOp.TruncSatUVecF32x4ToI32x4]: 0xf9,
+  [UnaryOp.ConvertSVecI32x4ToF32x4]: 0xfa, [UnaryOp.ConvertUVecI32x4ToF32x4]: 0xfb,
+  [UnaryOp.TruncSatSVecF64x2ToI32x4Zero]: 0xfc, [UnaryOp.TruncSatUVecF64x2ToI32x4Zero]: 0xfd,
+  [UnaryOp.ConvertLowSVecI32x4ToF64x2]: 0xfe, [UnaryOp.ConvertLowUVecI32x4ToF64x2]: 0xff,
+};
+
+// SIMD binary ops — 0xFD prefix + U32 sub-opcode
+const SIMD_BINARY_SUBOP: Partial<Record<BinaryOp, number>> = {
+  [BinaryOp.SwizzleVecI8x16]: 0x0e,
+  [BinaryOp.EqVecI8x16]: 0x23, [BinaryOp.NeVecI8x16]: 0x24,
+  [BinaryOp.LtSVecI8x16]: 0x25, [BinaryOp.LtUVecI8x16]: 0x26,
+  [BinaryOp.GtSVecI8x16]: 0x27, [BinaryOp.GtUVecI8x16]: 0x28,
+  [BinaryOp.LeSVecI8x16]: 0x29, [BinaryOp.LeUVecI8x16]: 0x2a,
+  [BinaryOp.GeSVecI8x16]: 0x2b, [BinaryOp.GeUVecI8x16]: 0x2c,
+  [BinaryOp.EqVecI16x8]: 0x2d, [BinaryOp.NeVecI16x8]: 0x2e,
+  [BinaryOp.LtSVecI16x8]: 0x2f, [BinaryOp.LtUVecI16x8]: 0x30,
+  [BinaryOp.GtSVecI16x8]: 0x31, [BinaryOp.GtUVecI16x8]: 0x32,
+  [BinaryOp.LeSVecI16x8]: 0x33, [BinaryOp.LeUVecI16x8]: 0x34,
+  [BinaryOp.GeSVecI16x8]: 0x35, [BinaryOp.GeUVecI16x8]: 0x36,
+  [BinaryOp.EqVecI32x4]: 0x37, [BinaryOp.NeVecI32x4]: 0x38,
+  [BinaryOp.LtSVecI32x4]: 0x39, [BinaryOp.LtUVecI32x4]: 0x3a,
+  [BinaryOp.GtSVecI32x4]: 0x3b, [BinaryOp.GtUVecI32x4]: 0x3c,
+  [BinaryOp.LeSVecI32x4]: 0x3d, [BinaryOp.LeUVecI32x4]: 0x3e,
+  [BinaryOp.GeSVecI32x4]: 0x3f, [BinaryOp.GeUVecI32x4]: 0x40,
+  [BinaryOp.EqVecF32x4]: 0x41, [BinaryOp.NeVecF32x4]: 0x42,
+  [BinaryOp.LtVecF32x4]: 0x43, [BinaryOp.GtVecF32x4]: 0x44,
+  [BinaryOp.LeVecF32x4]: 0x45, [BinaryOp.GeVecF32x4]: 0x46,
+  [BinaryOp.EqVecF64x2]: 0x47, [BinaryOp.NeVecF64x2]: 0x48,
+  [BinaryOp.LtVecF64x2]: 0x49, [BinaryOp.GtVecF64x2]: 0x4a,
+  [BinaryOp.LeVecF64x2]: 0x4b, [BinaryOp.GeVecF64x2]: 0x4c,
+  [BinaryOp.AndVec128]: 0x4e, [BinaryOp.AndNotVec128]: 0x4f,
+  [BinaryOp.OrVec128]: 0x50, [BinaryOp.XorVec128]: 0x51,
+  [BinaryOp.NarrowSVecI16x8ToI8x16]: 0x65, [BinaryOp.NarrowUVecI16x8ToI8x16]: 0x66,
+  [BinaryOp.AddVecI8x16]: 0x6e,
+  [BinaryOp.AddSatSVecI8x16]: 0x6f, [BinaryOp.AddSatUVecI8x16]: 0x70,
+  [BinaryOp.SubVecI8x16]: 0x71,
+  [BinaryOp.SubSatSVecI8x16]: 0x72, [BinaryOp.SubSatUVecI8x16]: 0x73,
+  [BinaryOp.MinSVecI8x16]: 0x76, [BinaryOp.MinUVecI8x16]: 0x77,
+  [BinaryOp.MaxSVecI8x16]: 0x78, [BinaryOp.MaxUVecI8x16]: 0x79,
+  [BinaryOp.AvgrUVecI8x16]: 0x7b,
+  [BinaryOp.Q15MulrSatSVecI16x8]: 0x82,
+  [BinaryOp.NarrowSVecI32x4ToI16x8]: 0x85, [BinaryOp.NarrowUVecI32x4ToI16x8]: 0x86,
+  [BinaryOp.AddVecI16x8]: 0x8e,
+  [BinaryOp.AddSatSVecI16x8]: 0x8f, [BinaryOp.AddSatUVecI16x8]: 0x90,
+  [BinaryOp.SubVecI16x8]: 0x91,
+  [BinaryOp.SubSatSVecI16x8]: 0x92, [BinaryOp.SubSatUVecI16x8]: 0x93,
+  [BinaryOp.MulVecI16x8]: 0x95,
+  [BinaryOp.MinSVecI16x8]: 0x96, [BinaryOp.MinUVecI16x8]: 0x97,
+  [BinaryOp.MaxSVecI16x8]: 0x98, [BinaryOp.MaxUVecI16x8]: 0x99,
+  [BinaryOp.AvgrUVecI16x8]: 0x9b,
+  [BinaryOp.ExtmulLowSVecI8x16ToI16x8]: 0x9c, [BinaryOp.ExtmulHighSVecI8x16ToI16x8]: 0x9d,
+  [BinaryOp.ExtmulLowUVecI8x16ToI16x8]: 0x9e, [BinaryOp.ExtmulHighUVecI8x16ToI16x8]: 0x9f,
+  [BinaryOp.AddVecI32x4]: 0xae, [BinaryOp.SubVecI32x4]: 0xb1, [BinaryOp.MulVecI32x4]: 0xb5,
+  [BinaryOp.MinSVecI32x4]: 0xb6, [BinaryOp.MinUVecI32x4]: 0xb7,
+  [BinaryOp.MaxSVecI32x4]: 0xb8, [BinaryOp.MaxUVecI32x4]: 0xb9,
+  [BinaryOp.DotSVecI16x8ToI32x4]: 0xba,
+  [BinaryOp.ExtmulLowSVecI16x8ToI32x4]: 0xbc, [BinaryOp.ExtmulHighSVecI16x8ToI32x4]: 0xbd,
+  [BinaryOp.ExtmulLowUVecI16x8ToI32x4]: 0xbe, [BinaryOp.ExtmulHighUVecI16x8ToI32x4]: 0xbf,
+  [BinaryOp.AddVecI64x2]: 0xce, [BinaryOp.SubVecI64x2]: 0xd1, [BinaryOp.MulVecI64x2]: 0xd5,
+  [BinaryOp.EqVecI64x2]: 0xd6, [BinaryOp.NeVecI64x2]: 0xd7,
+  [BinaryOp.LtSVecI64x2]: 0xd8, [BinaryOp.GtSVecI64x2]: 0xd9,
+  [BinaryOp.LeSVecI64x2]: 0xda, [BinaryOp.GeSVecI64x2]: 0xdb,
+  [BinaryOp.ExtmulLowSVecI32x4ToI64x2]: 0xdc, [BinaryOp.ExtmulHighSVecI32x4ToI64x2]: 0xdd,
+  [BinaryOp.ExtmulLowUVecI32x4ToI64x2]: 0xde, [BinaryOp.ExtmulHighUVecI32x4ToI64x2]: 0xdf,
+  [BinaryOp.AddVecF32x4]: 0xe4, [BinaryOp.SubVecF32x4]: 0xe5,
+  [BinaryOp.MulVecF32x4]: 0xe6, [BinaryOp.DivVecF32x4]: 0xe7,
+  [BinaryOp.MinVecF32x4]: 0xe8, [BinaryOp.MaxVecF32x4]: 0xe9,
+  [BinaryOp.PminVecF32x4]: 0xea, [BinaryOp.PmaxVecF32x4]: 0xeb,
+  [BinaryOp.AddVecF64x2]: 0xf0, [BinaryOp.SubVecF64x2]: 0xf1,
+  [BinaryOp.MulVecF64x2]: 0xf2, [BinaryOp.DivVecF64x2]: 0xf3,
+  [BinaryOp.MinVecF64x2]: 0xf4, [BinaryOp.MaxVecF64x2]: 0xf5,
+  [BinaryOp.PminVecF64x2]: 0xf6, [BinaryOp.PmaxVecF64x2]: 0xf7,
+};
+
+// SIMD shift op to sub-opcode
+const SIMD_SHIFT_SUBOP: Record<string, number> = {
+  "i8x16.shl": 0x6b,  "i8x16.shr_s": 0x6c, "i8x16.shr_u": 0x6d,
+  "i16x8.shl": 0x8b,  "i16x8.shr_s": 0x8c, "i16x8.shr_u": 0x8d,
+  "i32x4.shl": 0xab,  "i32x4.shr_s": 0xac, "i32x4.shr_u": 0xad,
+  "i64x2.shl": 0xcb,  "i64x2.shr_s": 0xcc, "i64x2.shr_u": 0xcd,
+};
+
+// SIMD extract op to (sub-opcode) — lane immediate follows
+const SIMD_EXTRACT_SUBOP: Record<string, number> = {
+  "i8x16.extract_lane_s": 0x15, "i8x16.extract_lane_u": 0x16,
+  "i16x8.extract_lane_s": 0x18, "i16x8.extract_lane_u": 0x19,
+  "i32x4.extract_lane": 0x1b, "i64x2.extract_lane": 0x1d,
+  "f32x4.extract_lane": 0x1f, "f64x2.extract_lane": 0x21,
+};
+
+// SIMD replace op to sub-opcode
+const SIMD_REPLACE_SUBOP: Record<string, number> = {
+  "i8x16.replace_lane": 0x17, "i16x8.replace_lane": 0x1a,
+  "i32x4.replace_lane": 0x1c, "i64x2.replace_lane": 0x1e,
+  "f32x4.replace_lane": 0x20, "f64x2.replace_lane": 0x22,
+};
+
+// SIMD load op to sub-opcode
+const SIMD_LOAD_SUBOP: Record<string, number> = {
+  "v128.load8x8_s": 0x01,  "v128.load8x8_u": 0x02,
+  "v128.load16x4_s": 0x03, "v128.load16x4_u": 0x04,
+  "v128.load32x2_s": 0x05, "v128.load32x2_u": 0x06,
+  "v128.load8_splat": 0x07, "v128.load16_splat": 0x08,
+  "v128.load32_splat": 0x09, "v128.load64_splat": 0x0a,
+  "v128.load32_zero": 0x5c, "v128.load64_zero": 0x5d,
+};
+
+// SIMD load/store lane op to sub-opcode
+const SIMD_LANE_SUBOP: Record<string, number> = {
+  "v128.load8_lane": 0x54,  "v128.load16_lane": 0x55,
+  "v128.load32_lane": 0x56, "v128.load64_lane": 0x57,
+  "v128.store8_lane": 0x58, "v128.store16_lane": 0x59,
+  "v128.store32_lane": 0x5a, "v128.store64_lane": 0x5b,
 };
 
 // Saturating-truncation unary ops that use the 0xFC prefix
@@ -956,6 +1103,7 @@ class WasmEncoder {
         if ("i32" in v) { w.writeU8(0x41); w.writeI32(v.i32); }
         else if ("i64" in v) { w.writeU8(0x42); w.writeI64(v.i64); }
         else if ("f32" in v) { w.writeU8(0x43); w.writeF32(v.f32); }
+        else if ("v128" in v) { w.writeU8(0xfd); w.writeU32(0x0c); w.writeBytes((v as { v128: Uint8Array }).v128); }
         else { w.writeU8(0x44); w.writeF64((v as { f64: number }).f64); }
         break;
       }
@@ -993,14 +1141,13 @@ class WasmEncoder {
       case ExpressionKind.Unary: {
         const e = expr as UnaryExpr;
         this.encodeExpr(w, e.value, labels);
-        const opcode = UNARY_TO_OPCODE[e.op];
-        if (opcode !== undefined) {
-          // Check if this is a sat-trunc that was decoded from a regular trunc opcode.
-          // The parser maps 0xFC sat-trunc sub-ops to the same UnaryOp as regular trunc,
-          // so we always emit the regular opcode here (not the 0xFC prefix variant).
-          w.writeU8(opcode);
+        const simdSub = SIMD_UNARY_SUBOP[e.op];
+        if (simdSub !== undefined) {
+          w.writeU8(0xfd); w.writeU32(simdSub);
         } else {
-          w.writeU8(0x01); // nop fallback
+          const opcode = UNARY_TO_OPCODE[e.op];
+          if (opcode !== undefined) w.writeU8(opcode);
+          else w.writeU8(0x01); // nop fallback
         }
         break;
       }
@@ -1009,9 +1156,14 @@ class WasmEncoder {
         const e = expr as BinaryExpr;
         this.encodeExpr(w, e.left, labels);
         this.encodeExpr(w, e.right, labels);
-        const opcode = BINARY_TO_OPCODE[e.op];
-        if (opcode !== undefined) w.writeU8(opcode);
-        else w.writeU8(0x01);
+        const simdSub = SIMD_BINARY_SUBOP[e.op];
+        if (simdSub !== undefined) {
+          w.writeU8(0xfd); w.writeU32(simdSub);
+        } else {
+          const opcode = BINARY_TO_OPCODE[e.op];
+          if (opcode !== undefined) w.writeU8(opcode);
+          else w.writeU8(0x01);
+        }
         break;
       }
 
@@ -1324,6 +1476,75 @@ class WasmEncoder {
         break;
       }
 
+      case ExpressionKind.SIMDExtract: {
+        const e = expr as SIMDExtractExpr;
+        this.encodeExpr(w, e.vec, labels);
+        const sub = SIMD_EXTRACT_SUBOP[e.op];
+        w.writeU8(0xfd); w.writeU32(sub ?? 0x15);
+        w.writeU8(e.lane);
+        break;
+      }
+
+      case ExpressionKind.SIMDReplace: {
+        const e = expr as SIMDReplaceExpr;
+        this.encodeExpr(w, e.vec, labels);
+        this.encodeExpr(w, e.value, labels);
+        const sub = SIMD_REPLACE_SUBOP[e.op];
+        w.writeU8(0xfd); w.writeU32(sub ?? 0x17);
+        w.writeU8(e.lane);
+        break;
+      }
+
+      case ExpressionKind.SIMDShuffle: {
+        const e = expr as SIMDShuffleExpr;
+        this.encodeExpr(w, e.left, labels);
+        this.encodeExpr(w, e.right, labels);
+        w.writeU8(0xfd); w.writeU32(0x0d);
+        w.writeBytes(e.mask);
+        break;
+      }
+
+      case ExpressionKind.SIMDTernary: {
+        const e = expr as SIMDTernaryExpr;
+        // Stack order: a pushed first, b second, c on top (decoder pops c,b,a)
+        this.encodeExpr(w, e.a, labels);
+        this.encodeExpr(w, e.b, labels);
+        this.encodeExpr(w, e.c, labels);
+        w.writeU8(0xfd); w.writeU32(0x52);
+        break;
+      }
+
+      case ExpressionKind.SIMDShift: {
+        const e = expr as SIMDShiftExpr;
+        this.encodeExpr(w, e.vec, labels);
+        this.encodeExpr(w, e.shift, labels);
+        const sub = SIMD_SHIFT_SUBOP[e.op];
+        w.writeU8(0xfd); w.writeU32(sub ?? 0x6b);
+        break;
+      }
+
+      case ExpressionKind.SIMDLoad: {
+        const e = expr as SIMDLoadExpr;
+        this.encodeExpr(w, e.ptr, labels);
+        const sub = SIMD_LOAD_SUBOP[e.op];
+        w.writeU8(0xfd); w.writeU32(sub ?? 0x01);
+        w.writeU32(e.align);
+        w.writeU32(e.offset);
+        break;
+      }
+
+      case ExpressionKind.SIMDLoadStoreLane: {
+        const e = expr as SIMDLoadStoreLaneExpr;
+        this.encodeExpr(w, e.ptr, labels);
+        this.encodeExpr(w, e.vec, labels);
+        const sub = SIMD_LANE_SUBOP[e.op];
+        w.writeU8(0xfd); w.writeU32(sub ?? 0x54);
+        w.writeU32(e.align);
+        w.writeU32(e.offset);
+        w.writeU8(e.lane);
+        break;
+      }
+
       default: {
         // Unknown / unsupported expression kind — emit nop
         w.writeU8(0x01);
@@ -1402,6 +1623,13 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
     }
     case ExpressionKind.Throw: for (const op of (expr as ThrowExpr).operands) visit(op); break;
     case ExpressionKind.ThrowRef: visit((expr as ThrowRefExpr).exnref); break;
+    case ExpressionKind.SIMDExtract: visit((expr as SIMDExtractExpr).vec); break;
+    case ExpressionKind.SIMDReplace: { const e = expr as SIMDReplaceExpr; visit(e.vec); visit(e.value); break; }
+    case ExpressionKind.SIMDShuffle: { const e = expr as SIMDShuffleExpr; visit(e.left); visit(e.right); break; }
+    case ExpressionKind.SIMDTernary: { const e = expr as SIMDTernaryExpr; visit(e.a); visit(e.b); visit(e.c); break; }
+    case ExpressionKind.SIMDShift: { const e = expr as SIMDShiftExpr; visit(e.vec); visit(e.shift); break; }
+    case ExpressionKind.SIMDLoad: visit((expr as SIMDLoadExpr).ptr); break;
+    case ExpressionKind.SIMDLoadStoreLane: { const e = expr as SIMDLoadStoreLaneExpr; visit(e.ptr); visit(e.vec); break; }
     default: break;
   }
 }

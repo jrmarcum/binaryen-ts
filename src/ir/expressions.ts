@@ -210,6 +210,79 @@ export enum UnaryOp {
   ExtendS8I64 = "i64.extend8_s",
   ExtendS16I64 = "i64.extend16_s",
   ExtendS32I64 = "i64.extend32_s",
+  // SIMD splats
+  SplatVecI8x16 = "i8x16.splat",
+  SplatVecI16x8 = "i16x8.splat",
+  SplatVecI32x4 = "i32x4.splat",
+  SplatVecI64x2 = "i64x2.splat",
+  SplatVecF32x4 = "f32x4.splat",
+  SplatVecF64x2 = "f64x2.splat",
+  // v128 unary
+  NotVec128 = "v128.not",
+  AnyTrueVec128 = "v128.any_true",
+  // i8x16 unary
+  AbsVecI8x16 = "i8x16.abs",
+  NegVecI8x16 = "i8x16.neg",
+  PopcntVecI8x16 = "i8x16.popcnt",
+  AllTrueVecI8x16 = "i8x16.all_true",
+  BitmaskVecI8x16 = "i8x16.bitmask",
+  // i16x8 unary
+  AbsVecI16x8 = "i16x8.abs",
+  NegVecI16x8 = "i16x8.neg",
+  AllTrueVecI16x8 = "i16x8.all_true",
+  BitmaskVecI16x8 = "i16x8.bitmask",
+  ExtendLowSVecI8x16ToI16x8 = "i16x8.extend_low_i8x16_s",
+  ExtendHighSVecI8x16ToI16x8 = "i16x8.extend_high_i8x16_s",
+  ExtendLowUVecI8x16ToI16x8 = "i16x8.extend_low_i8x16_u",
+  ExtendHighUVecI8x16ToI16x8 = "i16x8.extend_high_i8x16_u",
+  ExtaddPairwiseSVecI8x16ToI16x8 = "i16x8.extadd_pairwise_i8x16_s",
+  ExtaddPairwiseUVecI8x16ToI16x8 = "i16x8.extadd_pairwise_i8x16_u",
+  // i32x4 unary
+  AbsVecI32x4 = "i32x4.abs",
+  NegVecI32x4 = "i32x4.neg",
+  AllTrueVecI32x4 = "i32x4.all_true",
+  BitmaskVecI32x4 = "i32x4.bitmask",
+  ExtendLowSVecI16x8ToI32x4 = "i32x4.extend_low_i16x8_s",
+  ExtendHighSVecI16x8ToI32x4 = "i32x4.extend_high_i16x8_s",
+  ExtendLowUVecI16x8ToI32x4 = "i32x4.extend_low_i16x8_u",
+  ExtendHighUVecI16x8ToI32x4 = "i32x4.extend_high_i16x8_u",
+  ExtaddPairwiseSVecI16x8ToI32x4 = "i32x4.extadd_pairwise_i16x8_s",
+  ExtaddPairwiseUVecI16x8ToI32x4 = "i32x4.extadd_pairwise_i16x8_u",
+  TruncSatSVecF32x4ToI32x4 = "i32x4.trunc_sat_f32x4_s",
+  TruncSatUVecF32x4ToI32x4 = "i32x4.trunc_sat_f32x4_u",
+  TruncSatSVecF64x2ToI32x4Zero = "i32x4.trunc_sat_f64x2_s_zero",
+  TruncSatUVecF64x2ToI32x4Zero = "i32x4.trunc_sat_f64x2_u_zero",
+  // i64x2 unary
+  AbsVecI64x2 = "i64x2.abs",
+  NegVecI64x2 = "i64x2.neg",
+  AllTrueVecI64x2 = "i64x2.all_true",
+  BitmaskVecI64x2 = "i64x2.bitmask",
+  ExtendLowSVecI32x4ToI64x2 = "i64x2.extend_low_i32x4_s",
+  ExtendHighSVecI32x4ToI64x2 = "i64x2.extend_high_i32x4_s",
+  ExtendLowUVecI32x4ToI64x2 = "i64x2.extend_low_i32x4_u",
+  ExtendHighUVecI32x4ToI64x2 = "i64x2.extend_high_i32x4_u",
+  // f32x4 unary
+  AbsVecF32x4 = "f32x4.abs",
+  NegVecF32x4 = "f32x4.neg",
+  SqrtVecF32x4 = "f32x4.sqrt",
+  CeilVecF32x4 = "f32x4.ceil",
+  FloorVecF32x4 = "f32x4.floor",
+  TruncVecF32x4 = "f32x4.trunc",
+  NearestVecF32x4 = "f32x4.nearest",
+  DemoteZeroVecF64x2ToF32x4 = "f32x4.demote_f64x2_zero",
+  ConvertSVecI32x4ToF32x4 = "f32x4.convert_i32x4_s",
+  ConvertUVecI32x4ToF32x4 = "f32x4.convert_i32x4_u",
+  // f64x2 unary
+  AbsVecF64x2 = "f64x2.abs",
+  NegVecF64x2 = "f64x2.neg",
+  SqrtVecF64x2 = "f64x2.sqrt",
+  CeilVecF64x2 = "f64x2.ceil",
+  FloorVecF64x2 = "f64x2.floor",
+  TruncVecF64x2 = "f64x2.trunc",
+  NearestVecF64x2 = "f64x2.nearest",
+  PromoteLowVecF32x4ToF64x2 = "f64x2.promote_low_f32x4",
+  ConvertLowSVecI32x4ToF64x2 = "f64x2.convert_low_i32x4_s",
+  ConvertLowUVecI32x4ToF64x2 = "f64x2.convert_low_i32x4_u",
 }
 
 /** Binary operators. Mirrors `BinaryOp` in Binaryen. */
@@ -294,6 +367,159 @@ export enum BinaryOp {
   LeF64 = "f64.le",
   GtF64 = "f64.gt",
   GeF64 = "f64.ge",
+  // SIMD binary
+  SwizzleVecI8x16 = "i8x16.swizzle",
+  // i8x16 comparisons (return v128)
+  EqVecI8x16 = "i8x16.eq", NeVecI8x16 = "i8x16.ne",
+  LtSVecI8x16 = "i8x16.lt_s", LtUVecI8x16 = "i8x16.lt_u",
+  GtSVecI8x16 = "i8x16.gt_s", GtUVecI8x16 = "i8x16.gt_u",
+  LeSVecI8x16 = "i8x16.le_s", LeUVecI8x16 = "i8x16.le_u",
+  GeSVecI8x16 = "i8x16.ge_s", GeUVecI8x16 = "i8x16.ge_u",
+  // i16x8 comparisons
+  EqVecI16x8 = "i16x8.eq", NeVecI16x8 = "i16x8.ne",
+  LtSVecI16x8 = "i16x8.lt_s", LtUVecI16x8 = "i16x8.lt_u",
+  GtSVecI16x8 = "i16x8.gt_s", GtUVecI16x8 = "i16x8.gt_u",
+  LeSVecI16x8 = "i16x8.le_s", LeUVecI16x8 = "i16x8.le_u",
+  GeSVecI16x8 = "i16x8.ge_s", GeUVecI16x8 = "i16x8.ge_u",
+  // i32x4 comparisons
+  EqVecI32x4 = "i32x4.eq", NeVecI32x4 = "i32x4.ne",
+  LtSVecI32x4 = "i32x4.lt_s", LtUVecI32x4 = "i32x4.lt_u",
+  GtSVecI32x4 = "i32x4.gt_s", GtUVecI32x4 = "i32x4.gt_u",
+  LeSVecI32x4 = "i32x4.le_s", LeUVecI32x4 = "i32x4.le_u",
+  GeSVecI32x4 = "i32x4.ge_s", GeUVecI32x4 = "i32x4.ge_u",
+  // f32x4 comparisons
+  EqVecF32x4 = "f32x4.eq", NeVecF32x4 = "f32x4.ne",
+  LtVecF32x4 = "f32x4.lt", GtVecF32x4 = "f32x4.gt",
+  LeVecF32x4 = "f32x4.le", GeVecF32x4 = "f32x4.ge",
+  // f64x2 comparisons
+  EqVecF64x2 = "f64x2.eq", NeVecF64x2 = "f64x2.ne",
+  LtVecF64x2 = "f64x2.lt", GtVecF64x2 = "f64x2.gt",
+  LeVecF64x2 = "f64x2.le", GeVecF64x2 = "f64x2.ge",
+  // i64x2 comparisons
+  EqVecI64x2 = "i64x2.eq", NeVecI64x2 = "i64x2.ne",
+  LtSVecI64x2 = "i64x2.lt_s", GtSVecI64x2 = "i64x2.gt_s",
+  LeSVecI64x2 = "i64x2.le_s", GeSVecI64x2 = "i64x2.ge_s",
+  // v128 bitwise
+  AndVec128 = "v128.and", OrVec128 = "v128.or",
+  XorVec128 = "v128.xor", AndNotVec128 = "v128.andnot",
+  // i8x16 arithmetic
+  AddVecI8x16 = "i8x16.add",
+  AddSatSVecI8x16 = "i8x16.add_sat_s", AddSatUVecI8x16 = "i8x16.add_sat_u",
+  SubVecI8x16 = "i8x16.sub",
+  SubSatSVecI8x16 = "i8x16.sub_sat_s", SubSatUVecI8x16 = "i8x16.sub_sat_u",
+  MinSVecI8x16 = "i8x16.min_s", MinUVecI8x16 = "i8x16.min_u",
+  MaxSVecI8x16 = "i8x16.max_s", MaxUVecI8x16 = "i8x16.max_u",
+  AvgrUVecI8x16 = "i8x16.avgr_u",
+  NarrowSVecI16x8ToI8x16 = "i8x16.narrow_i16x8_s",
+  NarrowUVecI16x8ToI8x16 = "i8x16.narrow_i16x8_u",
+  // i16x8 arithmetic
+  AddVecI16x8 = "i16x8.add",
+  AddSatSVecI16x8 = "i16x8.add_sat_s", AddSatUVecI16x8 = "i16x8.add_sat_u",
+  SubVecI16x8 = "i16x8.sub",
+  SubSatSVecI16x8 = "i16x8.sub_sat_s", SubSatUVecI16x8 = "i16x8.sub_sat_u",
+  MulVecI16x8 = "i16x8.mul",
+  MinSVecI16x8 = "i16x8.min_s", MinUVecI16x8 = "i16x8.min_u",
+  MaxSVecI16x8 = "i16x8.max_s", MaxUVecI16x8 = "i16x8.max_u",
+  AvgrUVecI16x8 = "i16x8.avgr_u",
+  Q15MulrSatSVecI16x8 = "i16x8.q15mulr_sat_s",
+  NarrowSVecI32x4ToI16x8 = "i16x8.narrow_i32x4_s",
+  NarrowUVecI32x4ToI16x8 = "i16x8.narrow_i32x4_u",
+  ExtmulLowSVecI8x16ToI16x8 = "i16x8.extmul_low_i8x16_s",
+  ExtmulHighSVecI8x16ToI16x8 = "i16x8.extmul_high_i8x16_s",
+  ExtmulLowUVecI8x16ToI16x8 = "i16x8.extmul_low_i8x16_u",
+  ExtmulHighUVecI8x16ToI16x8 = "i16x8.extmul_high_i8x16_u",
+  // i32x4 arithmetic
+  AddVecI32x4 = "i32x4.add", SubVecI32x4 = "i32x4.sub", MulVecI32x4 = "i32x4.mul",
+  MinSVecI32x4 = "i32x4.min_s", MinUVecI32x4 = "i32x4.min_u",
+  MaxSVecI32x4 = "i32x4.max_s", MaxUVecI32x4 = "i32x4.max_u",
+  DotSVecI16x8ToI32x4 = "i32x4.dot_i16x8_s",
+  ExtmulLowSVecI16x8ToI32x4 = "i32x4.extmul_low_i16x8_s",
+  ExtmulHighSVecI16x8ToI32x4 = "i32x4.extmul_high_i16x8_s",
+  ExtmulLowUVecI16x8ToI32x4 = "i32x4.extmul_low_i16x8_u",
+  ExtmulHighUVecI16x8ToI32x4 = "i32x4.extmul_high_i16x8_u",
+  // i64x2 arithmetic
+  AddVecI64x2 = "i64x2.add", SubVecI64x2 = "i64x2.sub", MulVecI64x2 = "i64x2.mul",
+  ExtmulLowSVecI32x4ToI64x2 = "i64x2.extmul_low_i32x4_s",
+  ExtmulHighSVecI32x4ToI64x2 = "i64x2.extmul_high_i32x4_s",
+  ExtmulLowUVecI32x4ToI64x2 = "i64x2.extmul_low_i32x4_u",
+  ExtmulHighUVecI32x4ToI64x2 = "i64x2.extmul_high_i32x4_u",
+  // f32x4 arithmetic
+  AddVecF32x4 = "f32x4.add", SubVecF32x4 = "f32x4.sub",
+  MulVecF32x4 = "f32x4.mul", DivVecF32x4 = "f32x4.div",
+  MinVecF32x4 = "f32x4.min", MaxVecF32x4 = "f32x4.max",
+  PminVecF32x4 = "f32x4.pmin", PmaxVecF32x4 = "f32x4.pmax",
+  // f64x2 arithmetic
+  AddVecF64x2 = "f64x2.add", SubVecF64x2 = "f64x2.sub",
+  MulVecF64x2 = "f64x2.mul", DivVecF64x2 = "f64x2.div",
+  MinVecF64x2 = "f64x2.min", MaxVecF64x2 = "f64x2.max",
+  PminVecF64x2 = "f64x2.pmin", PmaxVecF64x2 = "f64x2.pmax",
+}
+
+// ---------------------------------------------------------------------------
+// SIMD-specific operator enums
+// ---------------------------------------------------------------------------
+
+/** Lane extract operators. Mirrors `SIMDExtractOp` in Binaryen. */
+export enum SIMDExtractOp {
+  ExtractLaneSVecI8x16 = "i8x16.extract_lane_s",
+  ExtractLaneUVecI8x16 = "i8x16.extract_lane_u",
+  ExtractLaneSVecI16x8 = "i16x8.extract_lane_s",
+  ExtractLaneUVecI16x8 = "i16x8.extract_lane_u",
+  ExtractLaneVecI32x4 = "i32x4.extract_lane",
+  ExtractLaneVecI64x2 = "i64x2.extract_lane",
+  ExtractLaneVecF32x4 = "f32x4.extract_lane",
+  ExtractLaneVecF64x2 = "f64x2.extract_lane",
+}
+
+/** Lane replace operators. Mirrors `SIMDReplaceOp` in Binaryen. */
+export enum SIMDReplaceOp {
+  ReplaceLaneVecI8x16 = "i8x16.replace_lane",
+  ReplaceLaneVecI16x8 = "i16x8.replace_lane",
+  ReplaceLaneVecI32x4 = "i32x4.replace_lane",
+  ReplaceLaneVecI64x2 = "i64x2.replace_lane",
+  ReplaceLaneVecF32x4 = "f32x4.replace_lane",
+  ReplaceLaneVecF64x2 = "f64x2.replace_lane",
+}
+
+/** SIMD lane shift operators. Mirrors `SIMDShiftOp` in Binaryen. */
+export enum SIMDShiftOp {
+  ShlVecI8x16 = "i8x16.shl",  ShrSVecI8x16 = "i8x16.shr_s",  ShrUVecI8x16 = "i8x16.shr_u",
+  ShlVecI16x8 = "i16x8.shl",  ShrSVecI16x8 = "i16x8.shr_s",  ShrUVecI16x8 = "i16x8.shr_u",
+  ShlVecI32x4 = "i32x4.shl",  ShrSVecI32x4 = "i32x4.shr_s",  ShrUVecI32x4 = "i32x4.shr_u",
+  ShlVecI64x2 = "i64x2.shl",  ShrSVecI64x2 = "i64x2.shr_s",  ShrUVecI64x2 = "i64x2.shr_u",
+}
+
+/** SIMD extended-load operators. Mirrors `SIMDLoadOp` in Binaryen. */
+export enum SIMDLoadOp {
+  Load8SplatVec128 = "v128.load8_splat",
+  Load16SplatVec128 = "v128.load16_splat",
+  Load32SplatVec128 = "v128.load32_splat",
+  Load64SplatVec128 = "v128.load64_splat",
+  Load8x8SVec128 = "v128.load8x8_s",
+  Load8x8UVec128 = "v128.load8x8_u",
+  Load16x4SVec128 = "v128.load16x4_s",
+  Load16x4UVec128 = "v128.load16x4_u",
+  Load32x2SVec128 = "v128.load32x2_s",
+  Load32x2UVec128 = "v128.load32x2_u",
+  Load32ZeroVec128 = "v128.load32_zero",
+  Load64ZeroVec128 = "v128.load64_zero",
+}
+
+/** SIMD load/store lane operators. Mirrors `SIMDLoadStoreLaneOp` in Binaryen. */
+export enum SIMDLoadStoreLaneOp {
+  Load8LaneVec128 = "v128.load8_lane",
+  Load16LaneVec128 = "v128.load16_lane",
+  Load32LaneVec128 = "v128.load32_lane",
+  Load64LaneVec128 = "v128.load64_lane",
+  Store8LaneVec128 = "v128.store8_lane",
+  Store16LaneVec128 = "v128.store16_lane",
+  Store32LaneVec128 = "v128.store32_lane",
+  Store64LaneVec128 = "v128.store64_lane",
+}
+
+/** SIMD ternary operators. Mirrors `SIMDTernaryOp` in Binaryen. */
+export enum SIMDTernaryOp {
+  Bitselect = "v128.bitselect",
 }
 
 // ---------------------------------------------------------------------------
@@ -704,6 +930,73 @@ export interface PopExpr extends ExprBase {
 }
 
 // ---------------------------------------------------------------------------
+// SIMD expression node types
+// ---------------------------------------------------------------------------
+
+/** `*.extract_lane` — extract a scalar lane from a v128. */
+export interface SIMDExtractExpr extends ExprBase {
+  kind: ExpressionKind.SIMDExtract;
+  op: SIMDExtractOp;
+  vec: Expression;
+  lane: number;
+}
+
+/** `*.replace_lane` — replace a scalar lane in a v128. */
+export interface SIMDReplaceExpr extends ExprBase {
+  kind: ExpressionKind.SIMDReplace;
+  op: SIMDReplaceOp;
+  vec: Expression;
+  lane: number;
+  value: Expression;
+}
+
+/** `i8x16.shuffle` — byte-level permute of two v128 operands. */
+export interface SIMDShuffleExpr extends ExprBase {
+  kind: ExpressionKind.SIMDShuffle;
+  left: Expression;
+  right: Expression;
+  /** 16-byte immediate lane-select mask. */
+  mask: Uint8Array;
+}
+
+/** `v128.bitselect` and relaxed ternary SIMD ops. */
+export interface SIMDTernaryExpr extends ExprBase {
+  kind: ExpressionKind.SIMDTernary;
+  op: SIMDTernaryOp;
+  a: Expression;
+  b: Expression;
+  c: Expression;
+}
+
+/** `*.shl` / `*.shr_s` / `*.shr_u` — SIMD lane shift (vec: v128, shift: i32). */
+export interface SIMDShiftExpr extends ExprBase {
+  kind: ExpressionKind.SIMDShift;
+  op: SIMDShiftOp;
+  vec: Expression;
+  shift: Expression;
+}
+
+/** Extended SIMD loads: splat, extend (8x8/16x4/32x2), and zero-extend. */
+export interface SIMDLoadExpr extends ExprBase {
+  kind: ExpressionKind.SIMDLoad;
+  op: SIMDLoadOp;
+  ptr: Expression;
+  offset: number;
+  align: number;
+}
+
+/** `v128.loadN_lane` / `v128.storeN_lane`. */
+export interface SIMDLoadStoreLaneExpr extends ExprBase {
+  kind: ExpressionKind.SIMDLoadStoreLane;
+  op: SIMDLoadStoreLaneOp;
+  ptr: Expression;
+  vec: Expression;
+  offset: number;
+  align: number;
+  lane: number;
+}
+
+// ---------------------------------------------------------------------------
 // Top-level Expression union
 // ---------------------------------------------------------------------------
 
@@ -762,7 +1055,14 @@ export type Expression =
   | ThrowExpr
   | ThrowRefExpr
   | RethrowExpr
-  | PopExpr;
+  | PopExpr
+  | SIMDExtractExpr
+  | SIMDReplaceExpr
+  | SIMDShuffleExpr
+  | SIMDTernaryExpr
+  | SIMDShiftExpr
+  | SIMDLoadExpr
+  | SIMDLoadStoreLaneExpr;
 
 // ---------------------------------------------------------------------------
 // Builder helpers (factory functions)
@@ -1139,11 +1439,67 @@ export function makePop(type: Type): PopExpr {
   return { kind: ExpressionKind.Pop, type };
 }
 
+/** Creates a `v128.const` expression from 16 raw bytes. */
+export function makeV128Const(bytes: Uint8Array): ConstExpr {
+  return { kind: ExpressionKind.Const, type: ValType.V128, value: { v128: bytes } };
+}
+
+/** Creates a `*.extract_lane` SIMD expression. */
+export function makeSIMDExtract(op: SIMDExtractOp, vec: Expression, lane: number): SIMDExtractExpr {
+  const type = _simdExtractResultType(op);
+  return { kind: ExpressionKind.SIMDExtract, type, op, vec, lane };
+}
+
+/** Creates a `*.replace_lane` SIMD expression. */
+export function makeSIMDReplace(op: SIMDReplaceOp, vec: Expression, lane: number, value: Expression): SIMDReplaceExpr {
+  return { kind: ExpressionKind.SIMDReplace, type: ValType.V128, op, vec, lane, value };
+}
+
+/** Creates an `i8x16.shuffle` expression. */
+export function makeSIMDShuffle(left: Expression, right: Expression, mask: Uint8Array): SIMDShuffleExpr {
+  return { kind: ExpressionKind.SIMDShuffle, type: ValType.V128, left, right, mask };
+}
+
+/** Creates a `v128.bitselect` or relaxed ternary SIMD expression. */
+export function makeSIMDTernary(op: SIMDTernaryOp, a: Expression, b: Expression, c: Expression): SIMDTernaryExpr {
+  return { kind: ExpressionKind.SIMDTernary, type: ValType.V128, op, a, b, c };
+}
+
+/** Creates a `*.shl` / `*.shr_s` / `*.shr_u` SIMD shift expression. */
+export function makeSIMDShift(op: SIMDShiftOp, vec: Expression, shift: Expression): SIMDShiftExpr {
+  return { kind: ExpressionKind.SIMDShift, type: ValType.V128, op, vec, shift };
+}
+
+/** Creates a SIMD extended load expression (splat, extend, or zero-extend). */
+export function makeSIMDLoad(op: SIMDLoadOp, ptr: Expression, offset: number, align: number): SIMDLoadExpr {
+  return { kind: ExpressionKind.SIMDLoad, type: ValType.V128, op, ptr, offset, align };
+}
+
+/** Creates a `v128.loadN_lane` or `v128.storeN_lane` expression. */
+export function makeSIMDLoadStoreLane(
+  op: SIMDLoadStoreLaneOp,
+  ptr: Expression,
+  vec: Expression,
+  offset: number,
+  align: number,
+  lane: number,
+): SIMDLoadStoreLaneExpr {
+  const isStore = op === SIMDLoadStoreLaneOp.Store8LaneVec128 ||
+    op === SIMDLoadStoreLaneOp.Store16LaneVec128 ||
+    op === SIMDLoadStoreLaneOp.Store32LaneVec128 ||
+    op === SIMDLoadStoreLaneOp.Store64LaneVec128;
+  return { kind: ExpressionKind.SIMDLoadStoreLane, type: isStore ? None : ValType.V128, op, ptr, vec, offset, align, lane };
+}
+
 // ---------------------------------------------------------------------------
 // Internal type inference helpers
 // ---------------------------------------------------------------------------
 
 function inferBinaryType(op: BinaryOp): ValType {
+  // SIMD ops all return v128 (including SIMD comparisons, unlike scalar comparisons)
+  if (op.startsWith("i8x16.") || op.startsWith("i16x8.") || op.startsWith("i32x4.") ||
+      op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
+      op.startsWith("v128.")) return ValType.V128;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;
@@ -1151,8 +1507,21 @@ function inferBinaryType(op: BinaryOp): ValType {
 }
 
 function inferUnaryType(op: UnaryOp): ValType {
+  // SIMD reduction ops return i32
+  if (op.endsWith(".all_true") || op.endsWith(".bitmask") || op === UnaryOp.AnyTrueVec128) return ValType.I32;
+  // All other SIMD ops return v128
+  if (op.startsWith("i8x16.") || op.startsWith("i16x8.") || op.startsWith("i32x4.") ||
+      op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
+      op.startsWith("v128.")) return ValType.V128;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;
   return ValType.F64;
+}
+
+function _simdExtractResultType(op: SIMDExtractOp): ValType {
+  if (op === SIMDExtractOp.ExtractLaneVecI64x2) return ValType.I64;
+  if (op === SIMDExtractOp.ExtractLaneVecF32x4) return ValType.F32;
+  if (op === SIMDExtractOp.ExtractLaneVecF64x2) return ValType.F64;
+  return ValType.I32;
 }

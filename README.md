@@ -145,7 +145,7 @@ deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -
 
 | Mode | What runs | Use when |
 | ---- | --------- | -------- |
-| **Native TypeScript** (default) | Built-in passes in `src/passes/` — no subprocess, no binary | Default; all phases 0–8 complete |
+| **Native TypeScript** (default) | Built-in passes in `src/passes/` — no subprocess, no binary | Default; all phases 0–9 complete |
 | **Hybrid subprocess** (`--hybrid`) | Upstream `wasm-opt` binary on `PATH` | Maximum optimization fidelity; requires installed `wasm-opt` |
 | **Hybrid binaryen.js** | Upstream `binaryen.js` WASM binary | Deferred — not on critical path |
 
@@ -179,7 +179,7 @@ This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 | 6 | ✅ Done | `wasm-opt` native CLI — pure TypeScript pipeline, no subprocess; `RemoveUnusedNames` pass |
 | 7 | ✅ Done | GC proposal — heap types, struct/array/ref instructions, binary parser + encoder + WAT parser |
 | 8 | ✅ Done | Exception-handling proposal — tags, throw/throw_ref/rethrow/try_table, binary parser + encoder + WAT parser |
-| 9 | Planned | SIMD instructions |
+| 9 | ✅ Done | SIMD instructions — v128, all lane types, 0xFD prefix decoder + encoder + WAT parser, 20/20 tests |
 | 10 | Planned | Compile performance-critical passes to WASM via `wasic` |
 
 ## Contributing

@@ -13,7 +13,11 @@
  * @license MIT OR Apache-2.0
  */
 
-import { Expression, ExpressionKind } from "./expressions.ts";
+import {
+  Expression, ExpressionKind,
+  type SIMDExtractExpr, type SIMDReplaceExpr, type SIMDShuffleExpr,
+  type SIMDTernaryExpr, type SIMDShiftExpr, type SIMDLoadExpr, type SIMDLoadStoreLaneExpr,
+} from "./expressions.ts";
 
 // ---------------------------------------------------------------------------
 // mapExpression — bottom-up tree transform
@@ -264,6 +268,37 @@ function _mapChildren(
     case ExpressionKind.ThrowRef:
       return { ...expr, exnref: mapExpression(expr.exnref, fn) };
 
+    case ExpressionKind.SIMDExtract:
+      return { ...(expr as SIMDExtractExpr), vec: mapExpression((expr as SIMDExtractExpr).vec, fn) };
+
+    case ExpressionKind.SIMDReplace: {
+      const e = expr as SIMDReplaceExpr;
+      return { ...e, vec: mapExpression(e.vec, fn), value: mapExpression(e.value, fn) };
+    }
+
+    case ExpressionKind.SIMDShuffle: {
+      const e = expr as SIMDShuffleExpr;
+      return { ...e, left: mapExpression(e.left, fn), right: mapExpression(e.right, fn) };
+    }
+
+    case ExpressionKind.SIMDTernary: {
+      const e = expr as SIMDTernaryExpr;
+      return { ...e, a: mapExpression(e.a, fn), b: mapExpression(e.b, fn), c: mapExpression(e.c, fn) };
+    }
+
+    case ExpressionKind.SIMDShift: {
+      const e = expr as SIMDShiftExpr;
+      return { ...e, vec: mapExpression(e.vec, fn), shift: mapExpression(e.shift, fn) };
+    }
+
+    case ExpressionKind.SIMDLoad:
+      return { ...(expr as SIMDLoadExpr), ptr: mapExpression((expr as SIMDLoadExpr).ptr, fn) };
+
+    case ExpressionKind.SIMDLoadStoreLane: {
+      const e = expr as SIMDLoadStoreLaneExpr;
+      return { ...e, ptr: mapExpression(e.ptr, fn), vec: mapExpression(e.vec, fn) };
+    }
+
     // Leaf nodes — no children to transform
     case ExpressionKind.Nop:
     case ExpressionKind.Unreachable:
@@ -427,6 +462,37 @@ function _visitChildren(
     case ExpressionKind.ThrowRef:
       visit(expr.exnref);
       break;
+    case ExpressionKind.SIMDExtract:
+      visit((expr as SIMDExtractExpr).vec);
+      break;
+    case ExpressionKind.SIMDReplace: {
+      const e = expr as SIMDReplaceExpr;
+      visit(e.vec); visit(e.value);
+      break;
+    }
+    case ExpressionKind.SIMDShuffle: {
+      const e = expr as SIMDShuffleExpr;
+      visit(e.left); visit(e.right);
+      break;
+    }
+    case ExpressionKind.SIMDTernary: {
+      const e = expr as SIMDTernaryExpr;
+      visit(e.a); visit(e.b); visit(e.c);
+      break;
+    }
+    case ExpressionKind.SIMDShift: {
+      const e = expr as SIMDShiftExpr;
+      visit(e.vec); visit(e.shift);
+      break;
+    }
+    case ExpressionKind.SIMDLoad:
+      visit((expr as SIMDLoadExpr).ptr);
+      break;
+    case ExpressionKind.SIMDLoadStoreLane: {
+      const e = expr as SIMDLoadStoreLaneExpr;
+      visit(e.ptr); visit(e.vec);
+      break;
+    }
     default:
       break;
   }

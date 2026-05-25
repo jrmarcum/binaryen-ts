@@ -84,7 +84,7 @@ Implementation files: `src/binary/reader.ts` (LEB128 + raw reads), `src/binary/w
 - [x] Instruction decoder — opcode byte(s) → `Expression` node
   - [x] All MVP opcodes (control flow, numeric, memory, parametric)
   - [x] Multi-byte opcodes: `0xFC` prefix (bulk memory, saturating trunc)
-  - [x] SIMD: `0xFD` prefix — stubbed as `nop` (Phase 9)
+  - [x] SIMD: `0xFD` prefix — fully decoded (Phase 9 ✅)
   - [x] Atomics: `0xFE` prefix — stubbed as `nop` (future)
   - [x] GC: `0xFB` prefix — full struct/array/ref/i31/br_on decoder (Phase 7 ✅)
 - [x] `parseWasm(bytes: Uint8Array, filename?: string): WasmModule` — public entry point
@@ -141,7 +141,7 @@ Reference: `upstream/src/wasm-binary.h`
 - `if` block labels: encoded with an empty label string (no impact on correctness)
 - Saturating-truncation ops (`0xFC` prefix trunc) emitted as regular trunc (correct semantics, non-trapping flavor lost)
 - GC expression kinds — fully encoded (Phase 7 ✅)
-- EH expression kinds fully encoded (Phase 8 ✅); SIMD falls through to nop (Phase 9)
+- EH expression kinds fully encoded (Phase 8 ✅); SIMD fully encoded (Phase 9 ✅)
 
 ---
 
@@ -322,17 +322,69 @@ Reference: `upstream/src/passes/` (EH-related passes)
 
 ---
 
-## Phase 9 — SIMD Instructions
+## Phase 9 — SIMD Instructions ✅ COMPLETE
 
 Reference: `upstream/src/wasm.h` (SIMD expression types)
 
-**Goal**: Full SIMD (v128) expression support.
+**Goal**: Full SIMD (v128) expression support — `0xFD` prefix with U32 LEB128 sub-opcodes.
 
-- [ ] `v128.const`, `i8x16.splat`, etc.
-- [ ] Lane extract / replace
-- [ ] Shuffle
-- [ ] Arithmetic ops (add, sub, mul, min, max per lane type)
-- [ ] Parser + printer support
+- [x] **SIMD types and enums** (`src/ir/types.ts`, `src/ir/expressions.ts`)
+  - [x] `ValType.V128` — 128-bit SIMD vector type (byte 0x7b)
+  - [x] `SIMDExtractOp`, `SIMDReplaceOp`, `SIMDTernaryOp`, `SIMDShiftOp`, `SIMDLoadOp`, `SIMDLoadStoreLaneOp` enums
+  - [x] 7 specialized expression node types: `SIMDExtractExpr`, `SIMDReplaceExpr`, `SIMDShuffleExpr`, `SIMDTernaryExpr`, `SIMDShiftExpr`, `SIMDLoadExpr`, `SIMDLoadStoreLaneExpr`
+  - [x] Factory functions: `makeSIMDExtract`, `makeSIMDReplace`, `makeSIMDShuffle`, `makeSIMDTernary`, `makeSIMDShift`, `makeSIMDLoad`, `makeSIMDLoadStoreLane`
+  - [x] ~150 new `UnaryOp` values (splat, not, abs, neg, popcnt, ceil, floor, trunc, nearest, sqrt, promote, demote, convert, trunc_sat, any_true, all_true, bitmask, narrow, extend)
+  - [x] ~200 new `BinaryOp` values (add, sub, mul, min, max, avgr, dot, eq, ne, lt, gt, le, ge, shl, shr, and, or, xor, andnot, pmin, pmax, add_sat, sub_sat, swizzle, relaxed ops)
+  - [x] `inferUnaryType` / `inferBinaryType` updated to return `V128` for SIMD ops (SIMD prefix check before scalar prefix check)
+- [x] **`walk.ts` SIMD traversal** — `mapExpression` and `walkExpression` extended for all 7 SIMD node types
+- [x] **Binary parser SIMD support** (`src/binary/wasm-parser.ts`)
+  - [x] `0xFD` prefix with U32 LEB128 sub-opcode dispatch
+  - [x] `v128.const` (sub 0x0c) — reads 16 raw bytes
+  - [x] `i8x16.shuffle` (sub 0x0d) — reads 16 lane mask bytes
+  - [x] `i8x16.extract_lane_s/u`, `i16x8.extract_lane_s/u`, `i32x4.extract_lane`, `i64x2.extract_lane`, `f32x4.extract_lane`, `f64x2.extract_lane` (subs 0x15–0x1f)
+  - [x] `i8x16.replace_lane` through `f64x2.replace_lane` (subs 0x17–0x22)
+  - [x] All SIMD unary / binary arithmetic ops via lookup table (`SIMD_UNARY_SUB`, `SIMD_BINARY_SUB`)
+  - [x] `v128.bitselect` (sub 0x52) → `SIMDTernaryExpr`
+  - [x] SIMD shift ops (shl, shr_s, shr_u per lane type) → `SIMDShiftExpr`
+  - [x] SIMD load ops: `v128.load`, load8x8_s/u, load16x4_s/u, load32x2_s/u, load8_splat, load16_splat, load32_splat, load64_splat, load32_zero, load64_zero → `SIMDLoadExpr`
+  - [x] SIMD load/store lane: `v128.load8_lane` through `v128.store64_lane` → `SIMDLoadStoreLaneExpr`
+- [x] **Binary encoder SIMD support** (`src/encoder/wasm-encoder.ts`)
+  - [x] `v128.const` — writes 0xFD + U32(0x0c) + 16 raw bytes
+  - [x] SIMD unary/binary dispatch via `SIMD_UNARY_SUBOP` / `SIMD_BINARY_SUBOP` lookup tables (checked before scalar tables)
+  - [x] All 7 SIMD expression kinds encoded with correct sub-opcodes
+  - [x] `SIMDTernary` operand order: a first, c last (matches decoder's c,b,a pop order)
+  - [x] U32 LEB128 for sub-opcodes ≥ 0x80 (e.g., i32x4.add = 0xAE 0x01 in 2 bytes)
+  - [x] `walkChildren` extended for all 7 SIMD expression kinds
+- [x] **WAT parser SIMD support** (`src/parser/wat-parser.ts`)
+  - [x] `v128.const` → `parseSIMDConst` — parses `i32x4 1 2 3 4` / `i8x16 ...` / hex byte sequences
+  - [x] `i8x16.shuffle` → `parseSIMDShuffle` — 16 lane index operands
+  - [x] Extract/replace lane ops → `parseSIMDExtract` / `parseSIMDReplace` — `SIMD_EXTRACT_OPS` / `SIMD_REPLACE_OPS` tables
+  - [x] Shift ops → `parseSIMDShiftOp` — `SIMD_SHIFT_OPS` table
+  - [x] `v128.bitselect` → `parseSIMDBitselect`
+  - [x] SIMD load ops → `parseSIMDLoad` — `SIMD_LOAD_OPS` table
+  - [x] SIMD load/store lane → `parseSIMDLaneLdSt` — `SIMD_LANE_OPS` table
+  - [x] `UNARY_OPS` extended with ~50 SIMD unary entries
+  - [x] `BINARY_OPS` extended with ~85 SIMD binary entries
+  - [x] `inferUnaryResultType` / `inferBinaryResultType` return `V128` for SIMD ops
+- [x] **Tests** (`tests/binary/simd_test.ts`) — 20 tests, all passing
+  - [x] `v128.const` decoded; round-trip
+  - [x] `i32x4.splat` (unary) decoded; round-trip
+  - [x] `i32x4.add` (binary, 2-byte LEB128 sub-opcode 174) decoded; round-trip
+  - [x] `i8x16.shuffle` decoded with mask bytes; round-trip
+  - [x] Extract lane decoded; round-trip
+  - [x] Replace lane decoded; round-trip
+  - [x] SIMD shift (`i32x4.shl`) decoded; round-trip
+  - [x] `v128.bitselect` decoded; round-trip
+  - [x] `v128.load8x8_s` decoded; round-trip
+  - [x] `v128.load8_lane` decoded; round-trip
+- [x] Full test suite: 174/174 tests passing
+
+**Key design decisions**:
+
+- Most SIMD arithmetic/comparison ops reuse `UnaryExpr`/`BinaryExpr` with SIMD-valued `UnaryOp`/`BinaryOp` strings.
+- 7 dedicated node types only where the instruction requires extra operands (lane index, mask bytes, align/offset, shift amount).
+- SIMD prefix checks in `inferUnaryType`/`inferBinaryType` must come before scalar prefix checks to avoid misclassifying ops like `i32x4.splat` (starts with "i32") as returning `I32`.
+- `v128.bitselect` operand emit order is a,b,c (a pushed first); decoder pops c,b,a to reconstruct `SIMDTernary(a,b,c)`.
 
 ---
 

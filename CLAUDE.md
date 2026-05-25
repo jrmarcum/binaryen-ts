@@ -259,7 +259,8 @@ binaryen-ts/
 | 6 | ✅ Done | `wasm-opt` native CLI + RemoveUnusedNames pass — 14/14 tests passing |
 | 7 | ✅ Done | GC proposal — heap types, struct/array/ref instructions, binary parser + encoder + WAT parser, 141/141 tests |
 | 8 | ✅ Done | EH proposal — tags, throw/throw_ref/rethrow/try_table, binary parser + encoder + WAT parser, 13/13 tests |
-| 9+ | Planned | SIMD, wasic compilation |
+| 9 | ✅ Done | SIMD proposal — v128, all lane types, 0xFD prefix, binary parser + encoder + WAT parser, 20/20 tests |
+| 10+ | Planned | wasic compilation |
 
 ### Key Design Decisions
 
@@ -389,6 +390,24 @@ Key design decisions:
 - **`Pop` pseudo-instruction**: Used as EH catch binding placeholder; encoded as no-op (not emitted to binary); preserved by Vacuum pass (different kind from Nop).
 - **WAT parser EH support**: `tag` collected in first pass (`collectTag()`); `throw`, `throw_ref`, `rethrow`, `try_table`, `try` parsed in `parseListExpr`; `parseTryTable()` and `parseTry()` handle both new and old EH syntax.
 - **Tests in `tests/binary/eh_test.ts`**: hand-crafted binary modules for throw, try_table, throw_ref; 8 parser tests + 5 encoder round-trip tests = 13 total.
+
+#### SIMD proposal design (Phase 9)
+
+`src/ir/expressions.ts`, `src/binary/wasm-parser.ts`, `src/encoder/wasm-encoder.ts`, `src/parser/wat-parser.ts` extended.
+
+Key design decisions:
+
+- **`0xFD` prefix + U32 LEB128 sub-opcode**: all SIMD instructions use a two-byte (or more) encoding: `0xFD` followed by a U32 LEB128 sub-opcode (0x00–0xFF range, but sub-opcodes ≥ 0x80 require 2 LEB128 bytes, e.g., i32x4.add = 174 → `0xAE 0x01`).
+- **`ValType.V128`**: new 128-bit SIMD vector type; byte encoding 0x7b.
+- **Most ops reuse `UnaryExpr`/`BinaryExpr`**: splat, abs, neg, not, arithmetic, comparisons, conversions all use the existing node types with new `UnaryOp`/`BinaryOp` string enum values (e.g., `"i32x4.splat"`, `"i8x16.add"`). SIMD comparisons return `v128` (not `i32`).
+- **7 specialized node types** for instructions with extra operands: `SIMDExtractExpr` (extract_lane), `SIMDReplaceExpr` (replace_lane), `SIMDShuffleExpr` (i8x16.shuffle + 16-byte mask), `SIMDTernaryExpr` (v128.bitselect), `SIMDShiftExpr` (shl/shr_s/shr_u, takes vec+i32), `SIMDLoadExpr` (v128.load + splat/extend variants), `SIMDLoadStoreLaneExpr` (load/store lane ops).
+- **`inferUnaryType`/`inferBinaryType` ordering**: SIMD prefix checks (`"i8x16."`, `"i16x8."`, `"i32x4."`, `"i64x2."`, `"f32x4."`, `"f64x2."`, `"v128."`) must come before scalar prefix checks (`"i32"`, `"i64"`, etc.) in both `src/ir/expressions.ts` and `src/parser/wat-parser.ts`. Without this, ops like `"i32x4.splat"` (starts with `"i32"`) would be misclassified as returning `I32`.
+- **`v128.bitselect` operand order**: the binary encoding pushes operands a, b, c (a first, c on stack top); the decoder pops c, b, a and builds `SIMDTernary(a, b, c)`. The encoder must emit a first and c last to match.
+- **`v128.const`**: sub-opcode 0x0c followed by 16 raw bytes; stored as a `Uint8Array` on the `ConstExpr` (`{ v128: Uint8Array }` value variant).
+- **`i8x16.shuffle`**: sub-opcode 0x0d; 16 raw lane index bytes follow the two vector operands.
+- **SIMD load/store lane**: `v128.load8_lane` through `v128.store64_lane` (subs 0x54–0x61); take a ptr + vec operand pair plus align, offset, and lane index.
+- **WAT parser `atomInt()` return type**: `atomInt()` returns `number | bigint`; must wrap with `Number()` when using lane indices or byte values in arithmetic/array contexts.
+- **Tests in `tests/binary/simd_test.ts`**: hand-crafted binary modules for 10 instruction patterns; 10 parser tests + 10 encoder round-trip tests = 20 total.
 
 #### Upstream C++ reference
 

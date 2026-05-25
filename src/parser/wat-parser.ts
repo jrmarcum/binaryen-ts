@@ -71,6 +71,11 @@ import {
   makeArrayGet, makeArraySet, makeArrayLen,
   makeRefTest, makeRefCast, BrOnOp,
   makeThrow, makeThrowRef, makeRethrow, makeTryTable, makeTry,
+  makeV128Const, makeSIMDExtract, makeSIMDReplace, makeSIMDShuffle,
+  makeSIMDTernary, makeSIMDShift, makeSIMDLoad, makeSIMDLoadStoreLane,
+  SIMDExtractOp, SIMDReplaceOp, SIMDShiftOp, SIMDLoadOp, SIMDLoadStoreLaneOp, SIMDTernaryOp,
+  type SIMDExtractExpr, type SIMDReplaceExpr, type SIMDShuffleExpr,
+  type SIMDTernaryExpr, type SIMDShiftExpr, type SIMDLoadExpr, type SIMDLoadStoreLaneExpr,
 } from "../ir/expressions.ts";
 import {
   DataSegment,
@@ -556,12 +561,24 @@ class WatModuleParser {
       return { kind: ExpressionKind.MemoryFill, type: None, dest, value, size } as MemoryFillExpr;
     }
 
-    // Load instructions
-    const loadMatch = head.match(/^(i32|i64|f32|f64|v128)\.(load(?:8_[su]|16_[su]|32_[su]|64)?(?:_lane)?)$/);
+    // -----------------------------------------------------------------------
+    // SIMD instructions (must come before generic load/store/unary/binary)
+    // -----------------------------------------------------------------------
+    if (head === "v128.const") return this.parseSIMDConst(args);
+    if (head === "i8x16.shuffle") return this.parseSIMDShuffle(args, ctx);
+    if (head in SIMD_EXTRACT_OPS) return this.parseSIMDExtract(head, args, ctx);
+    if (head in SIMD_REPLACE_OPS) return this.parseSIMDReplace(head, args, ctx);
+    if (head in SIMD_SHIFT_OPS) return this.parseSIMDShiftOp(head, args, ctx);
+    if (head === "v128.bitselect") return this.parseSIMDBitselect(args, ctx);
+    if (head in SIMD_LOAD_OPS) return this.parseSIMDLoad(head, args, ctx);
+    if (head in SIMD_LANE_OPS) return this.parseSIMDLaneLdSt(head, args, ctx);
+
+    // Load instructions (v128.load = regular 16-byte load via LoadExpr)
+    const loadMatch = head.match(/^(i32|i64|f32|f64|v128)\.(load(?:8_[su]|16_[su]|32_[su]|64)?)$/);
     if (loadMatch) return this.parseLoad(head, list, args, ctx);
 
-    // Store instructions
-    const storeMatch = head.match(/^(i32|i64|f32|f64|v128)\.(store(?:8|16|32|64)?(?:_lane)?)$/);
+    // Store instructions (v128.store = regular 16-byte store via StoreExpr)
+    const storeMatch = head.match(/^(i32|i64|f32|f64|v128)\.(store(?:8|16|32|64)?)$/);
     if (storeMatch) return this.parseStore(head, list, args, ctx);
 
     // -----------------------------------------------------------------------
@@ -1005,6 +1022,120 @@ class WatModuleParser {
   }
 
   // -------------------------------------------------------------------------
+  // SIMD helpers
+  // -------------------------------------------------------------------------
+
+  private parseSIMDConst(args: SExpr[]): ConstExpr {
+    // (v128.const i8x16 b0 ... b15) or (v128.const i32x4 w0 w1 w2 w3) etc.
+    const laneType = atomText(args[0]) ?? "i8x16";
+    const bytes = new Uint8Array(16);
+    const vals = args.slice(1).map((a) => Number(atomInt(a as Atom) ?? 0));
+    if (laneType === "i8x16") {
+      for (let i = 0; i < 16; i++) bytes[i] = (vals[i] ?? 0) & 0xff;
+    } else if (laneType === "i16x8") {
+      const dv = new DataView(bytes.buffer);
+      for (let i = 0; i < 8; i++) dv.setInt16(i * 2, vals[i] ?? 0, true);
+    } else if (laneType === "i32x4") {
+      const dv = new DataView(bytes.buffer);
+      for (let i = 0; i < 4; i++) dv.setInt32(i * 4, vals[i] ?? 0, true);
+    } else if (laneType === "i64x2") {
+      const dv = new DataView(bytes.buffer);
+      for (let i = 0; i < 2; i++) dv.setBigInt64(i * 8, BigInt(atomInt(args[1 + i] as Atom) ?? 0), true);
+    } else if (laneType === "f32x4") {
+      const dv = new DataView(bytes.buffer);
+      for (let i = 0; i < 4; i++) dv.setFloat32(i * 4, atomFloat(args[1 + i] as Atom) ?? 0, true);
+    } else if (laneType === "f64x2") {
+      const dv = new DataView(bytes.buffer);
+      for (let i = 0; i < 2; i++) dv.setFloat64(i * 8, atomFloat(args[1 + i] as Atom) ?? 0, true);
+    }
+    return makeV128Const(bytes);
+  }
+
+  private parseSIMDShuffle(args: SExpr[], ctx: FuncContext): SIMDShuffleExpr {
+    // (i8x16.shuffle m0 m1 ... m15 <v1> <v2>)
+    // First 16 atoms are the mask bytes, then two expression operands
+    const mask = new Uint8Array(16);
+    let i = 0;
+    while (i < args.length && i < 16 && args[i].kind === "atom") {
+      mask[i] = Number(atomInt(args[i] as Atom) ?? 0) & 0xff;
+      i++;
+    }
+    const left = this.parseExpr(args[i], ctx);
+    const right = this.parseExpr(args[i + 1], ctx);
+    return makeSIMDShuffle(left, right, mask);
+  }
+
+  private parseSIMDExtract(head: string, args: SExpr[], ctx: FuncContext): SIMDExtractExpr {
+    // (i8x16.extract_lane_s <lane> <vec>)
+    const lane = Number(atomInt(args[0] as Atom) ?? 0);
+    const vec = this.parseExpr(args[1], ctx);
+    return makeSIMDExtract(SIMD_EXTRACT_OPS[head] as SIMDExtractOp, vec, lane);
+  }
+
+  private parseSIMDReplace(head: string, args: SExpr[], ctx: FuncContext): SIMDReplaceExpr {
+    // (i8x16.replace_lane <lane> <vec> <value>)
+    const lane = Number(atomInt(args[0] as Atom) ?? 0);
+    const vec = this.parseExpr(args[1], ctx);
+    const value = this.parseExpr(args[2], ctx);
+    return makeSIMDReplace(SIMD_REPLACE_OPS[head] as SIMDReplaceOp, vec, lane, value);
+  }
+
+  private parseSIMDShiftOp(head: string, args: SExpr[], ctx: FuncContext): SIMDShiftExpr {
+    // (i8x16.shl <vec> <shift>)
+    const vec = this.parseExpr(args[0], ctx);
+    const shift = this.parseExpr(args[1], ctx);
+    return makeSIMDShift(SIMD_SHIFT_OPS[head] as SIMDShiftOp, vec, shift);
+  }
+
+  private parseSIMDBitselect(args: SExpr[], ctx: FuncContext): SIMDTernaryExpr {
+    // (v128.bitselect <v1> <v2> <mask>)
+    const a = this.parseExpr(args[0], ctx);
+    const b = this.parseExpr(args[1], ctx);
+    const c = this.parseExpr(args[2], ctx);
+    return makeSIMDTernary(SIMDTernaryOp.Bitselect, a, b, c);
+  }
+
+  private parseSIMDLoad(head: string, args: SExpr[], ctx: FuncContext): SIMDLoadExpr {
+    // (v128.load8x8_s [offset=N] [align=N] <ptr>)
+    let offset = 0, align = 0, argIdx = 0;
+    while (argIdx < args.length && args[argIdx].kind === "atom") {
+      const raw = (args[argIdx] as Atom).token.raw;
+      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
+      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      break;
+    }
+    const ptr = this.parseExpr(args[argIdx], ctx);
+    return makeSIMDLoad(SIMD_LOAD_OPS[head] as SIMDLoadOp, ptr, offset, align);
+  }
+
+  private parseSIMDLaneLdSt(head: string, args: SExpr[], ctx: FuncContext): SIMDLoadStoreLaneExpr {
+    // (v128.load8_lane [offset=N] [align=N] <lane> <ptr> <vec>)
+    // OR: (v128.load8_lane <lane> [offset=N] [align=N] <ptr> <vec>)
+    // We accept lane as the first non-memarg integer, then memargs, then ptr, vec
+    let offset = 0, align = 0, argIdx = 0;
+    // Skip any leading memargs
+    while (argIdx < args.length && args[argIdx].kind === "atom") {
+      const raw = (args[argIdx] as Atom).token.raw;
+      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
+      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      break;
+    }
+    // Lane is the next integer atom
+    const lane = Number(atomInt(args[argIdx] as Atom) ?? 0);
+    argIdx++;
+    // Skip any trailing memargs
+    while (argIdx < args.length && args[argIdx].kind === "atom") {
+      const raw = (args[argIdx] as Atom).token.raw;
+      if (raw.startsWith("offset=")) { offset = parseInt(raw.slice(7)); argIdx++; continue; }
+      if (raw.startsWith("align="))  { align = parseInt(raw.slice(6)); argIdx++; continue; }
+      break;
+    }
+    const ptr = this.parseExpr(args[argIdx], ctx);
+    const vec = this.parseExpr(args[argIdx + 1], ctx);
+    return makeSIMDLoadStoreLane(SIMD_LANE_OPS[head] as SIMDLoadStoreLaneOp, ptr, vec, offset, align, lane);
+  }
+
+  // -------------------------------------------------------------------------
   // Globals / memory / table — first pass collection
   // -------------------------------------------------------------------------
 
@@ -1412,6 +1543,46 @@ interface RawFunc {
 // Operator lookup tables
 // ---------------------------------------------------------------------------
 
+// SIMD special-form op tables (used by parseSIMD* helpers)
+const SIMD_EXTRACT_OPS: Record<string, SIMDExtractOp> = {
+  "i8x16.extract_lane_s": SIMDExtractOp.ExtractLaneSVecI8x16,
+  "i8x16.extract_lane_u": SIMDExtractOp.ExtractLaneUVecI8x16,
+  "i16x8.extract_lane_s": SIMDExtractOp.ExtractLaneSVecI16x8,
+  "i16x8.extract_lane_u": SIMDExtractOp.ExtractLaneUVecI16x8,
+  "i32x4.extract_lane": SIMDExtractOp.ExtractLaneVecI32x4,
+  "i64x2.extract_lane": SIMDExtractOp.ExtractLaneVecI64x2,
+  "f32x4.extract_lane": SIMDExtractOp.ExtractLaneVecF32x4,
+  "f64x2.extract_lane": SIMDExtractOp.ExtractLaneVecF64x2,
+};
+const SIMD_REPLACE_OPS: Record<string, SIMDReplaceOp> = {
+  "i8x16.replace_lane": SIMDReplaceOp.ReplaceLaneVecI8x16,
+  "i16x8.replace_lane": SIMDReplaceOp.ReplaceLaneVecI16x8,
+  "i32x4.replace_lane": SIMDReplaceOp.ReplaceLaneVecI32x4,
+  "i64x2.replace_lane": SIMDReplaceOp.ReplaceLaneVecI64x2,
+  "f32x4.replace_lane": SIMDReplaceOp.ReplaceLaneVecF32x4,
+  "f64x2.replace_lane": SIMDReplaceOp.ReplaceLaneVecF64x2,
+};
+const SIMD_SHIFT_OPS: Record<string, SIMDShiftOp> = {
+  "i8x16.shl": SIMDShiftOp.ShlVecI8x16, "i8x16.shr_s": SIMDShiftOp.ShrSVecI8x16, "i8x16.shr_u": SIMDShiftOp.ShrUVecI8x16,
+  "i16x8.shl": SIMDShiftOp.ShlVecI16x8, "i16x8.shr_s": SIMDShiftOp.ShrSVecI16x8, "i16x8.shr_u": SIMDShiftOp.ShrUVecI16x8,
+  "i32x4.shl": SIMDShiftOp.ShlVecI32x4, "i32x4.shr_s": SIMDShiftOp.ShrSVecI32x4, "i32x4.shr_u": SIMDShiftOp.ShrUVecI32x4,
+  "i64x2.shl": SIMDShiftOp.ShlVecI64x2, "i64x2.shr_s": SIMDShiftOp.ShrSVecI64x2, "i64x2.shr_u": SIMDShiftOp.ShrUVecI64x2,
+};
+const SIMD_LOAD_OPS: Record<string, SIMDLoadOp> = {
+  "v128.load8_splat": SIMDLoadOp.Load8SplatVec128, "v128.load16_splat": SIMDLoadOp.Load16SplatVec128,
+  "v128.load32_splat": SIMDLoadOp.Load32SplatVec128, "v128.load64_splat": SIMDLoadOp.Load64SplatVec128,
+  "v128.load8x8_s": SIMDLoadOp.Load8x8SVec128, "v128.load8x8_u": SIMDLoadOp.Load8x8UVec128,
+  "v128.load16x4_s": SIMDLoadOp.Load16x4SVec128, "v128.load16x4_u": SIMDLoadOp.Load16x4UVec128,
+  "v128.load32x2_s": SIMDLoadOp.Load32x2SVec128, "v128.load32x2_u": SIMDLoadOp.Load32x2UVec128,
+  "v128.load32_zero": SIMDLoadOp.Load32ZeroVec128, "v128.load64_zero": SIMDLoadOp.Load64ZeroVec128,
+};
+const SIMD_LANE_OPS: Record<string, SIMDLoadStoreLaneOp> = {
+  "v128.load8_lane": SIMDLoadStoreLaneOp.Load8LaneVec128, "v128.load16_lane": SIMDLoadStoreLaneOp.Load16LaneVec128,
+  "v128.load32_lane": SIMDLoadStoreLaneOp.Load32LaneVec128, "v128.load64_lane": SIMDLoadStoreLaneOp.Load64LaneVec128,
+  "v128.store8_lane": SIMDLoadStoreLaneOp.Store8LaneVec128, "v128.store16_lane": SIMDLoadStoreLaneOp.Store16LaneVec128,
+  "v128.store32_lane": SIMDLoadStoreLaneOp.Store32LaneVec128, "v128.store64_lane": SIMDLoadStoreLaneOp.Store64LaneVec128,
+};
+
 const UNARY_OPS: Record<string, UnaryOp> = {
   "i32.clz": UnaryOp.ClzI32, "i32.ctz": UnaryOp.CtzI32, "i32.popcnt": UnaryOp.PopcntI32,
   "i32.eqz": UnaryOp.EqzI32,
@@ -1439,6 +1610,50 @@ const UNARY_OPS: Record<string, UnaryOp> = {
   "i32.extend8_s": UnaryOp.ExtendS8I32, "i32.extend16_s": UnaryOp.ExtendS16I32,
   "i64.extend8_s": UnaryOp.ExtendS8I64, "i64.extend16_s": UnaryOp.ExtendS16I64,
   "i64.extend32_s": UnaryOp.ExtendS32I64,
+  // SIMD splats
+  "i8x16.splat": UnaryOp.SplatVecI8x16, "i16x8.splat": UnaryOp.SplatVecI16x8,
+  "i32x4.splat": UnaryOp.SplatVecI32x4, "i64x2.splat": UnaryOp.SplatVecI64x2,
+  "f32x4.splat": UnaryOp.SplatVecF32x4, "f64x2.splat": UnaryOp.SplatVecF64x2,
+  // SIMD v128 bitwise/logical
+  "v128.not": UnaryOp.NotVec128, "v128.any_true": UnaryOp.AnyTrueVec128,
+  // SIMD i8x16
+  "i8x16.abs": UnaryOp.AbsVecI8x16, "i8x16.neg": UnaryOp.NegVecI8x16,
+  "i8x16.popcnt": UnaryOp.PopcntVecI8x16, "i8x16.all_true": UnaryOp.AllTrueVecI8x16, "i8x16.bitmask": UnaryOp.BitmaskVecI8x16,
+  // SIMD i16x8
+  "i16x8.abs": UnaryOp.AbsVecI16x8, "i16x8.neg": UnaryOp.NegVecI16x8,
+  "i16x8.all_true": UnaryOp.AllTrueVecI16x8, "i16x8.bitmask": UnaryOp.BitmaskVecI16x8,
+  "i16x8.extend_low_i8x16_s": UnaryOp.ExtendLowSVecI8x16ToI16x8, "i16x8.extend_high_i8x16_s": UnaryOp.ExtendHighSVecI8x16ToI16x8,
+  "i16x8.extend_low_i8x16_u": UnaryOp.ExtendLowUVecI8x16ToI16x8, "i16x8.extend_high_i8x16_u": UnaryOp.ExtendHighUVecI8x16ToI16x8,
+  "i16x8.extadd_pairwise_i8x16_s": UnaryOp.ExtaddPairwiseSVecI8x16ToI16x8,
+  "i16x8.extadd_pairwise_i8x16_u": UnaryOp.ExtaddPairwiseUVecI8x16ToI16x8,
+  // SIMD i32x4
+  "i32x4.abs": UnaryOp.AbsVecI32x4, "i32x4.neg": UnaryOp.NegVecI32x4,
+  "i32x4.all_true": UnaryOp.AllTrueVecI32x4, "i32x4.bitmask": UnaryOp.BitmaskVecI32x4,
+  "i32x4.extend_low_i16x8_s": UnaryOp.ExtendLowSVecI16x8ToI32x4, "i32x4.extend_high_i16x8_s": UnaryOp.ExtendHighSVecI16x8ToI32x4,
+  "i32x4.extend_low_i16x8_u": UnaryOp.ExtendLowUVecI16x8ToI32x4, "i32x4.extend_high_i16x8_u": UnaryOp.ExtendHighUVecI16x8ToI32x4,
+  "i32x4.extadd_pairwise_i16x8_s": UnaryOp.ExtaddPairwiseSVecI16x8ToI32x4,
+  "i32x4.extadd_pairwise_i16x8_u": UnaryOp.ExtaddPairwiseUVecI16x8ToI32x4,
+  // SIMD i64x2
+  "i64x2.abs": UnaryOp.AbsVecI64x2, "i64x2.neg": UnaryOp.NegVecI64x2,
+  "i64x2.all_true": UnaryOp.AllTrueVecI64x2, "i64x2.bitmask": UnaryOp.BitmaskVecI64x2,
+  "i64x2.extend_low_i32x4_s": UnaryOp.ExtendLowSVecI32x4ToI64x2, "i64x2.extend_high_i32x4_s": UnaryOp.ExtendHighSVecI32x4ToI64x2,
+  "i64x2.extend_low_i32x4_u": UnaryOp.ExtendLowUVecI32x4ToI64x2, "i64x2.extend_high_i32x4_u": UnaryOp.ExtendHighUVecI32x4ToI64x2,
+  // SIMD f32x4
+  "f32x4.abs": UnaryOp.AbsVecF32x4, "f32x4.neg": UnaryOp.NegVecF32x4, "f32x4.sqrt": UnaryOp.SqrtVecF32x4,
+  "f32x4.ceil": UnaryOp.CeilVecF32x4, "f32x4.floor": UnaryOp.FloorVecF32x4,
+  "f32x4.trunc": UnaryOp.TruncVecF32x4, "f32x4.nearest": UnaryOp.NearestVecF32x4,
+  "f32x4.convert_i32x4_s": UnaryOp.ConvertSVecI32x4ToF32x4, "f32x4.convert_i32x4_u": UnaryOp.ConvertUVecI32x4ToF32x4,
+  "f32x4.demote_f64x2_zero": UnaryOp.DemoteZeroVecF64x2ToF32x4,
+  // SIMD f64x2
+  "f64x2.abs": UnaryOp.AbsVecF64x2, "f64x2.neg": UnaryOp.NegVecF64x2, "f64x2.sqrt": UnaryOp.SqrtVecF64x2,
+  "f64x2.ceil": UnaryOp.CeilVecF64x2, "f64x2.floor": UnaryOp.FloorVecF64x2,
+  "f64x2.trunc": UnaryOp.TruncVecF64x2, "f64x2.nearest": UnaryOp.NearestVecF64x2,
+  "f64x2.promote_low_f32x4": UnaryOp.PromoteLowVecF32x4ToF64x2,
+  "f64x2.convert_low_i32x4_s": UnaryOp.ConvertLowSVecI32x4ToF64x2, "f64x2.convert_low_i32x4_u": UnaryOp.ConvertLowUVecI32x4ToF64x2,
+  // SIMD trunc_sat (conversion)
+  "i32x4.trunc_sat_f32x4_s": UnaryOp.TruncSatSVecF32x4ToI32x4, "i32x4.trunc_sat_f32x4_u": UnaryOp.TruncSatUVecF32x4ToI32x4,
+  "i32x4.trunc_sat_f64x2_s_zero": UnaryOp.TruncSatSVecF64x2ToI32x4Zero,
+  "i32x4.trunc_sat_f64x2_u_zero": UnaryOp.TruncSatUVecF64x2ToI32x4Zero,
 };
 
 const BINARY_OPS: Record<string, BinaryOp> = {
@@ -1476,9 +1691,83 @@ const BINARY_OPS: Record<string, BinaryOp> = {
   "f64.eq": BinaryOp.EqF64, "f64.ne": BinaryOp.NeF64,
   "f64.lt": BinaryOp.LtF64, "f64.le": BinaryOp.LeF64,
   "f64.gt": BinaryOp.GtF64, "f64.ge": BinaryOp.GeF64,
+  // SIMD swizzle
+  "i8x16.swizzle": BinaryOp.SwizzleVecI8x16,
+  // SIMD v128 bitwise
+  "v128.and": BinaryOp.AndVec128, "v128.andnot": BinaryOp.AndNotVec128,
+  "v128.or": BinaryOp.OrVec128, "v128.xor": BinaryOp.XorVec128,
+  // SIMD i8x16 binary
+  "i8x16.eq": BinaryOp.EqVecI8x16, "i8x16.ne": BinaryOp.NeVecI8x16,
+  "i8x16.lt_s": BinaryOp.LtSVecI8x16, "i8x16.lt_u": BinaryOp.LtUVecI8x16,
+  "i8x16.gt_s": BinaryOp.GtSVecI8x16, "i8x16.gt_u": BinaryOp.GtUVecI8x16,
+  "i8x16.le_s": BinaryOp.LeSVecI8x16, "i8x16.le_u": BinaryOp.LeUVecI8x16,
+  "i8x16.ge_s": BinaryOp.GeSVecI8x16, "i8x16.ge_u": BinaryOp.GeUVecI8x16,
+  "i8x16.add": BinaryOp.AddVecI8x16, "i8x16.sub": BinaryOp.SubVecI8x16,
+  "i8x16.add_sat_s": BinaryOp.AddSatSVecI8x16, "i8x16.add_sat_u": BinaryOp.AddSatUVecI8x16,
+  "i8x16.sub_sat_s": BinaryOp.SubSatSVecI8x16, "i8x16.sub_sat_u": BinaryOp.SubSatUVecI8x16,
+  "i8x16.min_s": BinaryOp.MinSVecI8x16, "i8x16.min_u": BinaryOp.MinUVecI8x16,
+  "i8x16.max_s": BinaryOp.MaxSVecI8x16, "i8x16.max_u": BinaryOp.MaxUVecI8x16,
+  "i8x16.avgr_u": BinaryOp.AvgrUVecI8x16,
+  "i8x16.narrow_i16x8_s": BinaryOp.NarrowSVecI16x8ToI8x16, "i8x16.narrow_i16x8_u": BinaryOp.NarrowUVecI16x8ToI8x16,
+  // SIMD i16x8 binary
+  "i16x8.eq": BinaryOp.EqVecI16x8, "i16x8.ne": BinaryOp.NeVecI16x8,
+  "i16x8.lt_s": BinaryOp.LtSVecI16x8, "i16x8.lt_u": BinaryOp.LtUVecI16x8,
+  "i16x8.gt_s": BinaryOp.GtSVecI16x8, "i16x8.gt_u": BinaryOp.GtUVecI16x8,
+  "i16x8.le_s": BinaryOp.LeSVecI16x8, "i16x8.le_u": BinaryOp.LeUVecI16x8,
+  "i16x8.ge_s": BinaryOp.GeSVecI16x8, "i16x8.ge_u": BinaryOp.GeUVecI16x8,
+  "i16x8.add": BinaryOp.AddVecI16x8, "i16x8.sub": BinaryOp.SubVecI16x8, "i16x8.mul": BinaryOp.MulVecI16x8,
+  "i16x8.add_sat_s": BinaryOp.AddSatSVecI16x8, "i16x8.add_sat_u": BinaryOp.AddSatUVecI16x8,
+  "i16x8.sub_sat_s": BinaryOp.SubSatSVecI16x8, "i16x8.sub_sat_u": BinaryOp.SubSatUVecI16x8,
+  "i16x8.min_s": BinaryOp.MinSVecI16x8, "i16x8.min_u": BinaryOp.MinUVecI16x8,
+  "i16x8.max_s": BinaryOp.MaxSVecI16x8, "i16x8.max_u": BinaryOp.MaxUVecI16x8,
+  "i16x8.avgr_u": BinaryOp.AvgrUVecI16x8,
+  "i16x8.q15mulr_sat_s": BinaryOp.Q15MulrSatSVecI16x8,
+  "i16x8.narrow_i32x4_s": BinaryOp.NarrowSVecI32x4ToI16x8, "i16x8.narrow_i32x4_u": BinaryOp.NarrowUVecI32x4ToI16x8,
+  "i16x8.extmul_low_i8x16_s": BinaryOp.ExtmulLowSVecI8x16ToI16x8, "i16x8.extmul_high_i8x16_s": BinaryOp.ExtmulHighSVecI8x16ToI16x8,
+  "i16x8.extmul_low_i8x16_u": BinaryOp.ExtmulLowUVecI8x16ToI16x8, "i16x8.extmul_high_i8x16_u": BinaryOp.ExtmulHighUVecI8x16ToI16x8,
+  // SIMD i32x4 binary
+  "i32x4.eq": BinaryOp.EqVecI32x4, "i32x4.ne": BinaryOp.NeVecI32x4,
+  "i32x4.lt_s": BinaryOp.LtSVecI32x4, "i32x4.lt_u": BinaryOp.LtUVecI32x4,
+  "i32x4.gt_s": BinaryOp.GtSVecI32x4, "i32x4.gt_u": BinaryOp.GtUVecI32x4,
+  "i32x4.le_s": BinaryOp.LeSVecI32x4, "i32x4.le_u": BinaryOp.LeUVecI32x4,
+  "i32x4.ge_s": BinaryOp.GeSVecI32x4, "i32x4.ge_u": BinaryOp.GeUVecI32x4,
+  "i32x4.add": BinaryOp.AddVecI32x4, "i32x4.sub": BinaryOp.SubVecI32x4, "i32x4.mul": BinaryOp.MulVecI32x4,
+  "i32x4.min_s": BinaryOp.MinSVecI32x4, "i32x4.min_u": BinaryOp.MinUVecI32x4,
+  "i32x4.max_s": BinaryOp.MaxSVecI32x4, "i32x4.max_u": BinaryOp.MaxUVecI32x4,
+  "i32x4.dot_i16x8_s": BinaryOp.DotSVecI16x8ToI32x4,
+  "i32x4.extmul_low_i16x8_s": BinaryOp.ExtmulLowSVecI16x8ToI32x4, "i32x4.extmul_high_i16x8_s": BinaryOp.ExtmulHighSVecI16x8ToI32x4,
+  "i32x4.extmul_low_i16x8_u": BinaryOp.ExtmulLowUVecI16x8ToI32x4, "i32x4.extmul_high_i16x8_u": BinaryOp.ExtmulHighUVecI16x8ToI32x4,
+  // SIMD i64x2 binary
+  "i64x2.eq": BinaryOp.EqVecI64x2, "i64x2.ne": BinaryOp.NeVecI64x2,
+  "i64x2.lt_s": BinaryOp.LtSVecI64x2, "i64x2.gt_s": BinaryOp.GtSVecI64x2,
+  "i64x2.le_s": BinaryOp.LeSVecI64x2, "i64x2.ge_s": BinaryOp.GeSVecI64x2,
+  "i64x2.add": BinaryOp.AddVecI64x2, "i64x2.sub": BinaryOp.SubVecI64x2, "i64x2.mul": BinaryOp.MulVecI64x2,
+  "i64x2.extmul_low_i32x4_s": BinaryOp.ExtmulLowSVecI32x4ToI64x2, "i64x2.extmul_high_i32x4_s": BinaryOp.ExtmulHighSVecI32x4ToI64x2,
+  "i64x2.extmul_low_i32x4_u": BinaryOp.ExtmulLowUVecI32x4ToI64x2, "i64x2.extmul_high_i32x4_u": BinaryOp.ExtmulHighUVecI32x4ToI64x2,
+  // SIMD f32x4 binary
+  "f32x4.eq": BinaryOp.EqVecF32x4, "f32x4.ne": BinaryOp.NeVecF32x4,
+  "f32x4.lt": BinaryOp.LtVecF32x4, "f32x4.gt": BinaryOp.GtVecF32x4,
+  "f32x4.le": BinaryOp.LeVecF32x4, "f32x4.ge": BinaryOp.GeVecF32x4,
+  "f32x4.add": BinaryOp.AddVecF32x4, "f32x4.sub": BinaryOp.SubVecF32x4,
+  "f32x4.mul": BinaryOp.MulVecF32x4, "f32x4.div": BinaryOp.DivVecF32x4,
+  "f32x4.min": BinaryOp.MinVecF32x4, "f32x4.max": BinaryOp.MaxVecF32x4,
+  "f32x4.pmin": BinaryOp.PminVecF32x4, "f32x4.pmax": BinaryOp.PmaxVecF32x4,
+  // SIMD f64x2 binary
+  "f64x2.eq": BinaryOp.EqVecF64x2, "f64x2.ne": BinaryOp.NeVecF64x2,
+  "f64x2.lt": BinaryOp.LtVecF64x2, "f64x2.gt": BinaryOp.GtVecF64x2,
+  "f64x2.le": BinaryOp.LeVecF64x2, "f64x2.ge": BinaryOp.GeVecF64x2,
+  "f64x2.add": BinaryOp.AddVecF64x2, "f64x2.sub": BinaryOp.SubVecF64x2,
+  "f64x2.mul": BinaryOp.MulVecF64x2, "f64x2.div": BinaryOp.DivVecF64x2,
+  "f64x2.min": BinaryOp.MinVecF64x2, "f64x2.max": BinaryOp.MaxVecF64x2,
+  "f64x2.pmin": BinaryOp.PminVecF64x2, "f64x2.pmax": BinaryOp.PmaxVecF64x2,
 };
 
 function inferUnaryResultType(op: string): ValType {
+  // SIMD ops that return i32 (reduction ops)
+  if (op.endsWith(".all_true") || op.endsWith(".bitmask") || op === "v128.any_true") return ValType.I32;
+  // SIMD ops — everything else returns v128
+  const simdPrefixes = ["i8x16.", "i16x8.", "i32x4.", "i64x2.", "f32x4.", "f64x2.", "v128."];
+  if (simdPrefixes.some((p) => op.startsWith(p))) return ValType.V128;
   if (op.startsWith("i32") || op.startsWith("i64.eqz")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;
@@ -1489,7 +1778,10 @@ function inferUnaryResultType(op: string): ValType {
 }
 
 function inferBinaryResultType(op: string): ValType {
-  // Comparison ops always return i32
+  // SIMD ops all return v128 (including SIMD comparisons — unlike scalar comparisons!)
+  const simdPrefixes = ["i8x16.", "i16x8.", "i32x4.", "i64x2.", "f32x4.", "f64x2.", "v128."];
+  if (simdPrefixes.some((p) => op.startsWith(p))) return ValType.V128;
+  // Scalar comparison ops return i32
   const cmpSuffixes = [".eq", ".ne", ".lt", ".le", ".gt", ".ge", ".lt_s", ".lt_u", ".le_s", ".le_u", ".gt_s", ".gt_u", ".ge_s", ".ge_u"];
   if (cmpSuffixes.some((s) => op.endsWith(s))) return ValType.I32;
   if (op.startsWith("i32")) return ValType.I32;
