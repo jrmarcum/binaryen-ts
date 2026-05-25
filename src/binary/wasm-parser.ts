@@ -1131,6 +1131,40 @@ class WasmParser {
           push(makeCallIndirect(tableName, target, operands, cft.params, cft.results));
           break;
         }
+        case 0x12: { // return_call (tail-call proposal)
+          const fidx = r.readU32();
+          const typeIdx = fidx < ctx.importedFuncCount
+            ? undefined
+            : ctx.funcTypeIndices[fidx - ctx.importedFuncCount];
+          const cft = typeIdx !== undefined ? ctx.funcTypes[typeIdx] : { params: [], results: [] };
+          const operands = popN(cft.params.length);
+          const resultType: Type = cft.results.length === 0
+            ? None
+            : cft.results.length === 1
+            ? cft.results[0]
+            : cft.results;
+          push(makeCall(`$func${fidx}`, operands, resultType, /* isReturn */ true));
+          break;
+        }
+        case 0x13: { // return_call_indirect (tail-call proposal)
+          const typeIdx = r.readU32();
+          r.readU32(); // table index
+          const cft = ctx.funcTypes[typeIdx] ?? { params: [], results: [] };
+          const target = pop();
+          const operands = popN(cft.params.length);
+          const tableName = ctx.tableNames[0] ?? "$table0";
+          push(
+            makeCallIndirect(
+              tableName,
+              target,
+              operands,
+              cft.params,
+              cft.results,
+              /* isReturn */ true,
+            ),
+          );
+          break;
+        }
 
         case 0x18: { // delegate $depth (old EH — ends the try without end opcode)
           const depth = r.readU32();

@@ -617,12 +617,19 @@ function zeroForType(type: ValType): Expression | null {
 // Core substitution — remap locals and convert returns to breaks
 // ---------------------------------------------------------------------------
 
-/** Remaps local indices and replaces `return` with `br $returnLabel` in a
- * deep-copied callee body. */
+/** Remaps local indices and (when `rewriteReturns` is true) replaces `return`
+ * with `br $returnLabel` in a deep-copied callee body.
+ *
+ * For tail-call (`return_call`) inlining we pass `rewriteReturns = false`:
+ * the callee's `return`s should propagate as the caller's `return`s directly,
+ * because `return_call $f(args)` semantically *is* `return f(args)` — the
+ * callee frame replaces the caller frame, and the callee's return exits the
+ * caller. See Phase 5.2. */
 function substituteBody(
   body: Expression,
   localMapping: number[],
   returnLabel: string,
+  rewriteReturns = true,
 ): Expression {
   return mapExpression(body, (e): Expression => {
     switch (e.kind) {
@@ -636,6 +643,7 @@ function substituteBody(
         return { ...e, index: localMapping[e.index] };
 
       case ExpressionKind.Return: {
+        if (!rewriteReturns) return e;
         const br: BreakExpr = {
           kind: ExpressionKind.Break,
           type: e.value ? e.value.type : None,
@@ -707,9 +715,11 @@ function inlineCallSite(
     }
   }
 
-  // Deep copy the callee body then substitute locals + returns.
+  // Deep copy the callee body then substitute locals (and, for non-tail
+  // calls, rewrite `return` → `br $wrapperLabel`). For tail calls we leave
+  // returns alone so they propagate out as the caller's returns.
   const bodyCopy = deepCopy(callee.body);
-  const substituted = substituteBody(bodyCopy, mapping, label);
+  const substituted = substituteBody(bodyCopy, mapping, label, !call.isReturn);
   children.push(substituted);
 
   // 4. Result type of the wrapper block.
@@ -731,6 +741,22 @@ function inlineCallSite(
         makeUnreachable(),
       ],
     );
+  }
+
+  // Tail-call (`return_call`) inlining. The callee's frame semantically
+  // replaces the caller's, so:
+  //   - Value-returning callee: the wrapper block's value is the value the
+  //     caller returns. Wrap in `(return <block>)`.
+  //   - Void-returning callee: execute the wrapper for side effects, then
+  //     return from the caller with no value. Sequence `[block, return(null)]`.
+  // Either way, `substituteBody` was called with `rewriteReturns=false`, so
+  // any explicit `return` inside the callee body propagates out of the
+  // caller as the caller's own return — matching tail-call semantics.
+  if (call.isReturn) {
+    if (retType === None) {
+      return makeBlock([block, { kind: ExpressionKind.Return, type: Unreachable, value: null }]);
+    }
+    return { kind: ExpressionKind.Return, type: Unreachable, value: block };
   }
 
   return block;

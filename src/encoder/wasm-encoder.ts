@@ -1429,7 +1429,8 @@ class WasmEncoder {
       case ExpressionKind.Call: {
         const e = expr as CallExpr;
         for (const op of e.operands) this.encodeExpr(w, op, labels);
-        w.writeU8(0x10);
+        // 0x10 = call, 0x12 = return_call (tail-call proposal).
+        w.writeU8(e.isReturn ? 0x12 : 0x10);
         w.writeU32(this.funcIndex.get(e.target) ?? 0);
         break;
       }
@@ -1438,7 +1439,8 @@ class WasmEncoder {
         const e = expr as CallIndirectExpr;
         for (const op of e.operands) this.encodeExpr(w, op, labels);
         this.encodeExpr(w, e.target, labels);
-        w.writeU8(0x11);
+        // 0x11 = call_indirect, 0x13 = return_call_indirect (tail-call proposal).
+        w.writeU8(e.isReturn ? 0x13 : 0x11);
         const ciIdx = this.mod.heapTypes.length > 0
           ? this.gcFuncTypeIndex(e.params, e.results)
           : this.getTypeIndex(e.params, e.results);

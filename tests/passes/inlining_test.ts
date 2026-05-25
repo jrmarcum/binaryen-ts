@@ -827,6 +827,134 @@ Deno.test("split-inlining: non-simple condition rejects Pattern A", () => {
   assert(!mod.functions.some((f) => f.name.startsWith("byn-split-")));
 });
 
+// ---------------------------------------------------------------------------
+// Phase 5.2 — return-call (`isReturn: true`) inlining semantics
+// ---------------------------------------------------------------------------
+
+Deno.test("return-call inlining: callee return propagates as caller return (value)", () => {
+  // Callee returns i32 42. Caller has `return_call` to callee. After inline:
+  // the call site becomes a Return wrapping the inlined block, so the value
+  // of the inlined body is returned from the caller — not bound to a
+  // wrapper-block label like a plain inline would do.
+  const callee: WasmFunction = {
+    name: "const42",
+    params: [],
+    results: [ValType.I32],
+    locals: [],
+    body: makeI32Const(42), // size 1 → always inline
+  };
+  const caller: WasmFunction = {
+    name: "main",
+    params: [],
+    results: [ValType.I32],
+    locals: [],
+    body: makeCall("const42", [], ValType.I32, /* isReturn */ true),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller, callee);
+  mod.exports.push({ name: "main", value: "main", kind: "function" });
+
+  new PassRunner(mod).add("Inlining").run();
+
+  // Call to const42 is gone.
+  assertEquals(hasCall(caller.body, "const42"), false);
+  // Top-level shape is a Return — that's the tail-call propagation.
+  assertEquals(caller.body.kind, ExpressionKind.Return);
+});
+
+Deno.test("return-call inlining: void callee — body executes then return", () => {
+  // Callee returns void. Caller has `return_call`. Inlined shape:
+  //   (block (wrapper-block (callee body)) (return null))
+  // i.e. the wrapper executes for side effects, then an unconditional Return
+  // exits the caller. The wrapper block does NOT have the tail-call's
+  // explicit return rewritten to a break (because rewriteReturns=false).
+  const callee: WasmFunction = {
+    name: "side_effect",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeNop(), // size 1 → always inline; void
+  };
+  const caller: WasmFunction = {
+    name: "main",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("side_effect", [], None, /* isReturn */ true),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller, callee);
+  mod.exports.push({ name: "main", value: "main", kind: "function" });
+
+  new PassRunner(mod).add("Inlining").run();
+
+  assertEquals(hasCall(caller.body, "side_effect"), false);
+  // The replacement is a Block ending in a Return node.
+  assertEquals(caller.body.kind, ExpressionKind.Block);
+  const outer = caller.body as { children: Expression[] };
+  assertEquals(outer.children[outer.children.length - 1].kind, ExpressionKind.Return);
+});
+
+Deno.test("return-call inlining: callee's explicit return is NOT rewritten to a break", () => {
+  // Callee body contains an explicit `(return 42)`. For plain call inlining
+  // that return becomes `br $__inlined_func$callee$N 42`. For tail-call
+  // inlining the return stays as a Return — it propagates out of the caller.
+  const callee: WasmFunction = {
+    name: "early_42",
+    params: [],
+    results: [ValType.I32],
+    locals: [],
+    body: makeReturn(makeI32Const(42)), // size 2 → always inline
+  };
+
+  // Baseline: plain call. The Return inside the callee body becomes a Break.
+  {
+    const caller: WasmFunction = {
+      name: "main",
+      params: [],
+      results: [ValType.I32],
+      locals: [],
+      body: makeCall("early_42", [], ValType.I32, /* isReturn */ false),
+    };
+    const mod = emptyModule();
+    mod.functions.push(caller, callee);
+    mod.exports.push({ name: "main", value: "main", kind: "function" });
+    new PassRunner(mod).add("Inlining").run();
+    assert(
+      countKind(caller.body, ExpressionKind.Break) >= 1,
+      "plain call: return should be rewritten to break",
+    );
+  }
+
+  // Tail-call: the Return survives the substitution. No new Break introduced
+  // for the substituted return. (The wrapper block label is still present in
+  // the IR but nothing breaks to it.)
+  {
+    const caller: WasmFunction = {
+      name: "main",
+      params: [],
+      results: [ValType.I32],
+      locals: [],
+      body: makeCall("early_42", [], ValType.I32, /* isReturn */ true),
+    };
+    const mod = emptyModule();
+    mod.functions.push(caller, callee);
+    mod.exports.push({ name: "main", value: "main", kind: "function" });
+    new PassRunner(mod).add("Inlining").run();
+    // The substituted body still contains the callee's explicit Return.
+    assert(
+      countKind(caller.body, ExpressionKind.Return) >= 1,
+      "return-call inline: callee's Return should survive",
+    );
+    // No Break should have been introduced for the substituted return.
+    assertEquals(
+      countKind(caller.body, ExpressionKind.Break),
+      0,
+      "return-call inline: no Break should be introduced for the callee's return",
+    );
+  }
+});
+
 Deno.test("split-inlining: Pattern B — multiple ifs become outlined helpers", () => {
   // Body: two `if (local.get N) { ...heavy }` ifs followed by no final item.
   // Each if body has type none (lots of nops, no return). Both conditions

@@ -668,7 +668,10 @@ class WatModuleParser {
       } as CallExpr;
     }
     if (head === "call_indirect") {
-      return this.parseCallIndirect(list, args, ctx);
+      return this.parseCallIndirect(list, args, ctx, false);
+    }
+    if (head === "return_call_indirect") {
+      return this.parseCallIndirect(list, args, ctx, true);
     }
 
     // -----------------------------------------------------------------------
@@ -1146,7 +1149,12 @@ class WatModuleParser {
     }
     return makeTry(label, body, catchTags, catchBodies, delegateTarget, bodyType);
   }
-  private parseCallIndirect(_list: SList, args: SExpr[], ctx: FuncContext): CallIndirectExpr {
+  private parseCallIndirect(
+    _list: SList,
+    args: SExpr[],
+    ctx: FuncContext,
+    isReturn: boolean,
+  ): CallIndirectExpr {
     let idx = 0;
     // Optional table name
     let table = "$0";
@@ -1175,13 +1183,13 @@ class WatModuleParser {
     const target = this.parseExpr(args[args.length - 1], ctx);
     return {
       kind: ExpressionKind.CallIndirect,
-      type: results[0] ?? None,
+      type: isReturn ? Unreachable : (results[0] ?? None),
       table,
       target,
       operands,
       params,
       results,
-      isReturn: false,
+      isReturn,
     };
   }
 
