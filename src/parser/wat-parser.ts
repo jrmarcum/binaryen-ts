@@ -77,6 +77,7 @@ import {
   makeStructNew,
   makeStructNewDefault,
   makeStructSet,
+  makeSwitch,
   makeThrow,
   makeThrowRef,
   makeTry,
@@ -107,13 +108,7 @@ import {
   UnaryOp,
   type UnreachableExpr,
 } from "../ir/expressions.ts";
-import {
-  type Local,
-  ModuleBuilder,
-  type WasmExport,
-  type WasmImport,
-  type WasmModule,
-} from "../ir/module.ts";
+import { type Local, ModuleBuilder, type WasmExport, type WasmModule } from "../ir/module.ts";
 import { None, type Type, Unreachable, ValType } from "../ir/types.ts";
 import {
   AbstractHeapType,
@@ -335,19 +330,62 @@ class WatModuleParser {
       this.funcNames.set(internalName, this.funcNames.size);
       this.builder.addFunctionImport(internalName, modName, baseName, params, results);
     } else if (head === "global") {
+      // `(global $name <type>)` or `(global $name (mut <type>))`
       const gChildren = listChildren(descList);
-      const name = gChildren[0]?.kind === "atom" && (gChildren[0] as Atom).token.raw.startsWith("$")
-        ? (gChildren[0] as Atom).token.raw
-        : `$__import_global_${this.globalNames.size}`;
-      // For imports we don't store globals in the builder's global list,
-      // but we track the name for reference resolution
-      this.globalNames.set(name, this.globalNames.size);
-      const imp: WasmImport = { kind: "global", name, module: modName, base: baseName };
-      // Direct access to builder internals not exposed; add via reflection workaround
-      // TODO: expose addGlobalImport on ModuleBuilder
-      void imp;
+      let gIdx = 0;
+      let name: string | null = null;
+      if (gChildren[gIdx]?.kind === "atom" && (gChildren[gIdx] as Atom).token.raw.startsWith("$")) {
+        name = (gChildren[gIdx] as Atom).token.raw;
+        gIdx++;
+      }
+      const internalName = name ?? `$__import_global_${this.globalNames.size}`;
+      this.globalNames.set(internalName, this.globalNames.size);
+      const typeNode = gChildren[gIdx];
+      if (!typeNode) this.err("import (global ...): missing type", descList.pos);
+      const { type, mutable } = this.parseGlobalTypeNode(typeNode);
+      this.builder.addGlobalImport(internalName, modName, baseName, type, mutable);
+    } else if (head === "memory") {
+      // `(memory $name <initial> [<max>] [shared])`
+      const mChildren = listChildren(descList);
+      let mIdx = 0;
+      let name: string | null = null;
+      if (mChildren[mIdx]?.kind === "atom" && (mChildren[mIdx] as Atom).token.raw.startsWith("$")) {
+        name = (mChildren[mIdx] as Atom).token.raw;
+        mIdx++;
+      }
+      const internalName = name ?? `$__import_memory_${this.memoryNames.size}`;
+      this.memoryNames.set(internalName, this.memoryNames.size);
+      const initial = Number(atomInt(mChildren[mIdx]) ?? 0);
+      const max = mChildren[mIdx + 1] ? (Number(atomInt(mChildren[mIdx + 1]) ?? 0) || null) : null;
+      this.builder.addMemoryImport(internalName, modName, baseName, initial, max);
+    } else if (head === "table") {
+      // `(table $name <initial> [<max>] <reftype>)`
+      const tChildren = listChildren(descList);
+      let tIdx = 0;
+      let name: string | null = null;
+      if (tChildren[tIdx]?.kind === "atom" && (tChildren[tIdx] as Atom).token.raw.startsWith("$")) {
+        name = (tChildren[tIdx] as Atom).token.raw;
+        tIdx++;
+      }
+      const internalName = name ?? `$__import_table_${this.tableNames.size}`;
+      this.tableNames.set(internalName, this.tableNames.size);
+      const initial = Number(atomInt(tChildren[tIdx]) ?? 0);
+      tIdx++;
+      // max is present iff the next child is an integer atom (vs the reftype keyword)
+      let max: number | null = null;
+      if (tChildren[tIdx] !== undefined) {
+        const maybeMax = atomInt(tChildren[tIdx]);
+        if (maybeMax !== null) {
+          max = Number(maybeMax) || null;
+          tIdx++;
+        }
+      }
+      const refType = tChildren[tIdx]
+        ? (this.tryParseValType(tChildren[tIdx]) ?? ValType.FuncRef)
+        : ValType.FuncRef;
+      this.builder.addTableImport(internalName, modName, baseName, refType, initial, max);
     } else {
-      // memory/table imports are uncommon; skip for now
+      this.err(`unknown import descriptor: ${head}`, descList.pos);
     }
   }
 
@@ -599,6 +637,7 @@ class WatModuleParser {
     if (head === "if") return this.parseIf(list, ctx);
     if (head === "br") return this.parseBr(args, false, ctx, list.pos);
     if (head === "br_if") return this.parseBr(args, true, ctx, list.pos);
+    if (head === "br_table") return this.parseBrTable(args, ctx, list.pos);
 
     // -----------------------------------------------------------------------
     // Calls
@@ -935,6 +974,42 @@ class WatModuleParser {
       condition,
       value,
     };
+  }
+
+  /**
+   * Parse `br_table $l1 $l2 ... $ldefault [value] condition`.
+   *
+   * Label list is one or more `$name`/numeric atoms; the **last** label in the
+   * sequence is the default. Trailing expressions are the optional value (if
+   * the targeted block has a result type) and the required condition (i32 in
+   * the index space). When only one trailing expression is present it is the
+   * condition.
+   */
+  private parseBrTable(args: SExpr[], ctx: FuncContext, pos: TextPos): Expression {
+    // Split args into leading label atoms and trailing expression operands.
+    let labelEnd = 0;
+    while (labelEnd < args.length && args[labelEnd].kind === "atom") {
+      const text = (args[labelEnd] as Atom).token.raw;
+      // Labels are `$name` or a plain integer literal; stop at the first list
+      // (which is always an operand expression).
+      if (!text.startsWith("$") && !/^-?\d+$/.test(text)) break;
+      labelEnd++;
+    }
+    if (labelEnd < 2) {
+      this.err("br_table: need at least one target plus a default label", pos);
+    }
+    const labelRefs = args.slice(0, labelEnd).map((a) => atomText(a)!);
+    const targets = labelRefs.slice(0, -1).map((r) => this.resolveLabel(r, ctx, pos));
+    const defaultTarget = this.resolveLabel(labelRefs[labelRefs.length - 1], ctx, pos);
+
+    // Remaining args are operand expressions. Last is always the condition;
+    // anything before it is the optional value.
+    const operands = args.slice(labelEnd);
+    if (operands.length === 0) this.err("br_table: missing condition operand", pos);
+    const condition = this.parseExpr(operands[operands.length - 1], ctx);
+    const value = operands.length > 1 ? this.parseExpr(operands[operands.length - 2], ctx) : null;
+
+    return makeSwitch(targets, defaultTarget, condition, value);
   }
 
   private parseTryTable(list: SList, ctx: FuncContext): Expression {
@@ -1315,6 +1390,13 @@ class WatModuleParser {
   // -------------------------------------------------------------------------
 
   private collectGlobal(list: SList): void {
+    // `(global $name <type> <init-expr>)`
+    // `(global $name (mut <type>) <init-expr>)`
+    //
+    // Globals are built immediately rather than deferred: their init expression
+    // can only reference imported globals or earlier globals in this module —
+    // both of which have already been collected in source order by the time we
+    // get here. So `parseExpr` can resolve any `global.get` it sees.
     const children = listChildren(list);
     let idx = 0;
     let name: string | null = null;
@@ -1323,10 +1405,40 @@ class WatModuleParser {
       idx++;
     }
     const globalIndex = this.globalNames.size;
-    if (name) this.globalNames.set(name, globalIndex);
-    // Skip type and initializer — globals are partially parsed here and built lazily
-    // Full global parsing is deferred until we have a complete name table
-    // TODO: store raw list for second-pass parsing
+    const internalName = name ?? `$__global_${globalIndex}`;
+    this.globalNames.set(internalName, globalIndex);
+
+    const typeNode = children[idx++];
+    if (!typeNode) this.err("global: missing type", list.pos);
+    const { type, mutable } = this.parseGlobalTypeNode(typeNode);
+
+    const initNode = children[idx];
+    if (!initNode) this.err("global: missing init expression", list.pos);
+    const init = this.parseExpr(initNode, this.constExprContext());
+
+    this.builder.addGlobal(internalName, type, mutable, init);
+  }
+
+  /** Parses a global's type node: bare `<type>` or `(mut <type>)`. */
+  private parseGlobalTypeNode(s: SExpr): { type: ValType; mutable: boolean } {
+    if (s.kind === "list" && listHead(s as SList) === "mut") {
+      const inner = listChildren(s as SList)[0];
+      if (!inner) this.err("(mut ...) missing inner type", s.pos);
+      return { type: this.parseValType(inner), mutable: true };
+    }
+    return { type: this.parseValType(s), mutable: false };
+  }
+
+  /** Dummy function context for parsing constant init expressions (no locals, no labels). */
+  private constExprContext(): FuncContext {
+    return {
+      params: [],
+      locals: [],
+      localNames: new Map(),
+      labels: new Map(),
+      labelDepth: 0,
+      results: [],
+    };
   }
 
   private collectMemory(list: SList): void {

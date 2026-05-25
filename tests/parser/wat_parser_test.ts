@@ -172,6 +172,133 @@ Deno.test("parseWat — drop", () => {
 });
 
 // ---------------------------------------------------------------------------
+// Phase 1 — Global definitions
+// ---------------------------------------------------------------------------
+
+Deno.test("parseWat — global immutable i32 with const init", () => {
+  const mod = parseWat(`(module (global $g i32 (i32.const 42)))`);
+  assertEquals(mod.globals.length, 1);
+  const g = mod.globals[0];
+  assertEquals(g.name, "$g");
+  assertEquals(g.type, ValType.I32);
+  assertEquals(g.mutable, false);
+  assertEquals(g.init.kind, ExpressionKind.Const);
+});
+
+Deno.test("parseWat — global mutable i64", () => {
+  const mod = parseWat(`(module (global $count (mut i64) (i64.const 0)))`);
+  assertEquals(mod.globals[0].mutable, true);
+  assertEquals(mod.globals[0].type, ValType.I64);
+});
+
+Deno.test("parseWat — global with global.get init referencing imported global", () => {
+  const mod = parseWat(`(module
+    (import "env" "base" (global $base i32))
+    (global $g i32 (global.get $base)))`);
+  assertEquals(mod.imports.length, 1);
+  assertEquals(mod.imports[0].kind, "global");
+  assertEquals(mod.globals.length, 1);
+  assertEquals(mod.globals[0].init.kind, ExpressionKind.GlobalGet);
+});
+
+Deno.test("parseWat — anonymous global gets synthesized name", () => {
+  const mod = parseWat(`(module (global f32 (f32.const 1.5)))`);
+  assertEquals(mod.globals.length, 1);
+  assertEquals(mod.globals[0].name, "$__global_0");
+  assertEquals(mod.globals[0].type, ValType.F32);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 1 — Import descriptors (global / memory / table)
+// ---------------------------------------------------------------------------
+
+Deno.test("parseWat — import global immutable", () => {
+  const mod = parseWat(`(module (import "env" "g" (global $g i32)))`);
+  const imp = mod.imports[0];
+  assertEquals(imp.kind, "global");
+  assertEquals(imp.name, "$g");
+  assertEquals(imp.module, "env");
+  assertEquals(imp.base, "g");
+  assertEquals(imp.type, ValType.I32);
+  assertEquals(imp.mutable, false);
+});
+
+Deno.test("parseWat — import global mutable", () => {
+  const mod = parseWat(`(module (import "env" "c" (global $counter (mut i32))))`);
+  const imp = mod.imports[0];
+  assertEquals(imp.mutable, true);
+});
+
+Deno.test("parseWat — import memory with initial and max", () => {
+  const mod = parseWat(`(module (import "env" "mem" (memory $m 1 10)))`);
+  const imp = mod.imports[0];
+  assertEquals(imp.kind, "memory");
+  assertEquals(imp.name, "$m");
+  assertEquals(imp.initial, 1);
+  assertEquals(imp.max, 10);
+});
+
+Deno.test("parseWat — import memory with initial only (no max)", () => {
+  const mod = parseWat(`(module (import "env" "mem" (memory 2)))`);
+  const imp = mod.imports[0];
+  assertEquals(imp.kind, "memory");
+  assertEquals(imp.initial, 2);
+  assertEquals(imp.max, null);
+});
+
+Deno.test("parseWat — import table funcref with limits", () => {
+  const mod = parseWat(`(module (import "env" "t" (table $t 0 100 funcref)))`);
+  const imp = mod.imports[0];
+  assertEquals(imp.kind, "table");
+  assertEquals(imp.name, "$t");
+  assertEquals(imp.initial, 0);
+  assertEquals(imp.max, 100);
+  assertEquals(imp.type, ValType.FuncRef);
+});
+
+Deno.test("parseWat — import table without explicit max", () => {
+  const mod = parseWat(`(module (import "env" "t" (table 5 externref)))`);
+  const imp = mod.imports[0];
+  assertEquals(imp.kind, "table");
+  assertEquals(imp.initial, 5);
+  assertEquals(imp.max, null);
+  assertEquals(imp.type, ValType.ExternRef);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 1 — br_table
+// ---------------------------------------------------------------------------
+
+Deno.test("parseWat — br_table with two targets and a default", () => {
+  const mod = parseWat(`(module
+    (func $f (param i32)
+      (block $a
+        (block $b
+          (block $c
+            (br_table $a $b $c (local.get 0)))))))`);
+  const sw = findSwitch(mod.functions[0].body) as
+    | { targets: string[]; defaultTarget: string; value: unknown }
+    | null;
+  if (!sw) throw new Error("did not find Switch in body");
+  // Targets are resolved to label names: $a/$b are the explicit targets, $c is the default.
+  assertEquals(sw.targets.length, 2);
+  assertEquals(sw.value, null);
+});
+
+Deno.test("parseWat — br_table with a single target (degenerate but valid)", () => {
+  const mod = parseWat(`(module
+    (func $f (param i32)
+      (block $only
+        (br_table $only $only (local.get 0)))))`);
+  const sw = findSwitch(mod.functions[0].body) as
+    | { targets: string[]; defaultTarget: string }
+    | null;
+  if (!sw) throw new Error("did not find Switch in body");
+  assertEquals(sw.targets.length, 1);
+  if (!sw.defaultTarget) throw new Error("missing default target");
+});
+
+// ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 
@@ -179,4 +306,21 @@ function assertClose(a: number, b: number, epsilon = 1e-10): void {
   if (Math.abs(a - b) > epsilon) {
     throw new Error(`Expected ${a} to be close to ${b}`);
   }
+}
+
+/** Walks an expression tree (any composite kind) looking for a Switch node. */
+function findSwitch(e: unknown): unknown {
+  const expr = e as { kind: ExpressionKind; children?: unknown[]; body?: unknown };
+  if (expr.kind === ExpressionKind.Switch) return expr;
+  if (expr.body) {
+    const found = findSwitch(expr.body);
+    if (found) return found;
+  }
+  if (expr.children) {
+    for (const c of expr.children) {
+      const found = findSwitch(c);
+      if (found) return found;
+    }
+  }
+  return null;
 }
