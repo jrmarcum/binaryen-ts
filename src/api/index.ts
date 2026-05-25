@@ -59,6 +59,7 @@ import {
 } from "../ir/expressions.ts";
 import { ModuleBuilder, type WasmModule } from "../ir/module.ts";
 import { None, ValType } from "../ir/types.ts";
+import { encodeWasm } from "../encoder/wasm-encoder.ts";
 import { BinaryenInterop } from "../interop/binaryen-js.ts";
 import { PassRunner } from "../passes/index.ts";
 
@@ -189,13 +190,7 @@ export class Module {
    * @returns Binary WASM bytes.
    */
   toBinary(): Uint8Array {
-    // TODO(phase 2): implement native WAT→WASM assembler.
-    // For now, serialize to WAT and call wabt's wat2wasm as subprocess.
-    throw new Error(
-      "Module.toBinary() is not yet implemented in native mode.\n" +
-        "Call Module.optimize(..., hybridMode=true) to use the upstream wasm-opt subprocess,\n" +
-        "or use BinaryenInterop.optimizeViaSubprocess() directly.",
-    );
+    return encodeWasm(this._inner);
   }
 }
 

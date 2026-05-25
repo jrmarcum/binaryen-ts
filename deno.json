@@ -9,6 +9,7 @@
     "./encoder": "./src/encoder/index.ts",
     "./passes": "./src/passes/index.ts",
     "./api": "./src/api/index.ts",
+    "./compat": "./src/api/binaryen-compat.ts",
     "./interop": "./src/interop/binaryen-js.ts",
     "./tools/wasm-opt": "./src/tools/wasm-opt.ts",
     "./wasm": "./src/wasm/index.ts",
