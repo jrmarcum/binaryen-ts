@@ -22,7 +22,7 @@
     "check": "deno check src/**/*.ts main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint",
-    "publish": "deno publish",
+    "publish": "deno run --allow-env --allow-run scripts/guarded_publish.ts",
     "publish:dry": "deno publish --dry-run --allow-dirty",
     "ci": "deno task check && deno task test"
   },
