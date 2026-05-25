@@ -80,6 +80,13 @@ export interface WasmOptOptions {
    * Example: `{ "inlining@maxSize": "20" }`.
    */
   passArgs: Record<string, string>;
+  /**
+   * Maximum number of `if` arms partial inlining (Pattern B) will split out
+   * of one function. Mirrors upstream `wasm-opt --partial-inlining-ifs N` /
+   * `-pii N`. Default `0` (disabled). Setting >= 1 also enables Pattern A.
+   * See {@link PassOptions.partialInliningIfs} for full rationale.
+   */
+  partialInliningIfs: number;
 }
 
 const defaults: WasmOptOptions = {
@@ -93,6 +100,7 @@ const defaults: WasmOptOptions = {
   debugInfo: false,
   closedWorld: false,
   passArgs: {},
+  partialInliningIfs: 0,
 };
 
 // ---------------------------------------------------------------------------
@@ -209,6 +217,7 @@ function _nativeOptimize(
     debugInfo: opts.debugInfo,
     closedWorld: opts.closedWorld,
     passArgs: opts.passArgs,
+    partialInliningIfs: opts.partialInliningIfs,
   };
 
   const runner = new PassRunner(module, passOpts);

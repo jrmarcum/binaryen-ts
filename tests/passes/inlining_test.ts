@@ -632,3 +632,259 @@ Deno.test("InliningOptimizing: cleans up inlined body — Vacuum drops nop", () 
     assertEquals(countKind(caller.body, ExpressionKind.Nop), 0);
   }
 });
+
+// ---------------------------------------------------------------------------
+// Split inlining (Pattern A / Pattern B) — Phase 5.1
+// ---------------------------------------------------------------------------
+
+/** Builds a body of the form: `(block (if (local.get 0) (return)) nop * N)`.
+ *  Used to construct Pattern A test cases — the leading if-return is what the
+ *  splitter latches onto; the trailing nops pad the function past the normal
+ *  inliner's size thresholds so it gets handed off to the splitter. */
+function makePatternABody(padNops: number): Expression {
+  const items: Expression[] = [];
+  items.push({
+    kind: ExpressionKind.If,
+    type: None,
+    condition: makeLocalGet(0, ValType.I32),
+    ifTrue: makeReturn(null),
+    ifFalse: null,
+  } as Expression);
+  for (let i = 0; i < padNops; i++) items.push(makeNop());
+  return makeBlock(items);
+}
+
+Deno.test("split-inlining: disabled by default — Pattern A function is untouched", () => {
+  const callee: WasmFunction = {
+    name: "early_exit",
+    params: [ValType.I32],
+    results: [],
+    locals: [{ type: ValType.I32 }],
+    body: makePatternABody(25),
+  };
+  // Two callers → multi-caller, normal inliner only fires at size <= 2.
+  const caller1: WasmFunction = {
+    name: "c1",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("early_exit", [makeI32Const(0)], None),
+  };
+  const caller2: WasmFunction = {
+    name: "c2",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("early_exit", [makeI32Const(1)], None),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller1, caller2, callee);
+  mod.exports.push({ name: "c1", value: "c1", kind: "function" });
+  mod.exports.push({ name: "c2", value: "c2", kind: "function" });
+
+  new PassRunner(mod).add("Inlining").run();
+
+  // Default partialInliningIfs = 0 — split is disabled. Calls remain.
+  assertEquals(hasCall(caller1.body, "early_exit"), true);
+  assertEquals(hasCall(caller2.body, "early_exit"), true);
+  // No outlined functions were added.
+  assert(
+    !mod.functions.some((f) => f.name.startsWith("byn-split-")),
+    "no split-* functions should exist when partialInliningIfs=0",
+  );
+});
+
+Deno.test("split-inlining: Pattern A — caller gets shell, outlined function added", () => {
+  const callee: WasmFunction = {
+    name: "early_exit",
+    params: [ValType.I32],
+    results: [],
+    locals: [{ type: ValType.I32 }],
+    body: makePatternABody(25),
+  };
+  const caller1: WasmFunction = {
+    name: "c1",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("early_exit", [makeI32Const(0)], None),
+  };
+  const caller2: WasmFunction = {
+    name: "c2",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("early_exit", [makeI32Const(1)], None),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller1, caller2, callee);
+  mod.exports.push({ name: "c1", value: "c1", kind: "function" });
+  mod.exports.push({ name: "c2", value: "c2", kind: "function" });
+
+  new PassRunner(mod, { partialInliningIfs: 4 }).add("Inlining").run();
+
+  // The original call to `early_exit` has been replaced (the inlineable
+  // shell — an if + a new call to the outlined function — is now inline).
+  assertEquals(hasCall(caller1.body, "early_exit"), false);
+  assertEquals(hasCall(caller2.body, "early_exit"), false);
+  // Outlined function exists.
+  assert(
+    mod.functions.some((f) => f.name === "byn-split-outlined-A$early_exit"),
+    "outlined-A function should have been added to module.functions",
+  );
+  // Each caller now calls the outlined function (via the inlined shell).
+  assertEquals(hasCall(caller1.body, "byn-split-outlined-A$early_exit"), true);
+  assertEquals(hasCall(caller2.body, "byn-split-outlined-A$early_exit"), true);
+});
+
+Deno.test("split-inlining: Pattern A with simple outlined chunk collapses to Full", () => {
+  // Body is just (if (local.get 0) return) (nop). Outlined would be size 2
+  // (block + nop), which passes outlinedFunctionWorthInlining → "Full" mode.
+  // The whole callee gets inlined; no split-* functions appear.
+  const callee: WasmFunction = {
+    name: "tiny_early_exit",
+    params: [ValType.I32],
+    results: [],
+    locals: [{ type: ValType.I32 }],
+    body: makePatternABody(1),
+  };
+  const caller1: WasmFunction = {
+    name: "c1",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("tiny_early_exit", [makeI32Const(0)], None),
+  };
+  const caller2: WasmFunction = {
+    name: "c2",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("tiny_early_exit", [makeI32Const(1)], None),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller1, caller2, callee);
+  mod.exports.push({ name: "c1", value: "c1", kind: "function" });
+  mod.exports.push({ name: "c2", value: "c2", kind: "function" });
+
+  new PassRunner(mod, { partialInliningIfs: 4 }).add("Inlining").run();
+
+  assertEquals(hasCall(caller1.body, "tiny_early_exit"), false);
+  assertEquals(hasCall(caller2.body, "tiny_early_exit"), false);
+  // Full inline path: no split-* functions were created.
+  assert(
+    !mod.functions.some((f) => f.name.startsWith("byn-split-")),
+    "Full mode should not create any split-* functions",
+  );
+});
+
+Deno.test("split-inlining: non-simple condition rejects Pattern A", () => {
+  // Condition is (i32.add x x) — not in isSimple's allow-list (no Binary).
+  // Splitter must classify as Uninlineable; calls remain.
+  const callee: WasmFunction = {
+    name: "complex_cond",
+    params: [ValType.I32],
+    results: [],
+    locals: [{ type: ValType.I32 }],
+    body: makeBlock([
+      {
+        kind: ExpressionKind.If,
+        type: None,
+        condition: makeBinary(
+          BinaryOp.AddI32,
+          makeLocalGet(0, ValType.I32),
+          makeLocalGet(0, ValType.I32),
+        ),
+        ifTrue: makeReturn(null),
+        ifFalse: null,
+      } as Expression,
+      ...Array.from({ length: 25 }, () => makeNop()),
+    ]),
+  };
+  const caller1: WasmFunction = {
+    name: "c1",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("complex_cond", [makeI32Const(0)], None),
+  };
+  const caller2: WasmFunction = {
+    name: "c2",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("complex_cond", [makeI32Const(1)], None),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller1, caller2, callee);
+  mod.exports.push({ name: "c1", value: "c1", kind: "function" });
+  mod.exports.push({ name: "c2", value: "c2", kind: "function" });
+
+  new PassRunner(mod, { partialInliningIfs: 4 }).add("Inlining").run();
+
+  // Splitter rejects (not simple); calls remain.
+  assertEquals(hasCall(caller1.body, "complex_cond"), true);
+  assert(!mod.functions.some((f) => f.name.startsWith("byn-split-")));
+});
+
+Deno.test("split-inlining: Pattern B — multiple ifs become outlined helpers", () => {
+  // Body: two `if (local.get N) { ...heavy }` ifs followed by no final item.
+  // Each if body has type none (lots of nops, no return). Both conditions
+  // are simple. With partialInliningIfs=4, each if's body gets outlined.
+  const heavy1: Expression[] = Array.from({ length: 12 }, () => makeNop());
+  const heavy2: Expression[] = Array.from({ length: 12 }, () => makeNop());
+  const callee: WasmFunction = {
+    name: "two_branches",
+    params: [ValType.I32, ValType.I32],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBlock([
+      {
+        kind: ExpressionKind.If,
+        type: None,
+        condition: makeLocalGet(0, ValType.I32),
+        ifTrue: makeBlock(heavy1),
+        ifFalse: null,
+      } as Expression,
+      {
+        kind: ExpressionKind.If,
+        type: None,
+        condition: makeLocalGet(1, ValType.I32),
+        ifTrue: makeBlock(heavy2),
+        ifFalse: null,
+      } as Expression,
+    ]),
+  };
+  const caller1: WasmFunction = {
+    name: "c1",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("two_branches", [makeI32Const(0), makeI32Const(0)], None),
+  };
+  const caller2: WasmFunction = {
+    name: "c2",
+    params: [],
+    results: [],
+    locals: [],
+    body: makeCall("two_branches", [makeI32Const(1), makeI32Const(1)], None),
+  };
+  const mod = emptyModule();
+  mod.functions.push(caller1, caller2, callee);
+  mod.exports.push({ name: "c1", value: "c1", kind: "function" });
+  mod.exports.push({ name: "c2", value: "c2", kind: "function" });
+
+  new PassRunner(mod, { partialInliningIfs: 4 }).add("Inlining").run();
+
+  // Original calls gone.
+  assertEquals(hasCall(caller1.body, "two_branches"), false);
+  // Both outlined-B functions exist.
+  assert(
+    mod.functions.some((f) => f.name === "byn-split-outlined-B$two_branches$0"),
+    "outlined-B$0 should exist",
+  );
+  assert(
+    mod.functions.some((f) => f.name === "byn-split-outlined-B$two_branches$1"),
+    "outlined-B$1 should exist",
+  );
+});

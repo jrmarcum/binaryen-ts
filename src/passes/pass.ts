@@ -99,6 +99,24 @@ export interface PassOptions {
    * Passes look up their own arguments by key at runtime.
    */
   passArgs: Record<string, string>;
+
+  /**
+   * Maximum number of `if` arms partial inlining (Pattern B) will split out of
+   * one function. Mirrors upstream `InliningOptions::partialInliningIfs`.
+   *
+   * **Default: 0** (partial inlining disabled). Upstream does not enable this
+   * at any optimize-level profile either — it is opt-in via the
+   * `wasm-opt -pii N` CLI flag. Setting `partialInliningIfs >= 1` enables both
+   * Pattern A (early-return splits, where the value of this option is not
+   * consulted as long as it is non-zero) and Pattern B (up to N `if` arms
+   * split out).
+   *
+   * Why opt-in: split inlining trades code size for speed by turning a
+   * call + branch on the cold path into a single branch, but adds a new
+   * outlined function per split. Worth it for hot paths; pessimization for
+   * cold code.
+   */
+  partialInliningIfs: number;
 }
 
 /** Default pass options matching Binaryen's `-O2` preset. */
@@ -108,6 +126,7 @@ export const defaultPassOptions: PassOptions = {
   debugInfo: false,
   closedWorld: false,
   passArgs: {},
+  partialInliningIfs: 0,
 };
 
 /** Pass options for size-optimized `-Oz` output (used by `wasic`). */
@@ -117,6 +136,7 @@ export const shrinkPassOptions: PassOptions = {
   debugInfo: false,
   closedWorld: false,
   passArgs: {},
+  partialInliningIfs: 0,
 };
 
 // ---------------------------------------------------------------------------

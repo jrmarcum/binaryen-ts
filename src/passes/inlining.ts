@@ -33,14 +33,22 @@ import {
   type CallExpr,
   type Expression,
   ExpressionKind,
+  type IfExpr,
   type LocalSetExpr,
   makeBlock,
+  makeCall,
   makeF32Const,
   makeF64Const,
   makeI32Const,
   makeI64Const,
+  makeLocalGet,
   makeLocalSet,
+  makeReturn,
+  makeUnary,
   makeUnreachable,
+  type RefIsNullExpr,
+  type UnaryExpr,
+  UnaryOp,
 } from "../ir/expressions.ts";
 import type { Local, WasmFunction, WasmModule } from "../ir/module.ts";
 import { None, Unreachable, ValType } from "../ir/types.ts";
@@ -145,6 +153,296 @@ function isInlineable(
     return !info.hasCalls || !info.hasLoops;
   }
   return false;
+}
+
+// ---------------------------------------------------------------------------
+// Split inlining (Pattern A / Pattern B) — port of upstream FunctionSplitter
+// (`upstream/src/passes/Inlining.cpp` lines 740-1240). Enabled by setting
+// `PassOptions.partialInliningIfs >= 1`. Disabled by default (matches upstream
+// which also defaults to 0). Trades code size for speed: turns a call + branch
+// on the cold path into a single branch by inlining only the "fast-path"
+// portion of a function at every call site, leaving the heavy work as an
+// outlined helper.
+// ---------------------------------------------------------------------------
+
+/** Classification result for {@link FunctionSplitter.getSplitMode}. */
+type SplitMode =
+  | "Uninlineable"
+  /** The function isn't worth splitting on its own, but the would-be outlined
+   *  chunk is small enough to fully inline — skip the inlineable/outlined
+   *  intermediate state and just full-inline the whole function. */
+  | "Full"
+  /** `if (simple_cond) return; ... lots of code ...` */
+  | "SplitPatternA"
+  /** `if (simple_A_1) heavy_1; if (simple_A_2) heavy_2; ... [simple_final]` */
+  | "SplitPatternB";
+
+/** Upstream's `isSimple` — the allow-list of expressions cheap enough to
+ *  duplicate at every call site as part of a partial inline. Intentionally
+ *  narrow: `LocalGet` / `GlobalGet` / `Unary(simple)` / `RefIsNull(simple)`.
+ *  Notably NOT `Const` (no benefit — already trivial), NOT `Binary` (compute
+ *  cost matters). Matches `upstream/src/passes/Inlining.cpp:1222`. */
+function isSimple(e: Expression): boolean {
+  if (e.type === Unreachable) return false;
+  if (e.kind === ExpressionKind.LocalGet || e.kind === ExpressionKind.GlobalGet) return true;
+  if (e.kind === ExpressionKind.Unary) return isSimple((e as UnaryExpr).value);
+  if (e.kind === ExpressionKind.RefIsNull) return isSimple((e as RefIsNullExpr).value);
+  return false;
+}
+
+/** Returns the i-th item in a sequence of initial items. If `e` is a Block,
+ *  this indexes into `children`; otherwise the sole "item" is `e` itself at
+ *  index 0. Returns `null` past the end. Mirrors upstream `getItem`. */
+function getItem(e: Expression, i = 0): Expression | null {
+  if (e.kind === ExpressionKind.Block) {
+    const b = e as BlockExpr;
+    return b.children[i] ?? null;
+  }
+  return i === 0 ? e : null;
+}
+
+/** Returns the i-th item if it's an `IfExpr`, else `null`. */
+function getIf(e: Expression, i = 0): IfExpr | null {
+  const item = getItem(e, i);
+  return item && item.kind === ExpressionKind.If ? item as IfExpr : null;
+}
+
+/** Does the expression tree contain a `br`/`br_if` targeting `label`? */
+function hasBreakTo(e: Expression, label: string): boolean {
+  let found = false;
+  walkExpression(e, (n) => {
+    if (n.kind === ExpressionKind.Break && (n as BreakExpr).name === label) found = true;
+    if (n.kind === ExpressionKind.Switch) {
+      const sw = n as { targets: string[]; defaultTarget: string };
+      if (sw.targets.includes(label) || sw.defaultTarget === label) found = true;
+    }
+  });
+  return found;
+}
+
+/** Does the expression tree contain a `Return` instruction? */
+function hasReturn(e: Expression): boolean {
+  let found = false;
+  walkExpression(e, (n) => {
+    if (n.kind === ExpressionKind.Return) found = true;
+  });
+  return found;
+}
+
+/** Collects local indices written by any `LocalSet` in the subtree. */
+function collectLocalSets(e: Expression, into: Set<number>): void {
+  walkExpression(e, (n) => {
+    if (n.kind === ExpressionKind.LocalSet) into.add((n as LocalSetExpr).index);
+  });
+}
+
+/** Collects local indices read by any `LocalGet` in the subtree. */
+function collectLocalGets(e: Expression): number[] {
+  const out: number[] = [];
+  walkExpression(e, (n) => {
+    if (n.kind === ExpressionKind.LocalGet) out.push((n as { index: number }).index);
+  });
+  return out;
+}
+
+/** Builds `(local.get i)` for each parameter of `fn`, in order. The forwarded
+ *  args bind the inlineable shell's params (which are identical to the original
+ *  function's params) into the outlined call. */
+function getForwardedArgs(fn: WasmFunction): Expression[] {
+  return fn.params.map((type, i) => makeLocalGet(i, type));
+}
+
+/** Per-pass cache of which functions we've split, and the inlineable templates
+ *  produced. The templates are NOT added to `module.functions` — they are pure
+ *  body sources used by `inlineCallSite`. The outlined functions ARE real and
+ *  do get added to the module. Matches upstream's structure. */
+class FunctionSplitter {
+  private cache = new Map<string, WasmFunction>();
+
+  constructor(private readonly module: WasmModule, private readonly opts: PassOptions) {}
+
+  /** Classify `fn` per upstream's two patterns. Returns `"Uninlineable"` if
+   *  no pattern matches or partial inlining is disabled. */
+  getSplitMode(fn: WasmFunction, info: FunctionInfo): SplitMode {
+    if (this.opts.partialInliningIfs <= 0) return "Uninlineable";
+
+    const body = fn.body;
+
+    // A block with a self-targeted break can't be safely outlined.
+    if (body.kind === ExpressionKind.Block) {
+      const b = body as BlockExpr;
+      if (b.name && hasBreakTo(body, b.name)) return "Uninlineable";
+    }
+
+    const iff = getIf(body);
+    if (!iff) return "Uninlineable";
+    if (!isSimple(iff.condition)) return "Uninlineable";
+
+    // ---- Pattern A: `if (simple) return; ...rest` ----
+    if (!iff.ifFalse && fn.results.length === 0 && iff.ifTrue.kind === ExpressionKind.Return) {
+      // Must be a block — otherwise the whole function is just the if and the
+      // normal inliner would have taken it already.
+      if (body.kind !== ExpressionKind.Block) return "Uninlineable";
+
+      const outlinedSize = info.size - measureSize(iff);
+      if (this.outlinedFunctionWorthInlining(info, outlinedSize)) return "Full";
+
+      return "SplitPatternA";
+    }
+
+    // ---- Pattern B: sequence of `if (simple) { heavy }` plus optional final ----
+    const maxIfs = this.opts.partialInliningIfs;
+    let numIfs = 0;
+    while (numIfs <= maxIfs && getIf(body, numIfs)) numIfs++;
+    if (numIfs === 0 || numIfs > maxIfs) return "Uninlineable";
+
+    const finalItem = getItem(body, numIfs);
+    if (finalItem && !isSimple(finalItem)) return "Uninlineable";
+    if (finalItem && getItem(body, numIfs + 1)) return "Uninlineable";
+
+    const writtenLocals = new Set<number>();
+    for (let i = 0; i < numIfs; i++) {
+      const ifI = getIf(body, i)!;
+      if (!isSimple(ifI.condition) || ifI.ifFalse) return "Uninlineable";
+
+      const bodyType = ifI.ifTrue.type;
+      if (bodyType === None) {
+        if (hasReturn(ifI.ifTrue)) return "Uninlineable";
+      } else if (bodyType !== Unreachable) {
+        // An if-without-else must have type none or unreachable. Anything
+        // else would mean the if produces a value, which Pattern B doesn't
+        // currently outline cleanly.
+        return "Uninlineable";
+      }
+
+      if (finalItem) collectLocalSets(ifI, writtenLocals);
+    }
+    if (finalItem) {
+      for (const localIdx of collectLocalGets(finalItem)) {
+        if (writtenLocals.has(localIdx)) return "Uninlineable";
+      }
+    }
+
+    if (numIfs === 1) {
+      const ifI = getIf(body, 0)!;
+      const outlinedSize = measureSize(ifI.ifTrue);
+      if (this.outlinedFunctionWorthInlining(info, outlinedSize)) return "Full";
+    }
+
+    return "SplitPatternB";
+  }
+
+  /** Returns (and caches) the inlineable-shell `WasmFunction` for `fn`. The
+   *  template is never added to `module.functions`; its body just serves as
+   *  the substitution payload for `inlineCallSite`. Outlined functions
+   *  created along the way DO get pushed to `module.functions`. */
+  getInlineableTemplate(fn: WasmFunction, mode: SplitMode): WasmFunction {
+    const cached = this.cache.get(fn.name);
+    if (cached) return cached;
+    const template = mode === "SplitPatternA" ? this.doSplitA(fn) : this.doSplitB(fn);
+    this.cache.set(fn.name, template);
+    return template;
+  }
+
+  /** Conservative estimate of whether the outlined remainder would itself be
+   *  worth full-inlining at the same call sites. If yes, the caller skips the
+   *  split intermediate state and just full-inlines the original. Mirrors
+   *  upstream's `outlinedFunctionWorthInlining`. */
+  private outlinedFunctionWorthInlining(origin: FunctionInfo, sizeEstimate: number): boolean {
+    const projected: FunctionInfo = { ...origin, size: sizeEstimate };
+    // Use the same predicate the standard inliner uses, with optimizeLevel
+    // bumped to 3 so the "flexible" tier kicks in — this matches upstream's
+    // `worthFullInlining` which is the equivalent of our isInlineable() call
+    // at the highest tier.
+    return isInlineable(projected, { ...this.opts, optimizeLevel: 3 });
+  }
+
+  /** Pattern A split: turn `if (cond) return; ...rest` into:
+   *    inlineable shell: `if (eqz cond) call $outlined(args)`
+   *    outlined function: `...rest`
+   *  Note that flipping the condition with `i32.eqz` lets the inlineable
+   *  shell preserve the original early-exit semantics — the call to outlined
+   *  happens only when the original would have continued past the `return`. */
+  private doSplitA(fn: WasmFunction): WasmFunction {
+    const body = fn.body as BlockExpr;
+    const originalIf = getIf(body)!;
+
+    // Outlined function: body minus the first if.
+    const outlinedBody = makeBlock(
+      body.children.slice(1).map((c) => deepCopy(c)),
+      body.name,
+    );
+    const outlined: WasmFunction = {
+      name: `byn-split-outlined-A$${fn.name}`,
+      params: fn.params.slice(),
+      results: fn.results.slice(),
+      locals: copyLocals(fn.locals),
+      body: outlinedBody,
+    };
+    this.module.functions.push(outlined);
+
+    // Inlineable shell: just the if, condition flipped, body replaced with
+    // a call to the outlined function.
+    const shellIf: IfExpr = {
+      kind: ExpressionKind.If,
+      type: originalIf.type,
+      condition: makeUnary(UnaryOp.EqzI32, deepCopy(originalIf.condition)),
+      ifTrue: makeCall(outlined.name, getForwardedArgs(fn), None),
+      ifFalse: null,
+    };
+
+    return {
+      name: `byn-split-inlineable-A$${fn.name}`,
+      params: fn.params.slice(),
+      results: fn.results.slice(),
+      locals: copyLocals(fn.locals),
+      body: shellIf,
+    };
+  }
+
+  /** Pattern B split: for each of the first MaxIfs ifs in the body, outline
+   *  the if's body into its own function and replace the if's body with a
+   *  call to it (wrapped in `return` when the outlined function returns a
+   *  value matching the original's result type). */
+  private doSplitB(fn: WasmFunction): WasmFunction {
+    const maxIfs = this.opts.partialInliningIfs;
+    const inlineableBody = deepCopy(fn.body);
+
+    for (let i = 0; i < maxIfs; i++) {
+      const ifI = getIf(inlineableBody, i);
+      if (!ifI) break;
+
+      const valueReturned = fn.results.length > 0 && ifI.ifTrue.type !== None &&
+        ifI.ifTrue.type !== Unreachable;
+      const outlinedResults = valueReturned ? fn.results.slice() : [];
+
+      const outlined: WasmFunction = {
+        name: `byn-split-outlined-B$${fn.name}$${i}`,
+        params: fn.params.slice(),
+        results: outlinedResults,
+        locals: copyLocals(fn.locals),
+        body: ifI.ifTrue,
+      };
+      this.module.functions.push(outlined);
+
+      const callType = valueReturned ? (outlinedResults[0] as ValType) : None;
+      const call = makeCall(outlined.name, getForwardedArgs(fn), callType);
+      ifI.ifTrue = valueReturned ? makeReturn(call) : call;
+    }
+
+    return {
+      name: `byn-split-inlineable-B$${fn.name}`,
+      params: fn.params.slice(),
+      results: fn.results.slice(),
+      locals: copyLocals(fn.locals),
+      body: inlineableBody,
+    };
+  }
+}
+
+/** Shallow-copy a locals array (`Local` is a flat record with no nested objects). */
+function copyLocals(locals: Local[]): Local[] {
+  return locals.map((l) => ({ ...l }));
 }
 
 // ---------------------------------------------------------------------------
@@ -488,13 +786,22 @@ export class InliningPass implements Pass {
   /** Whether to run Vacuum + OptimizeInstructions on modified functions. */
   protected readonly optimize: boolean = false;
 
+  /** Per-pass cache of split-inlining decisions. Shared across iterations so a
+   *  function only gets classified + split once per `run`. Recreated on each
+   *  new `run` call. */
+  private _splitter: FunctionSplitter | null = null;
+
   run(module: WasmModule, opts: PassOptions): void {
     const numOriginal = module.functions.length;
     const maxIter = Math.min(MAX_ITERATIONS, numOriginal + 1);
 
+    this._splitter = opts.partialInliningIfs > 0 ? new FunctionSplitter(module, opts) : null;
+
     for (let iter = 0; iter < maxIter; iter++) {
       if (!this._iteration(module, opts)) break;
     }
+
+    this._splitter = null;
   }
 
   private _iteration(module: WasmModule, opts: PassOptions): boolean {
@@ -505,13 +812,42 @@ export class InliningPass implements Pass {
       module.imports.filter((i) => i.kind === "function").map((i) => i.name),
     );
 
-    // Collect inlineable functions.
+    // Collect inlineable functions. Two passes: first the standard
+    // size-threshold inliner, then (if `partialInliningIfs > 0`) the split
+    // inliner picks up any function the normal inliner rejected.
     const inlineable = new Map<string, WasmFunction>();
     for (const fn of module.functions) {
       if (importedNames.has(fn.name)) continue;
+      // Synthetic outlined-* functions skip both classifiers — they would
+      // either get inlined right back into the shells we just produced
+      // (defeating the split) or thrash the iteration counter.
+      if (fn.name.startsWith("byn-split-outlined-")) continue;
       const fi = info.get(fn.name);
       if (fi && isInlineable(fi, opts)) {
         inlineable.set(fn.name, fn);
+      }
+    }
+
+    if (this._splitter) {
+      for (const fn of module.functions) {
+        if (importedNames.has(fn.name)) continue;
+        if (inlineable.has(fn.name)) continue;
+        if (fn.name.startsWith("byn-split-")) continue;
+        const fi = info.get(fn.name);
+        if (!fi) continue;
+        const mode = this._splitter.getSplitMode(fn, fi);
+        if (mode === "Uninlineable") continue;
+        if (mode === "Full") {
+          // Outlined chunk would itself be inlineable — skip the
+          // intermediate and inline the whole original.
+          inlineable.set(fn.name, fn);
+          continue;
+        }
+        // SplitPatternA or SplitPatternB: use the inlineable shell as the
+        // substitution template under the original function's name. Calls to
+        // `fn` get rewritten to the shell body (which contains a call to the
+        // outlined function the splitter just added to module.functions).
+        inlineable.set(fn.name, this._splitter.getInlineableTemplate(fn, mode));
       }
     }
 
