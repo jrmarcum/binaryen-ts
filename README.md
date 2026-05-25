@@ -145,7 +145,7 @@ deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -
 
 | Mode | What runs | Use when |
 | ---- | --------- | -------- |
-| **Native TypeScript** (default) | Built-in passes in `src/passes/` — no subprocess, no binary | Default; all phases 0–6 complete |
+| **Native TypeScript** (default) | Built-in passes in `src/passes/` — no subprocess, no binary | Default; all phases 0–7 complete |
 | **Hybrid subprocess** (`--hybrid`) | Upstream `wasm-opt` binary on `PATH` | Maximum optimization fidelity; requires installed `wasm-opt` |
 | **Hybrid binaryen.js** | Upstream `binaryen.js` WASM binary | Deferred — not on critical path |
 
@@ -177,7 +177,7 @@ This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 | 4 | ✅ Done | Core optimization passes — 9 passes (Vacuum, OptimizeInstructions, CoalesceLocals, LocalCSE, …) |
 | 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, call-graph analysis, dead-callee removal |
 | 6 | ✅ Done | `wasm-opt` native CLI — pure TypeScript pipeline, no subprocess; `RemoveUnusedNames` pass |
-| 7 | 🚧 Next | GC proposal types and instructions |
+| 7 | ✅ Done | GC proposal — heap types, struct/array/ref instructions, binary parser + encoder + WAT parser |
 | 8 | Planned | Exception-handling proposal |
 | 9 | Planned | SIMD instructions |
 | 10 | Planned | Compile performance-critical passes to WASM via `wasic` |

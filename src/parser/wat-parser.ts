@@ -64,6 +64,11 @@ import {
   UnaryOp,
   UnreachableExpr,
   LoadExpr,
+  makeRefEq, makeRefI31, makeI31Get,
+  makeStructNew, makeStructNewDefault, makeStructGet, makeStructSet,
+  makeArrayNew, makeArrayNewDefault, makeArrayNewFixed,
+  makeArrayGet, makeArraySet, makeArrayLen,
+  makeRefTest, makeRefCast, BrOnOp,
 } from "../ir/expressions.ts";
 import {
   DataSegment,
@@ -79,6 +84,10 @@ import {
   WasmTable,
 } from "../ir/module.ts";
 import { None, Type, Unreachable, ValType } from "../ir/types.ts";
+import {
+  AbstractHeapType, type HeapType, type RefType, type TypeDef,
+  type StorageType, type FieldType,
+} from "../ir/gc-types.ts";
 import {
   Atom,
   SExpr,
@@ -182,6 +191,9 @@ class WatModuleParser {
   private memoryNames = new Map<string, number>();
   private tableNames = new Map<string, number>();
 
+  // GC type name → heapTypes index
+  private typeNames = new Map<string, number>();
+
   // All function-level definitions collected before building
   private rawFunctions: RawFunc[] = [];
 
@@ -215,7 +227,7 @@ class WatModuleParser {
         case "export": /* handled in second pass */ break;
         case "data":   /* handled in second pass */ break;
         case "elem":   /* handled in second pass */ break;
-        case "type":   /* GC types — future */ break;
+        case "type":   this.collectType(child as SList); break;
         case "rec":    /* GC recursive types — future */ break;
         default: break;
       }
@@ -567,6 +579,95 @@ class WatModuleParser {
       return { kind: ExpressionKind.Binary, type, op, left, right } as BinaryExpr;
     }
 
+    // -----------------------------------------------------------------------
+    // GC proposal instructions
+    // -----------------------------------------------------------------------
+    if (head === "ref.eq") {
+      const left = this.parseExpr(args[0], ctx);
+      const right = this.parseExpr(args[1], ctx);
+      return makeRefEq(left, right);
+    }
+    if (head === "ref.i31") {
+      const value = this.parseExpr(args[0], ctx);
+      return makeRefI31(value, { heap: AbstractHeapType.I31, nullable: false });
+    }
+    if (head === "i31.get_s") {
+      return makeI31Get(this.parseExpr(args[0], ctx), true);
+    }
+    if (head === "i31.get_u") {
+      return makeI31Get(this.parseExpr(args[0], ctx), false);
+    }
+    if (head === "struct.new") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const operands = args.slice(1).map((a) => this.parseExpr(a, ctx));
+      return makeStructNew(ti, operands, { heap: ti, nullable: false });
+    }
+    if (head === "struct.new_default") {
+      const ti = this.resolveTypeIndex(args[0]);
+      return makeStructNewDefault(ti, { heap: ti, nullable: false });
+    }
+    if (head === "struct.get" || head === "struct.get_s" || head === "struct.get_u") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const fi = Number(atomInt(args[1])) ?? 0;
+      const ref = this.parseExpr(args[2], ctx);
+      const signed = head === "struct.get_s";
+      return makeStructGet(ti, fi, ref, ValType.I32, signed);
+    }
+    if (head === "struct.set") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const fi = Number(atomInt(args[1])) ?? 0;
+      const ref = this.parseExpr(args[2], ctx);
+      const value = this.parseExpr(args[3], ctx);
+      return makeStructSet(ti, fi, ref, value);
+    }
+    if (head === "array.new") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const init = this.parseExpr(args[1], ctx);
+      const length = this.parseExpr(args[2], ctx);
+      return makeArrayNew(ti, init, length, { heap: ti, nullable: false });
+    }
+    if (head === "array.new_default") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const length = this.parseExpr(args[1], ctx);
+      return makeArrayNewDefault(ti, length, { heap: ti, nullable: false });
+    }
+    if (head === "array.new_fixed") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const values = args.slice(1).map((a) => this.parseExpr(a, ctx));
+      return makeArrayNewFixed(ti, values, { heap: ti, nullable: false });
+    }
+    if (head === "array.get" || head === "array.get_s" || head === "array.get_u") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const ref = this.parseExpr(args[1], ctx);
+      const index = this.parseExpr(args[2], ctx);
+      const signed = head === "array.get_s";
+      return makeArrayGet(ti, ref, index, ValType.I32, signed);
+    }
+    if (head === "array.set") {
+      const ti = this.resolveTypeIndex(args[0]);
+      const ref = this.parseExpr(args[1], ctx);
+      const index = this.parseExpr(args[2], ctx);
+      const value = this.parseExpr(args[3], ctx);
+      return makeArraySet(ti, ref, index, value);
+    }
+    if (head === "array.len") {
+      const ref = this.parseExpr(args[0], ctx);
+      return makeArrayLen(ref);
+    }
+    if (head === "ref.test" || head === "ref.test_null") {
+      const nullable = head === "ref.test_null";
+      const ht = this.parseHeapType(args[0]);
+      const ref = this.parseExpr(args[1], ctx);
+      return makeRefTest(ref, ht, nullable);
+    }
+    if (head === "ref.cast" || head === "ref.cast_null") {
+      const nullable = head === "ref.cast_null";
+      const ht = this.parseHeapType(args[0]);
+      const ref = this.parseExpr(args[1], ctx);
+      const resultType: RefType = { heap: ht, nullable };
+      return makeRefCast(ref, ht, nullable, resultType);
+    }
+
     // Unrecognized — wrap in a nop with a comment for now
     // TODO: extend as more instructions are added
     return { kind: ExpressionKind.Nop, type: None } as NopExpr;
@@ -896,11 +997,117 @@ class WatModuleParser {
     return { name, params, results };
   }
 
+  // -------------------------------------------------------------------------
+  // GC type collection
+  // -------------------------------------------------------------------------
+
+  private collectType(list: SList): void {
+    const children = listChildren(list);
+    let idx = 0;
+    let name: string | null = null;
+    if (children[idx]?.kind === "atom" && atomText(children[idx])?.startsWith("$")) {
+      name = atomText(children[idx]) ?? null;
+      idx++;
+    }
+    if (idx >= children.length || children[idx]?.kind !== "list") return;
+    const body = children[idx] as SList;
+    const bodyHead = listHead(body);
+    let def: TypeDef | null = null;
+    if (bodyHead === "struct") {
+      def = { kind: "struct", fields: this.parseStructFields(body) };
+    } else if (bodyHead === "array") {
+      const element = this.parseArrayElement(body);
+      if (element) def = { kind: "array", element };
+    }
+    if (def) {
+      const ti = this.builder.addHeapType(def);
+      if (name) this.typeNames.set(name, ti);
+    }
+  }
+
+  private parseStructFields(list: SList): FieldType[] {
+    const fields: FieldType[] = [];
+    for (const child of listChildren(list)) {
+      if (child.kind !== "list" || listHead(child as SList) !== "field") continue;
+      const fChildren = listChildren(child as SList);
+      let ci = 0;
+      // Skip optional field name
+      if (fChildren[ci]?.kind === "atom" && atomText(fChildren[ci])?.startsWith("$")) ci++;
+      // Check for (mut storageType)
+      if (fChildren[ci]?.kind === "list" && listHead(fChildren[ci] as SList) === "mut") {
+        const inner = listChildren(fChildren[ci] as SList)[0];
+        const type = this.parseStorageTypeSExpr(inner);
+        fields.push({ type, mutable: true });
+      } else if (fChildren[ci]) {
+        const type = this.parseStorageTypeSExpr(fChildren[ci]);
+        fields.push({ type, mutable: false });
+      }
+    }
+    return fields;
+  }
+
+  private parseArrayElement(list: SList): FieldType | null {
+    const children = listChildren(list);
+    if (children.length === 0) return null;
+    // (array (mut storageType)) or (array storageType)
+    if (children[0]?.kind === "list" && listHead(children[0] as SList) === "mut") {
+      const inner = listChildren(children[0] as SList)[0];
+      return { type: this.parseStorageTypeSExpr(inner), mutable: true };
+    }
+    return { type: this.parseStorageTypeSExpr(children[0]), mutable: false };
+  }
+
+  private parseStorageTypeSExpr(s: SExpr): StorageType {
+    if (!s) return ValType.I32;
+    const raw = atomText(s);
+    if (raw === "i8") return "i8";
+    if (raw === "i16") return "i16";
+    return this.tryParseValType(s) ?? ValType.I32;
+  }
+
+  private resolveTypeIndex(s: SExpr | undefined): number {
+    if (!s) return 0;
+    const raw = atomText(s);
+    if (raw?.startsWith("$")) {
+      return this.typeNames.get(raw) ?? 0;
+    }
+    return Number(atomInt(s)) ?? 0;
+  }
+
+  private parseHeapType(s: SExpr | undefined): HeapType {
+    if (!s) return AbstractHeapType.Any;
+    const raw = atomText(s);
+    if (!raw) return AbstractHeapType.Any;
+    if (raw.startsWith("$")) return this.typeNames.get(raw) ?? AbstractHeapType.Any;
+    const abstractMap: Record<string, AbstractHeapType> = {
+      func: AbstractHeapType.Func, nofunc: AbstractHeapType.NoFunc,
+      ext: AbstractHeapType.Ext, noext: AbstractHeapType.NoExt,
+      any: AbstractHeapType.Any, eq: AbstractHeapType.Eq,
+      i31: AbstractHeapType.I31, struct: AbstractHeapType.Struct,
+      array: AbstractHeapType.Array, none: AbstractHeapType.None,
+    };
+    return abstractMap[raw] ?? (isNaN(Number(raw)) ? AbstractHeapType.Any : Number(raw));
+  }
+
+  // -------------------------------------------------------------------------
+  // Value type parsing
+  // -------------------------------------------------------------------------
+
   private parseValType(s: SExpr): ValType {
     return this.tryParseValType(s) ?? this.err(`unknown value type: ${sExprToString(s)}`, s.pos);
   }
 
   private tryParseValType(s: SExpr): ValType | null {
+    // Handle (ref ...) and (ref null ...) list forms
+    if (s.kind === "list") {
+      const l = s as SList;
+      if (listHead(l) === "ref") {
+        // (ref null $T) or (ref $T)
+        const ch = listChildren(l);
+        return atomText(ch[0]) === "null" ? ValType.AnyRef : ValType.AnyRef;
+      }
+      return null;
+    }
     const raw = atomText(s);
     if (!raw) return null;
     if (raw in ValType) return raw as ValType;

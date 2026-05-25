@@ -175,6 +175,76 @@ function _mapChildren(
     case ExpressionKind.RefIsNull:
       return { ...expr, value: mapExpression(expr.value, fn) };
 
+
+    case ExpressionKind.RefEq:
+      return {
+        ...expr,
+        left: mapExpression(expr.left, fn),
+        right: mapExpression(expr.right, fn),
+      };
+
+    case ExpressionKind.RefI31:
+      return { ...expr, value: mapExpression(expr.value, fn) };
+
+    case ExpressionKind.I31Get:
+      return { ...expr, i31: mapExpression(expr.i31, fn) };
+
+    case ExpressionKind.StructNew:
+      return { ...expr, operands: expr.operands.map((o) => mapExpression(o, fn)) };
+
+    case ExpressionKind.StructGet:
+      return { ...expr, ref: mapExpression(expr.ref, fn) };
+
+    case ExpressionKind.StructSet:
+      return {
+        ...expr,
+        ref: mapExpression(expr.ref, fn),
+        value: mapExpression(expr.value, fn),
+      };
+
+    case ExpressionKind.ArrayNew:
+      return {
+        ...expr,
+        init: expr.init ? mapExpression(expr.init, fn) : null,
+        length: mapExpression(expr.length, fn),
+      };
+
+    case ExpressionKind.ArrayNewFixed:
+      return { ...expr, values: expr.values.map((v) => mapExpression(v, fn)) };
+
+    case ExpressionKind.ArrayNewData:
+    case ExpressionKind.ArrayNewElem:
+      return {
+        ...expr,
+        offset: mapExpression(expr.offset, fn),
+        length: mapExpression(expr.length, fn),
+      };
+
+    case ExpressionKind.ArrayGet:
+      return {
+        ...expr,
+        ref: mapExpression(expr.ref, fn),
+        index: mapExpression(expr.index, fn),
+      };
+
+    case ExpressionKind.ArraySet:
+      return {
+        ...expr,
+        ref: mapExpression(expr.ref, fn),
+        index: mapExpression(expr.index, fn),
+        value: mapExpression(expr.value, fn),
+      };
+
+    case ExpressionKind.ArrayLen:
+      return { ...expr, ref: mapExpression(expr.ref, fn) };
+
+    case ExpressionKind.RefTest:
+    case ExpressionKind.RefCast:
+      return { ...expr, ref: mapExpression(expr.ref, fn) };
+
+    case ExpressionKind.BrOn:
+      return { ...expr, ref: mapExpression(expr.ref, fn) };
+
     // Leaf nodes — no children to transform
     case ExpressionKind.Nop:
     case ExpressionKind.Unreachable:
@@ -274,6 +344,54 @@ function _visitChildren(
       break;
     case ExpressionKind.RefIsNull:
       visit(expr.value);
+      break;
+
+    case ExpressionKind.RefEq:
+      visit(expr.left);
+      visit(expr.right);
+      break;
+    case ExpressionKind.RefI31:
+      visit(expr.value);
+      break;
+    case ExpressionKind.I31Get:
+      visit(expr.i31);
+      break;
+    case ExpressionKind.StructNew:
+      expr.operands.forEach(visit);
+      break;
+    case ExpressionKind.StructGet:
+      visit(expr.ref);
+      break;
+    case ExpressionKind.StructSet:
+      visit(expr.ref);
+      visit(expr.value);
+      break;
+    case ExpressionKind.ArrayNew:
+      if (expr.init) visit(expr.init);
+      visit(expr.length);
+      break;
+    case ExpressionKind.ArrayNewFixed:
+      expr.values.forEach(visit);
+      break;
+    case ExpressionKind.ArrayNewData:
+    case ExpressionKind.ArrayNewElem:
+      visit(expr.offset);
+      visit(expr.length);
+      break;
+    case ExpressionKind.ArrayGet:
+      visit(expr.ref);
+      visit(expr.index);
+      break;
+    case ExpressionKind.ArraySet:
+      visit(expr.ref);
+      visit(expr.index);
+      visit(expr.value);
+      break;
+    case ExpressionKind.ArrayLen:
+    case ExpressionKind.RefTest:
+    case ExpressionKind.RefCast:
+    case ExpressionKind.BrOn:
+      visit(expr.ref);
       break;
     default:
       break;

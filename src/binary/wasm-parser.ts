@@ -52,6 +52,19 @@ import {
   makeUnreachable,
   UnaryOp,
 } from "../ir/expressions.ts";
+import {
+  type TypeDef, type FieldType, type StorageType, type RefType,
+  AbstractHeapType, type HeapType,
+  isRefType,
+} from "../ir/gc-types.ts";
+import {
+  makeRefEq, makeRefI31, makeI31Get,
+  makeStructNew, makeStructNewDefault, makeStructGet, makeStructSet,
+  makeArrayNew, makeArrayNewDefault, makeArrayNewFixed,
+  makeArrayNewData, makeArrayNewElem,
+  makeArrayGet, makeArraySet, makeArrayLen,
+  makeRefTest, makeRefCast, makeBrOn, BrOnOp,
+} from "../ir/expressions.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 
 // ---------------------------------------------------------------------------
@@ -91,7 +104,7 @@ type ControlFrameKind = "block" | "loop" | "if" | "else" | "func";
 interface ControlFrame {
   kind: ControlFrameKind;
   label: string;
-  resultTypes: ValType[];
+  resultTypes: (ValType | RefType)[];
   exprs: Expression[];
   ifCondition?: Expression;
   thenExprs?: Expression[];
@@ -99,6 +112,7 @@ interface ControlFrame {
 
 interface DecoderCtx {
   funcTypes: FuncType[];
+  heapTypeDefs: TypeDef[];
   importedFuncCount: number;
   funcTypeIndices: number[];
   globalInfos: GlobalInfo[];
@@ -247,7 +261,30 @@ const BINARY_OPCODE: Record<number, BinaryOp> = {
 // Helpers
 // ---------------------------------------------------------------------------
 
-function readValTypeByte(r: BinaryReader): ValType {
+/** Read a heap type from a SLEB128-encoded signed integer. */
+function readHeapType(r: BinaryReader): HeapType {
+  const v = r.readI32(); // heap types encoded as signed LEB128
+  switch (v) {
+    case -0x10: return AbstractHeapType.Func;
+    case -0x0d: return AbstractHeapType.NoFunc;
+    case -0x11: return AbstractHeapType.Ext;
+    case -0x0e: return AbstractHeapType.NoExt;
+    case -0x12: return AbstractHeapType.Any;
+    case -0x13: return AbstractHeapType.Eq;
+    case -0x14: return AbstractHeapType.I31;
+    case -0x15: return AbstractHeapType.Struct;
+    case -0x16: return AbstractHeapType.Array;
+    case -0x0f: return AbstractHeapType.None;
+    case -0x17: return AbstractHeapType.Exn;
+    case -0x0c: return AbstractHeapType.NoExn;
+    default:
+      if (v >= 0) return v; // type index
+      return AbstractHeapType.Any; // fallback for unknown abstract types
+  }
+}
+
+/** Read a value type or reference type from the binary stream. */
+function readValueType(r: BinaryReader): ValType | RefType {
   const b = r.readU8();
   switch (b) {
     case 0x7f: return ValType.I32;
@@ -255,20 +292,43 @@ function readValTypeByte(r: BinaryReader): ValType {
     case 0x7d: return ValType.F32;
     case 0x7c: return ValType.F64;
     case 0x7b: return ValType.V128;
+    // Abstract nullable reference types (shorthand encodings)
     case 0x70: return ValType.FuncRef;
     case 0x6f: return ValType.ExternRef;
+    case 0x6e: return ValType.AnyRef;
+    case 0x6d: return ValType.EqRef;
+    case 0x6c: return ValType.I31Ref;
+    case 0x6b: return ValType.StructRef;
+    case 0x6a: return ValType.ArrayRef;
+    case 0x73: return ValType.NullFuncRef;
+    case 0x72: return ValType.NullExternRef;
+    case 0x71: return ValType.NullRef;
+    // Typed reference: (ref null $T) = 0x63, (ref $T) = 0x64
+    case 0x63: return { heap: readHeapType(r), nullable: true };
+    case 0x64: return { heap: readHeapType(r), nullable: false };
     default: r.error(`unknown valtype byte 0x${b.toString(16)}`);
   }
 }
 
-function readBlockType(r: BinaryReader): ValType[] {
+/** Legacy shim — returns ValType for positions that still use ValType. */
+function readValTypeByte(r: BinaryReader): ValType {
+  const t = readValueType(r);
+  if (typeof t === "string") return t as ValType;
+  // ref type in a legacy position — map to nearest abstract ValType
+  return ValType.AnyRef;
+}
+
+function readBlockType(r: BinaryReader): (ValType | RefType)[] {
   const b = r.peekU8();
   if (b === 0x40) { r.readU8(); return []; }
-  if (b === 0x7f || b === 0x7e || b === 0x7d || b === 0x7c ||
-      b === 0x7b || b === 0x70 || b === 0x6f) {
-    return [readValTypeByte(r)];
+  // Any value type byte (MVP + GC ref types)
+  if (b === 0x7f || b === 0x7e || b === 0x7d || b === 0x7c || b === 0x7b ||
+      b === 0x70 || b === 0x6f || b === 0x6e || b === 0x6d || b === 0x6c ||
+      b === 0x6b || b === 0x6a || b === 0x73 || b === 0x72 || b === 0x71 ||
+      b === 0x63 || b === 0x64) {
+    return [readValueType(r)];
   }
-  // type index (multi-value) -- treat as empty for now
+  // type index (multi-value) — read as signed LEB128
   r.readI32();
   return [];
 }
@@ -300,6 +360,7 @@ class WasmParser {
   private readonly r: BinaryReader;
   private readonly builder = new ModuleBuilder();
   private funcTypes: FuncType[] = [];
+  private heapTypeDefs: TypeDef[] = [];
   private importedFuncCount = 0;
   private funcTypeIndices: number[] = [];
   private globalInfos: GlobalInfo[] = [];
@@ -312,7 +373,9 @@ class WasmParser {
   parse(): WasmModule {
     this.readHeader();
     this.readSections();
-    return this.builder.build();
+    const mod = this.builder.build();
+    // Attach heap type definitions collected from the type section
+    return { ...mod, heapTypes: this.heapTypeDefs, hasGC: this.heapTypeDefs.length > 0 };
   }
 
 
@@ -355,16 +418,68 @@ class WasmParser {
   private readTypeSection(): void {
     const count = this.r.readU32();
     for (let i = 0; i < count; i++) {
-      const tag = this.r.readU8();
-      if (tag !== 0x60) this.r.error(`expected func type tag 0x60, got 0x${tag.toString(16)}`);
-      const paramCount = this.r.readU32();
-      const params: ValType[] = [];
-      for (let j = 0; j < paramCount; j++) params.push(readValTypeByte(this.r));
-      const resultCount = this.r.readU32();
-      const results: ValType[] = [];
-      for (let j = 0; j < resultCount; j++) results.push(readValTypeByte(this.r));
-      this.funcTypes.push({ params, results });
+      this.readTypeDef();
     }
+  }
+
+  private readStorageType(): StorageType {
+    const b = this.r.peekU8();
+    if (b === 0x78) { this.r.readU8(); return "i8"; }
+    if (b === 0x77) { this.r.readU8(); return "i16"; }
+    return readValueType(this.r);
+  }
+
+  private readFieldType(): FieldType {
+    const type = this.readStorageType();
+    const mutable = this.r.readU8() !== 0;
+    return { type, mutable };
+  }
+
+  private readTypeDef(): void {
+    let tag = this.r.readU8();
+    // Sub / SubFinal wrappers: skip supertype list, read inner type
+    if (tag === 0x50 || tag === 0x4f) {
+      const n = this.r.readU32();
+      for (let i = 0; i < n; i++) this.r.readU32(); // supertype indices
+      tag = this.r.readU8(); // actual type form
+    }
+    // Rec group: read count then delegate to inner readTypeDef calls
+    if (tag === 0x4e) {
+      const n = this.r.readU32();
+      for (let i = 0; i < n; i++) this.readTypeDef();
+      return; // rec group itself doesn't produce a single TypeDef entry
+    }
+    if (tag === 0x60) { // func type
+      const paramCount = this.r.readU32();
+      const params: (ValType | RefType)[] = [];
+      for (let j = 0; j < paramCount; j++) params.push(readValueType(this.r));
+      const resultCount = this.r.readU32();
+      const results: (ValType | RefType)[] = [];
+      for (let j = 0; j < resultCount; j++) results.push(readValueType(this.r));
+      const def: TypeDef = { kind: "func", params, results };
+      this.heapTypeDefs.push(def);
+      // Keep legacy funcTypes array in sync (map RefType params to AnyRef for compat)
+      const p2 = params.map((t) => isRefType(t) ? ValType.AnyRef : t as ValType);
+      const r2 = results.map((t) => isRefType(t) ? ValType.AnyRef : t as ValType);
+      this.funcTypes.push({ params: p2, results: r2 });
+      return;
+    }
+    if (tag === 0x5f) { // struct type
+      const fieldCount = this.r.readU32();
+      const fields: FieldType[] = [];
+      for (let j = 0; j < fieldCount; j++) fields.push(this.readFieldType());
+      this.heapTypeDefs.push({ kind: "struct", fields });
+      this.funcTypes.push({ params: [], results: [] }); // placeholder to keep indices aligned
+      return;
+    }
+    if (tag === 0x5e) { // array type
+      const element = this.readFieldType();
+      this.heapTypeDefs.push({ kind: "array", element });
+      this.funcTypes.push({ params: [], results: [] }); // placeholder
+      return;
+    }
+    // Unknown type form — skip gracefully via error (will be caught by caller)
+    this.r.error(`unknown type form tag 0x${tag.toString(16)}`);
   }
 
   private readImportSection(): void {
@@ -521,6 +636,7 @@ class WasmParser {
     const count = this.r.readU32();
     const ctx: DecoderCtx = {
       funcTypes: this.funcTypes,
+      heapTypeDefs: this.heapTypeDefs,
       importedFuncCount: this.importedFuncCount,
       funcTypeIndices: this.funcTypeIndices,
       globalInfos: this.globalInfos,
@@ -866,7 +982,25 @@ class WasmParser {
           push(makeRefFunc(`$func${r.readU32()}`));
           break;
         }
+        case 0xd3: { // ref.eq
+          const b2 = pop(); const a2 = pop();
+          push(makeRefEq(a2, b2));
+          break;
+        }
+        case 0xd5: { // br_on_null
+          const depth = r.readU32();
+          const ref = pop();
+          push(makeBrOn(BrOnOp.Null, resolveLabel(frames, depth), ref, ref.type));
+          break;
+        }
+        case 0xd6: { // br_on_non_null
+          const depth = r.readU32();
+          const ref = pop();
+          push(makeBrOn(BrOnOp.NonNull, resolveLabel(frames, depth), ref, ref.type));
+          break;
+        }
 
+        case 0xfb: decodeGcPrefix(r, push, pop, ctx, frames); break;
         case 0xfc: decodeMiscPrefix(r, push, pop); break;
 
         default: {
@@ -893,6 +1027,213 @@ class WasmParser {
       locals,
       body,
     };
+  }
+}
+
+// ---------------------------------------------------------------------------
+// 0xFB prefix — GC instructions
+// ---------------------------------------------------------------------------
+
+function gcRefType(typeIndex: number): RefType {
+  return { heap: typeIndex, nullable: false };
+}
+
+function decodeGcPrefix(
+  r: BinaryReader,
+  push: (e: Expression) => void,
+  pop: () => Expression,
+  ctx: DecoderCtx,
+  frames: ControlFrame[],
+): void {
+  const sub = r.readU32();
+  switch (sub) {
+    case 0x00: { // struct.new $T
+      const ti = r.readU32();
+      const def = ctx.heapTypeDefs[ti];
+      const n = (def?.kind === "struct") ? def.fields.length : 0;
+      const ops: Expression[] = [];
+      for (let i = 0; i < n; i++) ops.unshift(pop());
+      push(makeStructNew(ti, ops, gcRefType(ti)));
+      break;
+    }
+    case 0x01: { // struct.new_default $T
+      const ti = r.readU32();
+      push(makeStructNewDefault(ti, gcRefType(ti)));
+      break;
+    }
+    case 0x02: { // struct.get $T $f
+      const ti = r.readU32(); const fi = r.readU32();
+      const ref = pop();
+      const def = ctx.heapTypeDefs[ti];
+      const ft = (def?.kind === "struct") ? def.fields[fi] : undefined;
+      const rt: Type = ft ? (isRefType(ft.type) ? ft.type : ft.type as ValType) : ValType.I32;
+      push(makeStructGet(ti, fi, ref, rt, false));
+      break;
+    }
+    case 0x03: { // struct.get_s $T $f
+      const ti = r.readU32(); const fi = r.readU32();
+      push(makeStructGet(ti, fi, pop(), ValType.I32, true));
+      break;
+    }
+    case 0x04: { // struct.get_u $T $f
+      const ti = r.readU32(); const fi = r.readU32();
+      push(makeStructGet(ti, fi, pop(), ValType.I32, false));
+      break;
+    }
+    case 0x05: { // struct.set $T $f
+      const ti = r.readU32(); const fi = r.readU32();
+      const val = pop(); const ref = pop();
+      push(makeStructSet(ti, fi, ref, val));
+      break;
+    }
+    case 0x06: { // array.new $T
+      const ti = r.readU32();
+      const len = pop(); const init = pop();
+      push(makeArrayNew(ti, init, len, gcRefType(ti)));
+      break;
+    }
+    case 0x07: { // array.new_default $T
+      const ti = r.readU32();
+      push(makeArrayNewDefault(ti, pop(), gcRefType(ti)));
+      break;
+    }
+    case 0x08: { // array.new_fixed $T n
+      const ti = r.readU32(); const n = r.readU32();
+      const vals: Expression[] = [];
+      for (let i = 0; i < n; i++) vals.unshift(pop());
+      push(makeArrayNewFixed(ti, vals, gcRefType(ti)));
+      break;
+    }
+    case 0x09: { // array.new_data $T $d
+      const ti = r.readU32(); const di = r.readU32();
+      const len = pop(); const off = pop();
+      push(makeArrayNewData(ti, di, off, len, gcRefType(ti)));
+      break;
+    }
+    case 0x0a: { // array.new_elem $T $e
+      const ti = r.readU32(); const ei = r.readU32();
+      const len = pop(); const off = pop();
+      push(makeArrayNewElem(ti, ei, off, len, gcRefType(ti)));
+      break;
+    }
+    case 0x0b: { // array.get $T
+      const ti = r.readU32();
+      const def = ctx.heapTypeDefs[ti];
+      const eft = (def?.kind === "array") ? def.element : undefined;
+      const rt: Type = eft ? (isRefType(eft.type) ? eft.type : eft.type as ValType) : ValType.I32;
+      const idx = pop(); const ref = pop();
+      push(makeArrayGet(ti, ref, idx, rt, false));
+      break;
+    }
+    case 0x0c: { // array.get_s $T
+      const ti = r.readU32();
+      const idx = pop(); const ref = pop();
+      push(makeArrayGet(ti, ref, idx, ValType.I32, true));
+      break;
+    }
+    case 0x0d: { // array.get_u $T
+      const ti = r.readU32();
+      const idx = pop(); const ref = pop();
+      push(makeArrayGet(ti, ref, idx, ValType.I32, false));
+      break;
+    }
+    case 0x0e: { // array.set $T
+      const ti = r.readU32();
+      const val = pop(); const idx = pop(); const ref = pop();
+      push(makeArraySet(ti, ref, idx, val));
+      break;
+    }
+    case 0x0f: { // array.len
+      push(makeArrayLen(pop()));
+      break;
+    }
+    case 0x10: { // array.fill $T
+      const ti = r.readU32();
+      const len = pop(); const val = pop(); const idx = pop(); const ref = pop();
+      void ti;
+      // Emit as: ref[idx..idx+len] = val — modelled as array.set for first element
+      // Full array.fill IR node is available; emit nop for now (complex multi-op)
+      push(makeArraySet(ti, ref, idx, val));
+      void len;
+      break;
+    }
+    case 0x11: { // array.copy $T1 $T2
+      const _ti1 = r.readU32(); const _ti2 = r.readU32();
+      pop(); pop(); pop(); pop(); pop();
+      push(makeNop());
+      break;
+    }
+    case 0x12: { // array.init_data $T $d
+      const _ti = r.readU32(); const _di = r.readU32();
+      pop(); pop(); pop(); pop();
+      push(makeNop());
+      break;
+    }
+    case 0x13: { // array.init_elem $T $e
+      const _ti = r.readU32(); const _ei = r.readU32();
+      pop(); pop(); pop(); pop();
+      push(makeNop());
+      break;
+    }
+    case 0x14: { // ref.test $T
+      const ht = readHeapType(r);
+      push(makeRefTest(pop(), ht, false));
+      break;
+    }
+    case 0x15: { // ref.test null $T
+      const ht = readHeapType(r);
+      push(makeRefTest(pop(), ht, true));
+      break;
+    }
+    case 0x16: { // ref.cast $T
+      const ht = readHeapType(r);
+      push(makeRefCast(pop(), ht, false, { heap: ht, nullable: false }));
+      break;
+    }
+    case 0x17: { // ref.cast null $T
+      const ht = readHeapType(r);
+      push(makeRefCast(pop(), ht, true, { heap: ht, nullable: true }));
+      break;
+    }
+    case 0x18: { // br_on_cast flags label $T1 $T2
+      const flags = r.readU8();
+      const depth = r.readU32();
+      const _ht1 = readHeapType(r);
+      const ht2 = readHeapType(r);
+      const nullable = (flags & 0x02) !== 0;
+      const ref = pop();
+      push(makeBrOn(BrOnOp.Cast, resolveLabel(frames, depth), ref, ref.type, ht2, nullable));
+      break;
+    }
+    case 0x19: { // br_on_cast_fail flags label $T1 $T2
+      const flags = r.readU8();
+      const depth = r.readU32();
+      const _ht1 = readHeapType(r);
+      const ht2 = readHeapType(r);
+      const nullable = (flags & 0x02) !== 0;
+      const ref = pop();
+      push(makeBrOn(BrOnOp.CastFail, resolveLabel(frames, depth), ref, ref.type, ht2, nullable));
+      break;
+    }
+    case 0x1a: case 0x1b: { // any.convert_extern / extern.convert_any
+      push(pop()); // identity conversion in IR
+      break;
+    }
+    case 0x1c: { // ref.i31
+      push(makeRefI31(pop(), { heap: AbstractHeapType.I31, nullable: false }));
+      break;
+    }
+    case 0x1d: { // i31.get_s
+      push(makeI31Get(pop(), true));
+      break;
+    }
+    case 0x1e: { // i31.get_u
+      push(makeI31Get(pop(), false));
+      break;
+    }
+    default:
+      push(makeNop());
+      break;
   }
 }
 

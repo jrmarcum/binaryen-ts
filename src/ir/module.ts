@@ -25,6 +25,8 @@
 
 import { Expression } from "./expressions.ts";
 import { None, Type, ValType } from "./types.ts";
+import { type TypeDef } from "./gc-types.ts";
+export type { TypeDef } from "./gc-types.ts";
 
 // ---------------------------------------------------------------------------
 // Module-level definition types
@@ -180,6 +182,8 @@ export interface WasmModule {
   hasMemory64: boolean;
   /** Whether the module uses the multi-memory proposal. */
   hasMultiMemory: boolean;
+  /** User-defined heap types (struct, array, func) for the GC proposal. */
+  heapTypes: TypeDef[];
   /** Whether the module uses the GC proposal. */
   hasGC: boolean;
 }
@@ -216,6 +220,7 @@ export class ModuleBuilder {
   private _hasMemory64 = false;
   private _hasMultiMemory = false;
   private _hasGC = false;
+  private readonly _heapTypes: TypeDef[] = [];
 
   // -------------------------------------------------------------------------
   // Functions
@@ -446,6 +451,17 @@ export class ModuleBuilder {
     return this;
   }
 
+  /**
+   * Adds a user-defined heap type (struct, array, or func) to the type section.
+   * Returns the 0-based index for use in GC instructions.
+   */
+  addHeapType(def: TypeDef): number {
+    const idx = this._heapTypes.length;
+    this._heapTypes.push(def);
+    this._hasGC = true;
+    return idx;
+  }
+
   /** Enables the GC proposal. */
   enableGC(): this {
     this._hasGC = true;
@@ -470,6 +486,7 @@ export class ModuleBuilder {
       dataSegments: [...this._dataSegments],
       imports: [...this._imports],
       exports: [...this._exports],
+      heapTypes: [...this._heapTypes],
       hasExceptionHandling: this._hasEH,
       hasMemory64: this._hasMemory64,
       hasMultiMemory: this._hasMultiMemory,

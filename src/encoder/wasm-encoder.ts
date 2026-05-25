@@ -40,6 +40,12 @@ import {
   type BinaryExpr,
   type ConstExpr,
   type ReturnExpr,
+  type RefEqExpr, type RefI31Expr, type I31GetExpr,
+  type StructNewExpr, type StructGetExpr, type StructSetExpr,
+  type ArrayNewExpr, type ArrayNewFixedExpr, type ArrayNewDataExpr,
+  type ArrayNewElemExpr, type ArrayGetExpr, type ArraySetExpr,
+  type ArrayLenExpr, type RefTestExpr, type RefCastExpr, type BrOnExpr,
+  BrOnOp,
 } from "../ir/expressions.ts";
 import {
   type DataSegment,
@@ -47,6 +53,10 @@ import {
   type WasmModule,
 } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
+import {
+  AbstractHeapType, type HeapType, type RefType, type StorageType,
+  isRefType,
+} from "../ir/gc-types.ts";
 
 // ---------------------------------------------------------------------------
 // BinaryWriter — growable byte buffer with WASM encoding helpers
@@ -308,16 +318,64 @@ function writeBlockType(w: BinaryWriter, t: Type): void {
   if (t === None || (Array.isArray(t) && t.length === 0)) {
     w.writeU8(0x40);
   } else if (Array.isArray(t)) {
-    w.writeU8(valTypeByte(t[0] as ValType));
+    writeValueType(w, t[0] as ValType | RefType);
   } else if (t !== "unreachable") {
-    w.writeU8(valTypeByte(t as ValType));
+    writeValueType(w, t as ValType | RefType);
   } else {
     w.writeU8(0x40);
   }
 }
 
 function refHeapTypeByte(t: ValType): number {
-  return t === ValType.FuncRef ? 0x70 : 0x6f;
+  switch (t) {
+    case ValType.FuncRef:      return 0x70;
+    case ValType.ExternRef:    return 0x6f;
+    case ValType.AnyRef:       return 0x6e;
+    case ValType.EqRef:        return 0x6d;
+    case ValType.I31Ref:       return 0x6c;
+    case ValType.StructRef:    return 0x6b;
+    case ValType.ArrayRef:     return 0x6a;
+    case ValType.NullRef:      return 0x71;
+    case ValType.NullFuncRef:  return 0x73;
+    case ValType.NullExternRef: return 0x72;
+    default: return 0x6e;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// GC heap type / ref type encoding
+// ---------------------------------------------------------------------------
+
+const ABSTRACT_HEAP_TYPE_BYTE: Record<AbstractHeapType, number> = {
+  [AbstractHeapType.Func]:   0x70,
+  [AbstractHeapType.NoFunc]: 0x73,
+  [AbstractHeapType.Ext]:    0x6f,
+  [AbstractHeapType.NoExt]:  0x72,
+  [AbstractHeapType.Any]:    0x6e,
+  [AbstractHeapType.Eq]:     0x6d,
+  [AbstractHeapType.I31]:    0x6c,
+  [AbstractHeapType.Struct]: 0x6b,
+  [AbstractHeapType.Array]:  0x6a,
+  [AbstractHeapType.None]:   0x71,
+  [AbstractHeapType.Exn]:    0x69,
+  [AbstractHeapType.NoExn]:  0x74,
+};
+
+function writeHeapType(w: BinaryWriter, h: HeapType): void {
+  if (typeof h === "number") {
+    w.writeU32(h);
+  } else {
+    w.writeU8(ABSTRACT_HEAP_TYPE_BYTE[h] ?? 0x6e);
+  }
+}
+
+function writeValueType(w: BinaryWriter, t: ValType | RefType): void {
+  if (isRefType(t)) {
+    w.writeU8(t.nullable ? 0x63 : 0x64);
+    writeHeapType(w, t.heap);
+  } else {
+    writeValType(w, t);
+  }
 }
 
 // ---------------------------------------------------------------------------
@@ -509,14 +567,68 @@ class WasmEncoder {
   // ---------------------------------------------------------------------------
 
   private encodeTypeSection(w: BinaryWriter): void {
-    w.writeU32(this.types.length);
-    for (const { params, results } of this.types) {
-      w.writeU8(0x60); // func type tag
-      w.writeU32(params.length);
-      for (const p of params) writeValType(w, p);
-      w.writeU32(results.length);
-      for (const r of results) writeValType(w, r);
+    if (this.mod.heapTypes.length > 0) {
+      w.writeU32(this.mod.heapTypes.length);
+      for (const def of this.mod.heapTypes) {
+        if (def.kind === "func") {
+          w.writeU8(0x60);
+          w.writeU32(def.params.length);
+          for (const p of def.params) writeValueType(w, p);
+          w.writeU32(def.results.length);
+          for (const r of def.results) writeValueType(w, r);
+        } else if (def.kind === "struct") {
+          w.writeU8(0x5f);
+          w.writeU32(def.fields.length);
+          for (const f of def.fields) {
+            this.writeStorageType(w, f.type);
+            w.writeU8(f.mutable ? 1 : 0);
+          }
+        } else {
+          w.writeU8(0x5e);
+          this.writeStorageType(w, def.element.type);
+          w.writeU8(def.element.mutable ? 1 : 0);
+        }
+      }
+    } else {
+      w.writeU32(this.types.length);
+      for (const { params, results } of this.types) {
+        w.writeU8(0x60);
+        w.writeU32(params.length);
+        for (const p of params) writeValType(w, p);
+        w.writeU32(results.length);
+        for (const r of results) writeValType(w, r);
+      }
     }
+  }
+
+  private writeStorageType(w: BinaryWriter, t: StorageType): void {
+    if (t === "i8") { w.writeU8(0x78); return; }
+    if (t === "i16") { w.writeU8(0x77); return; }
+    writeValueType(w, t as ValType | RefType);
+  }
+
+  private gcFuncTypeIndex(params: ValType[], results: ValType[]): number {
+    for (let i = 0; i < this.mod.heapTypes.length; i++) {
+      const d = this.mod.heapTypes[i];
+      if (d.kind !== "func") continue;
+      if (d.params.length !== params.length || d.results.length !== results.length) continue;
+      let match = true;
+      for (let j = 0; j < d.params.length; j++) {
+        const dp = d.params[j];
+        const p = params[j];
+        const dpKey = isRefType(dp) ? ValType.AnyRef : (dp as string);
+        if (dpKey !== p) { match = false; break; }
+      }
+      if (!match) continue;
+      for (let j = 0; j < d.results.length; j++) {
+        const dr = d.results[j];
+        const r = results[j];
+        const drKey = isRefType(dr) ? ValType.AnyRef : (dr as string);
+        if (drKey !== r) { match = false; break; }
+      }
+      if (match) return i;
+    }
+    return 0;
   }
 
   private encodeImportSection(w: BinaryWriter): void {
@@ -527,7 +639,10 @@ class WasmEncoder {
       switch (imp.kind) {
         case "function": {
           w.writeU8(0x00);
-          w.writeU32(this.getTypeIndex(imp.params ?? [], imp.results ?? []));
+          const idx = this.mod.heapTypes.length > 0
+            ? this.gcFuncTypeIndex(imp.params ?? [], imp.results ?? [])
+            : this.getTypeIndex(imp.params ?? [], imp.results ?? []);
+          w.writeU32(idx);
           break;
         }
         case "table": {
@@ -562,7 +677,10 @@ class WasmEncoder {
   private encodeFunctionSection(w: BinaryWriter): void {
     w.writeU32(this.mod.functions.length);
     for (const fn of this.mod.functions) {
-      w.writeU32(this.getTypeIndex(fn.params, fn.results));
+      const idx = this.mod.heapTypes.length > 0
+        ? this.gcFuncTypeIndex(fn.params, fn.results)
+        : this.getTypeIndex(fn.params, fn.results);
+      w.writeU32(idx);
     }
   }
 
@@ -941,7 +1059,10 @@ class WasmEncoder {
         for (const op of e.operands) this.encodeExpr(w, op, labels);
         this.encodeExpr(w, e.target, labels);
         w.writeU8(0x11);
-        w.writeU32(this.getTypeIndex(e.params, e.results));
+        const ciIdx = this.mod.heapTypes.length > 0
+          ? this.gcFuncTypeIndex(e.params, e.results)
+          : this.getTypeIndex(e.params, e.results);
+        w.writeU32(ciIdx);
         w.writeU32(this.tableIndex.get(e.table) ?? 0);
         break;
       }
@@ -962,6 +1083,134 @@ class WasmEncoder {
         const e = expr as RefFuncExpr;
         w.writeU8(0xd2);
         w.writeU32(this.funcIndex.get(e.func) ?? 0);
+        break;
+      }
+
+      case ExpressionKind.RefEq: {
+        const e = expr as RefEqExpr;
+        this.encodeExpr(w, e.left, labels);
+        this.encodeExpr(w, e.right, labels);
+        w.writeU8(0xd3);
+        break;
+      }
+      case ExpressionKind.RefI31: {
+        const e = expr as RefI31Expr;
+        this.encodeExpr(w, e.value, labels);
+        w.writeU8(0xfb); w.writeU32(0x1c);
+        break;
+      }
+      case ExpressionKind.I31Get: {
+        const e = expr as I31GetExpr;
+        this.encodeExpr(w, e.i31, labels);
+        w.writeU8(0xfb); w.writeU32(e.signed ? 0x1d : 0x1e);
+        break;
+      }
+      case ExpressionKind.StructNew: {
+        const e = expr as StructNewExpr;
+        if (!e.defaultInit) for (const op of e.operands) this.encodeExpr(w, op, labels);
+        w.writeU8(0xfb); w.writeU32(e.defaultInit ? 0x01 : 0x00);
+        w.writeU32(e.typeIndex);
+        break;
+      }
+      case ExpressionKind.StructGet: {
+        const e = expr as StructGetExpr;
+        this.encodeExpr(w, e.ref, labels);
+        w.writeU8(0xfb); w.writeU32(e.signed ? 0x03 : 0x02);
+        w.writeU32(e.typeIndex); w.writeU32(e.fieldIndex);
+        break;
+      }
+      case ExpressionKind.StructSet: {
+        const e = expr as StructSetExpr;
+        this.encodeExpr(w, e.ref, labels);
+        this.encodeExpr(w, e.value, labels);
+        w.writeU8(0xfb); w.writeU32(0x05);
+        w.writeU32(e.typeIndex); w.writeU32(e.fieldIndex);
+        break;
+      }
+      case ExpressionKind.ArrayNew: {
+        const e = expr as ArrayNewExpr;
+        if (e.init !== null) this.encodeExpr(w, e.init, labels);
+        this.encodeExpr(w, e.length, labels);
+        w.writeU8(0xfb); w.writeU32(e.init === null ? 0x07 : 0x06);
+        w.writeU32(e.typeIndex);
+        break;
+      }
+      case ExpressionKind.ArrayNewFixed: {
+        const e = expr as ArrayNewFixedExpr;
+        for (const v of e.values) this.encodeExpr(w, v, labels);
+        w.writeU8(0xfb); w.writeU32(0x08);
+        w.writeU32(e.typeIndex); w.writeU32(e.values.length);
+        break;
+      }
+      case ExpressionKind.ArrayNewData: {
+        const e = expr as ArrayNewDataExpr;
+        this.encodeExpr(w, e.offset, labels);
+        this.encodeExpr(w, e.length, labels);
+        w.writeU8(0xfb); w.writeU32(0x09);
+        w.writeU32(e.typeIndex); w.writeU32(e.dataSegment);
+        break;
+      }
+      case ExpressionKind.ArrayNewElem: {
+        const e = expr as ArrayNewElemExpr;
+        this.encodeExpr(w, e.offset, labels);
+        this.encodeExpr(w, e.length, labels);
+        w.writeU8(0xfb); w.writeU32(0x0a);
+        w.writeU32(e.typeIndex); w.writeU32(e.elemSegment);
+        break;
+      }
+      case ExpressionKind.ArrayGet: {
+        const e = expr as ArrayGetExpr;
+        this.encodeExpr(w, e.ref, labels);
+        this.encodeExpr(w, e.index, labels);
+        w.writeU8(0xfb); w.writeU32(e.signed ? 0x0c : 0x0b);
+        w.writeU32(e.typeIndex);
+        break;
+      }
+      case ExpressionKind.ArraySet: {
+        const e = expr as ArraySetExpr;
+        this.encodeExpr(w, e.ref, labels);
+        this.encodeExpr(w, e.index, labels);
+        this.encodeExpr(w, e.value, labels);
+        w.writeU8(0xfb); w.writeU32(0x0e);
+        w.writeU32(e.typeIndex);
+        break;
+      }
+      case ExpressionKind.ArrayLen: {
+        const e = expr as ArrayLenExpr;
+        this.encodeExpr(w, e.ref, labels);
+        w.writeU8(0xfb); w.writeU32(0x0f);
+        break;
+      }
+      case ExpressionKind.RefTest: {
+        const e = expr as RefTestExpr;
+        this.encodeExpr(w, e.ref, labels);
+        w.writeU8(0xfb); w.writeU32(e.nullable ? 0x15 : 0x14);
+        writeHeapType(w, e.castType);
+        break;
+      }
+      case ExpressionKind.RefCast: {
+        const e = expr as RefCastExpr;
+        this.encodeExpr(w, e.ref, labels);
+        w.writeU8(0xfb); w.writeU32(e.nullable ? 0x17 : 0x16);
+        writeHeapType(w, e.castType);
+        break;
+      }
+      case ExpressionKind.BrOn: {
+        const e = expr as BrOnExpr;
+        this.encodeExpr(w, e.ref, labels);
+        const depth = this.resolveLabel(labels, e.label);
+        if (e.op === BrOnOp.Null) {
+          w.writeU8(0xd5); w.writeU32(depth);
+        } else if (e.op === BrOnOp.NonNull) {
+          w.writeU8(0xd6); w.writeU32(depth);
+        } else {
+          w.writeU8(0xfb);
+          w.writeU32(e.op === BrOnOp.Cast ? 0x18 : 0x19);
+          w.writeU8(e.castNullable ? 0x02 : 0x00);
+          w.writeU32(depth);
+          const ht = e.castType ?? AbstractHeapType.Any;
+          writeHeapType(w, ht); writeHeapType(w, ht);
+        }
         break;
       }
 
@@ -1018,6 +1267,22 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
     case ExpressionKind.Call: for (const op of (expr as CallExpr).operands) visit(op); break;
     case ExpressionKind.CallIndirect: { const e = expr as CallIndirectExpr; for (const op of e.operands) visit(op); visit(e.target); break; }
     case ExpressionKind.RefIsNull: visit((expr as RefIsNullExpr).value); break;
+    case ExpressionKind.RefEq: { const e = expr as RefEqExpr; visit(e.left); visit(e.right); break; }
+    case ExpressionKind.RefI31: visit((expr as RefI31Expr).value); break;
+    case ExpressionKind.I31Get: visit((expr as I31GetExpr).i31); break;
+    case ExpressionKind.StructNew: for (const op of (expr as StructNewExpr).operands) visit(op); break;
+    case ExpressionKind.StructGet: visit((expr as StructGetExpr).ref); break;
+    case ExpressionKind.StructSet: { const e = expr as StructSetExpr; visit(e.ref); visit(e.value); break; }
+    case ExpressionKind.ArrayNew: { const e = expr as ArrayNewExpr; if (e.init) visit(e.init); visit(e.length); break; }
+    case ExpressionKind.ArrayNewFixed: for (const v of (expr as ArrayNewFixedExpr).values) visit(v); break;
+    case ExpressionKind.ArrayNewData: { const e = expr as ArrayNewDataExpr; visit(e.offset); visit(e.length); break; }
+    case ExpressionKind.ArrayNewElem: { const e = expr as ArrayNewElemExpr; visit(e.offset); visit(e.length); break; }
+    case ExpressionKind.ArrayGet: { const e = expr as ArrayGetExpr; visit(e.ref); visit(e.index); break; }
+    case ExpressionKind.ArraySet: { const e = expr as ArraySetExpr; visit(e.ref); visit(e.index); visit(e.value); break; }
+    case ExpressionKind.ArrayLen: visit((expr as ArrayLenExpr).ref); break;
+    case ExpressionKind.RefTest: visit((expr as RefTestExpr).ref); break;
+    case ExpressionKind.RefCast: visit((expr as RefCastExpr).ref); break;
+    case ExpressionKind.BrOn: visit((expr as BrOnExpr).ref); break;
     default: break;
   }
 }

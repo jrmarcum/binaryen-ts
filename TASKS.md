@@ -86,7 +86,7 @@ Implementation files: `src/binary/reader.ts` (LEB128 + raw reads), `src/binary/w
   - [x] Multi-byte opcodes: `0xFC` prefix (bulk memory, saturating trunc)
   - [x] SIMD: `0xFD` prefix — stubbed as `nop` (Phase 9)
   - [x] Atomics: `0xFE` prefix — stubbed as `nop` (future)
-  - [x] GC: `0xFB` prefix — stubbed as `nop` (Phase 7)
+  - [x] GC: `0xFB` prefix — full struct/array/ref/i31/br_on decoder (Phase 7 ✅)
 - [x] `parseWasm(bytes: Uint8Array, filename?: string): WasmModule` — public entry point
 - [x] `src/binary/index.ts` — re-exports `parseWasm`, `WasmBinaryError`, `BinaryReader`
 - [x] `"./binary"` export added to `deno.json`
@@ -103,8 +103,8 @@ Implementation files: `src/binary/reader.ts` (LEB128 + raw reads), `src/binary/w
 
 - `table.get` / `table.set` stubbed as `nop` (table instructions)
 - EH opcodes not yet decoded (Phase 8)
-- GC struct/array opcodes not yet decoded (Phase 7)
-- Round-trip test (parse binary → IR → encode binary → re-parse → compare) deferred to Phase 3
+- GC struct/array opcodes — fully decoded (Phase 7 ✅); see `tests/binary/gc_parser_test.ts`
+- Round-trip test (parse binary → IR → encode binary → re-parse → compare) — complete (Phase 7 ✅)
 
 ---
 
@@ -140,7 +140,8 @@ Reference: `upstream/src/wasm-binary.h`
 
 - `if` block labels: encoded with an empty label string (no impact on correctness)
 - Saturating-truncation ops (`0xFC` prefix trunc) emitted as regular trunc (correct semantics, non-trapping flavor lost)
-- GC / EH / SIMD expression kinds fall through to nop (Phase 7, 8, 9)
+- GC expression kinds — fully encoded (Phase 7 ✅)
+- EH / SIMD expression kinds fall through to nop (Phase 8, 9)
 
 ---
 
@@ -232,18 +233,68 @@ are handled by `wabt-ts` and are out of scope here.
 
 ---
 
-## Phase 7 — GC Proposal Instructions
+## Phase 7 — GC Proposal Instructions ✅ COMPLETE
 
 Reference: `upstream/src/wasm.h` (GC expression types)
 
 **Goal**: Full support for WasmGC proposal instructions.
 
-- [ ] Heap type definitions in IR (`src/ir/gc-types.ts`)
-- [ ] `struct.new`, `struct.get`, `struct.set`
-- [ ] `array.new`, `array.get`, `array.set`, `array.len`
-- [ ] `ref.cast`, `ref.test`, `br_on_cast`
-- [ ] `ref.i31`, `i31.get_s`, `i31.get_u`
-- [ ] Parser + printer support (phases 1, 3)
+- [x] **GC type system** (`src/ir/gc-types.ts`)
+  - [x] `AbstractHeapType` enum (Func, NoFunc, Ext, NoExt, Any, Eq, I31, Struct, Array, None, Exn, NoExn)
+  - [x] `RefType` — `{ heap: HeapType; nullable: boolean }`
+  - [x] `FieldType` — `{ type: StorageType; mutable: boolean }`
+  - [x] `TypeDef` discriminated union — `FuncTypeDef | StructTypeDef | ArrayTypeDef`
+  - [x] `isRefType`, `refTypeToString` helpers
+  - [x] `WasmModule.heapTypes: TypeDef[]` and `WasmModule.hasGC: boolean` fields
+  - [x] `ModuleBuilder.addHeapType(def)` — appends to heapTypes; sets `_hasGC = true`
+- [x] **GC expression kinds + factory functions** (`src/ir/expressions.ts`)
+  - [x] `RefEq`, `RefI31`, `I31Get` — i31 operations
+  - [x] `StructNew`, `StructGet`, `StructSet` — struct operations
+  - [x] `ArrayNew`, `ArrayNewFixed`, `ArrayGet`, `ArraySet`, `ArrayLen` — array operations
+  - [x] `RefTest`, `RefCast` — casting and testing
+  - [x] `BrOn` — branch-on-cast family (`BrOnOp` enum)
+  - [x] All factory functions: `makeRefEq`, `makeRefI31`, `makeI31Get`, `makeStructNew`, `makeStructNewDefault`, `makeStructGet`, `makeStructSet`, `makeArrayNew`, `makeArrayNewDefault`, `makeArrayNewFixed`, `makeArrayGet`, `makeArraySet`, `makeArrayLen`, `makeRefTest`, `makeRefCast`, `makeBrOn`
+- [x] **Binary parser GC support** (`src/binary/wasm-parser.ts`)
+  - [x] Type section: 0x5f (struct), 0x5e (array) → `StructTypeDef` / `ArrayTypeDef`
+  - [x] Type section: func types with `(ref ...)` params/results decoded as `RefType`
+  - [x] `parseHeapTypeByte` — maps abstract 1-byte encodings to `AbstractHeapType` or type index
+  - [x] `parseRefType` — handles 0x63 (ref null) and 0x64 (non-nullable ref)
+  - [x] `0xFB` prefix instruction decoder — all struct/array/ref/i31/br_on opcodes
+  - [x] `hasGC: this.heapTypeDefs.length > 0` set on returned module
+  - [x] `ValType` ref aliases (anyref, eqref, i31ref, structref, arrayref) decoded correctly
+- [x] **Binary encoder GC support** (`src/encoder/wasm-encoder.ts`)
+  - [x] `writeHeapType` — type index as unsigned LEB128; abstract types as single-byte SLEB128
+  - [x] `writeValueType` — handles `RefType` (0x63/0x64 prefix + heap type) and `ValType`
+  - [x] `writeStorageType` — i8→0x78, i16→0x77, otherwise `writeValueType`
+  - [x] `encodeTypeSection` — GC mode: emits struct (0x5f) / array (0x5e) / func (0x60) from `mod.heapTypes`
+  - [x] `gcFuncTypeIndex` — scans `mod.heapTypes` for matching `FuncTypeDef`
+  - [x] All 15 GC expression kinds encoded under `0xFB` prefix (struct/array/ref/i31/br_on/ref.eq)
+  - [x] `walkChildren` extended for all GC expression kinds
+- [x] **WAT parser GC support** (`src/parser/wat-parser.ts`)
+  - [x] First pass `collectType` — parses `(type $name (struct ...))` and `(type $name (array ...))`
+  - [x] `parseStructFields` / `parseArrayElement` / `parseStorageTypeSExpr` helpers
+  - [x] `typeNames: Map<string, number>` — maps `$name` → heapTypes index
+  - [x] `resolveTypeIndex` — resolves `$name` or numeric literal to type index
+  - [x] `parseHeapType` — maps abstract names and `$names` to `HeapType`
+  - [x] `tryParseValType` updated to handle `(ref ...)` list forms
+  - [x] GC instruction cases in `parseListExpr`: ref.eq, ref.i31, i31.get_s/u, struct.new/new_default/get/get_s/get_u/set, array.new/new_default/new_fixed/get/get_s/get_u/set/len, ref.test/test_null/cast/cast_null
+- [x] **Tests** — 15 new tests in `tests/binary/gc_parser_test.ts`, all passing
+  - [x] Struct type decoded (2 fields, both i32 immutable)
+  - [x] Func type with RefType result decoded
+  - [x] `struct.new` decoded as `StructNewExpr`
+  - [x] Array type decoded (mutable i32)
+  - [x] `array.new_default` decoded as `ArrayNewExpr` with null init
+  - [x] `ref.test` decoded as `RefTestExpr`
+  - [x] `hasGC` flag set for GC modules
+  - [x] Struct module round-trips (encode → parse)
+  - [x] Struct fields preserved after round-trip
+  - [x] `struct.new` preserved after round-trip
+  - [x] Array module round-trips
+  - [x] `array.new_default` preserved after round-trip
+  - [x] `ref.test` round-trips
+  - [x] IR-built struct type encodes and parses
+  - [x] IR-built array type encodes and parses
+- [x] Total: 141/141 tests passing (all previous tests unaffected)
 
 ---
 

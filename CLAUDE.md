@@ -206,6 +206,7 @@ binaryen-ts/
 ├── src/
 │   ├── ir/             WASM IR — types, expression nodes, module builder
 │   │   ├── types.ts        ValType, Type, None, Unreachable
+│   │   ├── gc-types.ts     AbstractHeapType, HeapType, RefType, TypeDef, FieldType (Phase 7)
 │   │   ├── expressions.ts  All ExpressionKind variants + factory fns
 │   │   ├── module.ts       WasmModule, ModuleBuilder (fluent API)
 │   │   ├── walk.ts         mapExpression (bottom-up transform), walkExpression (pre-order visitor)
@@ -239,9 +240,10 @@ binaryen-ts/
 │       └── binaryen-js.ts  Hybrid bridge to upstream binaryen.js WASM
 └── tests/
     ├── parser/         WAT parser round-trip tests
-    ├── binary/         WASM binary parser tests
+    ├── binary/         WASM binary parser tests + GC parser/encoder tests (Phase 7)
     ├── encoder/        WASM binary encoder round-trip tests
-    └── passes/         Optimization pass tests (Phase 4)
+    ├── passes/         Optimization pass tests (Phases 4–5)
+    └── tools/          wasm-opt CLI tests (Phase 6)
 ```
 
 ### Phase Status
@@ -255,7 +257,8 @@ binaryen-ts/
 | 4 | ✅ Done | Core optimization passes — 8 passes, 26/26 tests passing |
 | 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, 14/14 tests passing |
 | 6 | ✅ Done | `wasm-opt` native CLI + RemoveUnusedNames pass — 14/14 tests passing |
-| 7+ | Planned | GC, EH, SIMD, wasic compilation |
+| 7 | ✅ Done | GC proposal — heap types, struct/array/ref instructions, binary parser + encoder + WAT parser, 141/141 tests |
+| 8+ | Planned | EH, SIMD, wasic compilation |
 
 ### Key Design Decisions
 
@@ -352,6 +355,22 @@ Two-pass approach per function:
 2. **Strip unused names** (`mapExpression`, bottom-up): for each `BlockExpr`, if its `name` is not in the targets set, set `name: null`. For each `LoopExpr`, if its `name` is not in the targets set (no back-edge `br`), replace the loop with its body (since a loop with no back-edge executes at most once — equivalent to straight-line code). Type guard: only replace when `loop.type === loop.body.type`.
 
 Deferred from upstream: single-child named-block merge (redirect branches from outer to inner block and eliminate the outer wrapper).
+
+#### GC proposal design (Phase 7)
+
+`src/ir/gc-types.ts` — new file; `src/ir/expressions.ts`, `src/binary/wasm-parser.ts`, `src/encoder/wasm-encoder.ts`, `src/parser/wat-parser.ts` extended.
+
+Key design decisions:
+
+- **`AbstractHeapType` byte encoding**: single SLEB128 byte — Func=0x70(-16), NoFunc=0x73(-13), Ext=0x6f(-17), NoExt=0x72(-14), Any=0x6e(-18), Eq=0x6d(-19), I31=0x6c(-20), Struct=0x6b(-21), Array=0x6a(-22), None=0x71(-15), Exn=0x69(-23), NoExn=0x74(-12). User-defined types encoded as unsigned LEB128 type index.
+- **`HeapType` union**: `number | AbstractHeapType` — numeric literal for user-defined type index, enum value for abstract. `writeHeapType` checks `h >= 0` (type index) vs abstract constant.
+- **`TypeDef` in `mod.heapTypes[]`**: struct, array, and func types share the same index space. The type section emits all three flavors from `mod.heapTypes` in GC mode.
+- **GC mode vs non-GC mode in encoder**: `mod.heapTypes.length > 0` switches to GC encoding. Non-GC mode uses the collected/deduplicated func types map. GC mode looks up function type indices via `gcFuncTypeIndex()` which scans `mod.heapTypes`.
+- **Ref type round-trip shim**: the binary parser maps `RefType` params/results to `ValType.AnyRef` in `WasmFunction.params/results` for backward compatibility. `gcFuncTypeIndex()` accounts for this by comparing `isRefType(dp) ? ValType.AnyRef : dp` against the function's stored param type.
+- **`(ref ...)` in WAT parser**: `tryParseValType` handles `(ref null $T)` and `(ref $T)` list forms, returning `ValType.AnyRef` (approximate; full ref type propagation deferred until the WAT printer tracks heap type context).
+- **WAT parser `collectType`**: runs in the first pass alongside imports/globals/etc. Accumulates `typeNames: Map<string, number>` mapping `$name` → heapTypes index. Called via `case "type": this.collectType(child as SList)`.
+- **`0xFB` prefix sub-opcodes**: struct.new=0x00, struct.new_default=0x01, struct.get=0x02, struct.get_s=0x03, struct.get_u=0x04, struct.set=0x05, array.new=0x06, array.new_default=0x07, array.new_fixed=0x08, array.get=0x0b, array.get_s=0x0c, array.get_u=0x0d, array.set=0x0e, array.len=0x0f, ref.test=0x14, ref.test_null=0x15, ref.cast=0x16, ref.cast_null=0x17, br_on_cast=0x18, br_on_cast_fail=0x19, ref.i31=0x1c, i31.get_s=0x1d, i31.get_u=0x1e. `ref.eq`=0xd3 (no 0xFB prefix).
+- **Tests in `tests/binary/gc_parser_test.ts`**: hand-crafted binary modules for struct, array, and ref.test; 7 parser tests + 8 encoder round-trip tests = 15 total.
 
 #### Upstream C++ reference
 

@@ -10,7 +10,8 @@
  * **Value types** are the primitive types that WASM values carry at runtime.
  * **Heap types** support the GC (garbage collection) proposal.
  * **Type** is the top-level alias — either a single value type, a tuple (for
- * multi-value), or the special `unreachable` / `none` sentinels.
+ * multi-value), the special `unreachable` / `none` sentinels, or a GC
+ * reference type (`RefType`).
  *
  * @example
  * ```ts
@@ -25,6 +26,9 @@
  *
  * @license MIT OR Apache-2.0
  */
+
+import { isRefType, refTypeToString, type RefType } from "./gc-types.ts";
+export type { RefType } from "./gc-types.ts";
 
 // ---------------------------------------------------------------------------
 // Value types (MVP + SIMD + reference types)
@@ -92,7 +96,7 @@ export type None = typeof None;
  * Represented as an ordered array of {@link ValType} values.
  * An empty array is equivalent to {@link None}.
  */
-export type TupleType = ValType[];
+export type TupleType = (ValType | RefType)[];
 
 // ---------------------------------------------------------------------------
 // Top-level Type alias
@@ -105,8 +109,9 @@ export type TupleType = ValType[];
  * - A {@link TupleType} (array) for multi-value blocks and calls.
  * - {@link None} (`"none"`) for void / empty returns.
  * - {@link Unreachable} (`"unreachable"`) for diverging expressions.
+ * - A {@link RefType} for GC reference-typed expressions (`ref.cast`, `struct.new`, etc.).
  */
-export type Type = ValType | TupleType | None | Unreachable;
+export type Type = ValType | TupleType | None | Unreachable | RefType;
 
 // ---------------------------------------------------------------------------
 // Utilities
@@ -128,10 +133,12 @@ export function typeToString(t: Type): string {
   if (t === Unreachable) return "unreachable";
   if (Array.isArray(t)) {
     if (t.length === 0) return "";
-    if (t.length === 1) return t[0];
-    return `(${t.join(" ")})`;
+    const strs = t.map((e) => isRefType(e) ? refTypeToString(e) : e as string);
+    if (strs.length === 1) return strs[0];
+    return `(${strs.join(" ")})`;
   }
-  return t;
+  if (isRefType(t)) return refTypeToString(t);
+  return t as string;
 }
 
 /**
@@ -156,9 +163,10 @@ export function isFloat(t: Type): boolean {
 }
 
 /**
- * Returns `true` if the type is a reference type.
+ * Returns `true` if the type is a reference type (abstract ValType ref or GC RefType).
  */
 export function isRef(t: Type): boolean {
+  if (isRefType(t)) return true;
   if (Array.isArray(t) || t === None || t === Unreachable) return false;
   return (
     t === ValType.FuncRef ||

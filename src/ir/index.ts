@@ -30,6 +30,7 @@
  * @license MIT OR Apache-2.0
  */
 
+export * from "./gc-types.ts";
 export * from "./types.ts";
 export * from "./expressions.ts";
 export * from "./module.ts";
