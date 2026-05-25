@@ -45,7 +45,9 @@ import {
 import type { Local, WasmFunction, WasmModule } from "../ir/module.ts";
 import { None, Unreachable, ValType } from "../ir/types.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
+import { optimizeNode } from "./optimize-instructions.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
+import { vacuumNode } from "./vacuum.ts";
 
 // ---------------------------------------------------------------------------
 // Size thresholds (matching upstream defaults in pass.h)
@@ -529,6 +531,18 @@ export class InliningPass implements Pass {
       if (!changed) continue;
 
       anyInlined = true;
+
+      // Post-inline cleanup (InliningOptimizing only). Inlining drops the
+      // callee body into a wrapper block plus zero-init local.sets for the
+      // callee's locals; Vacuum collapses unnecessary block/nop shells and
+      // OptimizeInstructions constant-folds any newly-revealed identities
+      // (e.g. callee body that becomes `(i32.const 5)` after substitution).
+      // Without this step, `InliningOptimizing` was indistinguishable from
+      // plain `Inlining` — the `optimize` flag existed but was never read.
+      if (this.optimize) {
+        fn.body = mapExpression(fn.body, vacuumNode);
+        fn.body = mapExpression(fn.body, optimizeNode);
+      }
 
       // Count how many uses of each callee were consumed.
       walkExpression(fn.body, (e) => {

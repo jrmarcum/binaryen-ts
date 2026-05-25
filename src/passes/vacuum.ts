@@ -53,6 +53,17 @@ registerPass(VacuumPass);
 // Implementation
 // ---------------------------------------------------------------------------
 
+/**
+ * Bottom-up vacuum transform for a single expression node.
+ *
+ * Exposed for callers that need to apply Vacuum semantics to a single
+ * function body without running the whole module pass — e.g. the
+ * `InliningOptimizing` pass cleans inlined call sites this way.
+ */
+export function vacuumNode(expr: Expression): Expression {
+  return _vacuumNode(expr);
+}
+
 function _vacuumNode(expr: Expression): Expression {
   switch (expr.kind) {
     case ExpressionKind.Block:

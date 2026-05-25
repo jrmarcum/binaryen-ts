@@ -71,6 +71,18 @@ registerPass(OptimizeInstructionsPass);
 // Node-level optimizer (called bottom-up by mapExpression)
 // ---------------------------------------------------------------------------
 
+/**
+ * Bottom-up algebraic-identity + constant-fold transform for a single
+ * expression node.
+ *
+ * Exposed for callers that need to apply OptimizeInstructions semantics to a
+ * single function body without running the whole module pass — e.g. the
+ * `InliningOptimizing` pass cleans inlined call sites this way.
+ */
+export function optimizeNode(expr: Expression): Expression {
+  return _optimizeNode(expr);
+}
+
 function _optimizeNode(expr: Expression): Expression {
   if (expr.kind === ExpressionKind.Binary) return _optimizeBinary(expr);
   if (expr.kind === ExpressionKind.Unary) return _optimizeUnary(expr);

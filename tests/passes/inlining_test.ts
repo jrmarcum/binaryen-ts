@@ -542,3 +542,93 @@ Deno.test("InliningOptimizing: runs without error on simple module", () => {
 
   assertEquals(hasCall(caller.body, "const_fn"), false);
 });
+
+Deno.test("InliningOptimizing: cleans up inlined body — Binary fold", () => {
+  // Callee returns `2 + 3`. After plain Inlining, the caller body has a
+  // wrapper block containing the (i32.add (i32.const 2) (i32.const 3)) tree.
+  // After InliningOptimizing, OptimizeInstructions runs over the modified
+  // body and constant-folds it to (i32.const 5) — so the Binary node count
+  // drops from 1 to 0. This is the observable difference between the two
+  // passes; before the Phase 5 fix the `optimize` flag was set on
+  // InliningOptimizingPass but never read, so the two passes were
+  // indistinguishable.
+  function makeCalleeAndCaller(): [WasmFunction, WasmFunction] {
+    const callee: WasmFunction = {
+      name: "two_plus_three",
+      params: [],
+      results: [ValType.I32],
+      locals: [],
+      body: makeBinary(BinaryOp.AddI32, makeI32Const(2), makeI32Const(3)),
+    };
+    const caller: WasmFunction = {
+      name: "main",
+      params: [],
+      results: [ValType.I32],
+      locals: [],
+      body: makeReturn(makeCall("two_plus_three", [], ValType.I32)),
+    };
+    return [callee, caller];
+  }
+
+  // Baseline — plain Inlining leaves the Binary node intact after substitution.
+  {
+    const [callee, caller] = makeCalleeAndCaller();
+    const mod = emptyModule();
+    mod.functions.push(caller, callee);
+    mod.exports.push({ name: "main", value: "main", kind: "function" });
+    new PassRunner(mod).add("Inlining").run();
+    assertEquals(hasCall(caller.body, "two_plus_three"), false);
+    assertEquals(countKind(caller.body, ExpressionKind.Binary), 1);
+  }
+
+  // With cleanup — InliningOptimizing folds the inlined (2+3) to a constant.
+  {
+    const [callee, caller] = makeCalleeAndCaller();
+    const mod = emptyModule();
+    mod.functions.push(caller, callee);
+    mod.exports.push({ name: "main", value: "main", kind: "function" });
+    new PassRunner(mod).add("InliningOptimizing").run();
+    assertEquals(hasCall(caller.body, "two_plus_three"), false);
+    assertEquals(countKind(caller.body, ExpressionKind.Binary), 0);
+  }
+});
+
+Deno.test("InliningOptimizing: cleans up inlined body — Vacuum drops nop", () => {
+  // Callee body is a block containing a nop followed by a return value;
+  // after inlining, the wrapper block contains a nop. Vacuum should remove
+  // the nop. Compare nop count before/after.
+  function makeMod(): { mod: WasmModule; caller: WasmFunction } {
+    const callee: WasmFunction = {
+      name: "nop_then_const",
+      params: [],
+      results: [ValType.I32],
+      locals: [],
+      body: makeBlock([makeNop(), makeI32Const(7)]),
+    };
+    const caller: WasmFunction = {
+      name: "main",
+      params: [],
+      results: [ValType.I32],
+      locals: [],
+      body: makeReturn(makeCall("nop_then_const", [], ValType.I32)),
+    };
+    const mod = emptyModule();
+    mod.functions.push(caller, callee);
+    mod.exports.push({ name: "main", value: "main", kind: "function" });
+    return { mod, caller };
+  }
+
+  // Plain Inlining: nop survives the substitution.
+  {
+    const { mod, caller } = makeMod();
+    new PassRunner(mod).add("Inlining").run();
+    assert(countKind(caller.body, ExpressionKind.Nop) >= 1);
+  }
+
+  // InliningOptimizing: Vacuum strips the nop from the block.
+  {
+    const { mod, caller } = makeMod();
+    new PassRunner(mod).add("InliningOptimizing").run();
+    assertEquals(countKind(caller.body, ExpressionKind.Nop), 0);
+  }
+});
