@@ -10,7 +10,7 @@
  * - `try_table` decoding (0x1f) with catch clauses
  * - Round-trip: encode ↔ parse identity for EH modules
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assertEquals } from "jsr:@std/assert";

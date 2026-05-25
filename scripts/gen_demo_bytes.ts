@@ -13,7 +13,7 @@
  * Run:
  *   deno run --allow-read --allow-write scripts/gen_demo_bytes.ts
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { parseWat } from "../src/parser/wat-parser.ts";
@@ -45,7 +45,7 @@ const ts = `// deno-fmt-ignore-file
  * Regenerate:
  *   deno run --allow-read --allow-write scripts/gen_demo_bytes.ts
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 /** WASM bytes for the demo kernel — see {@link ../wasm/demo.wat | demo.wat}. */

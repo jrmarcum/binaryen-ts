@@ -5,7 +5,7 @@
  * Round-trip tests parse a known binary, encode the resulting IR, then re-parse
  * and verify structural equivalence.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assertEquals, assertInstanceOf } from "jsr:@std/assert";

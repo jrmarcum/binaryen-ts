@@ -21,7 +21,7 @@
  * const mod = parseWasm(bytes);
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 export { parseWasm, WasmBinaryError } from "./wasm-parser.ts";

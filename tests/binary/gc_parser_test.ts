@@ -3,7 +3,7 @@
  *
  * Tests for Phase 7 GC proposal support in the binary parser and encoder.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assertEquals } from "jsr:@std/assert";

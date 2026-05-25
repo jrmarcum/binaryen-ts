@@ -18,7 +18,7 @@
  *
  * Reference: `upstream/src/passes/SimplifyLocals.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

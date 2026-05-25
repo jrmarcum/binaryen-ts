@@ -10,7 +10,7 @@
  * - {@link walkExpression} — visit every node pre-order (parent before
  *   children). Used by analysis passes that only read the tree.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

@@ -3,7 +3,7 @@
  *
  * Tests for the Phase 2 WASM binary parser.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assertEquals, assertThrows } from "jsr:@std/assert";

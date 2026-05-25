@@ -17,7 +17,7 @@
  *
  * Reference: `upstream/src/passes/Vacuum.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

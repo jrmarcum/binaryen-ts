@@ -3,7 +3,7 @@
  *
  * Tests for all Phase 4 optimization passes.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assertEquals, assertNotEquals } from "jsr:@std/assert";

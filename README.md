@@ -370,4 +370,10 @@ cd .. && git add wabt-ts && git commit -m "bump wabt-ts reference"
 
 ## License
 
-Apache-2.0 — same as the upstream Binaryen project. See [LICENSE](LICENSE) for details.
+binaryen-ts is licensed under the [MIT License](LICENSE).
+
+An Apache-2.0 alternative is provided in [LICENSE-APACHE](LICENSE-APACHE) for users whose project
+policies require an Apache-2.0-compatible upstream — pick whichever fits your needs. The upstream
+Binaryen project itself is Apache-2.0; attribution to the upstream is retained either way.
+
+JSR records the declared package license as MIT.

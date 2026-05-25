@@ -24,7 +24,7 @@
  *
  * Reference: `upstream/src/passes/Inlining.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

@@ -31,7 +31,7 @@
  * console.log(mod.exports[0].name);       // "add"
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

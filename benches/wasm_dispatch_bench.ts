@@ -23,7 +23,7 @@
  * Run:
  *   deno bench --allow-read benches/wasm_dispatch_bench.ts
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { DEMO_BYTES, DEMO_KERNEL_EXPORTS } from "../src/wasm/index.ts";

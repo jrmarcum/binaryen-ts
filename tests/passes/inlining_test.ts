@@ -3,7 +3,7 @@
  *
  * Tests for the Phase 5 Inlining pass.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assert, assertEquals } from "jsr:@std/assert";

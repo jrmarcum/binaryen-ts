@@ -28,7 +28,7 @@
  *
  * Reference: `upstream/src/passes/CoalesceLocals.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

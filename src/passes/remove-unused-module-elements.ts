@@ -26,7 +26,7 @@
  *
  * Reference: `upstream/src/passes/RemoveUnusedModuleElements.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { Expression, ExpressionKind } from "../ir/expressions.ts";

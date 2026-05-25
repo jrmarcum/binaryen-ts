@@ -4,7 +4,7 @@
  * WASM binary format parser.
  * Converts a WebAssembly binary (Uint8Array) into a WasmModule IR tree.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { BinaryReader, WasmBinaryError } from "./reader.ts";

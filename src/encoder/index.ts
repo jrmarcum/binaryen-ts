@@ -23,7 +23,7 @@
  * const bytes = new Uint8Array(await (await fetch("module.wasm")).arrayBuffer());
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 export { encodeWasm, WasmEncodeError } from "./wasm-encoder.ts";

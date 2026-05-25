@@ -11,7 +11,7 @@
  * - `clearKernelCache` invalidation
  * - Missing-export error path
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

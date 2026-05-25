@@ -1,7 +1,7 @@
 {
   "name": "@jrmarcum/binaryen-ts",
   "version": "1.0.0",
-  "license": "MIT OR Apache-2.0",
+  "license": "MIT",
   "exports": {
     ".": "./main.ts",
     "./ir": "./src/ir/index.ts",

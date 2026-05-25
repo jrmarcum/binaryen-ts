@@ -4,7 +4,7 @@
  * Low-level binary reader for WebAssembly binary format.
  * Provides LEB128, raw scalar, and byte-slice reads over a `Uint8Array`.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 /** Thrown when the binary data is malformed or truncated. */

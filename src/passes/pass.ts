@@ -21,7 +21,7 @@
  * runner.add("DCE").add("InliningOptimizing").run();
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { WasmModule } from "../ir/module.ts";

@@ -18,7 +18,7 @@
  * const ref0: RefType  = { heap: 0, nullable: false }; // (ref $0)
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { type ValType } from "./types.ts";

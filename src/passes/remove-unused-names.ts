@@ -15,7 +15,7 @@
  *
  * Reference: `upstream/src/passes/RemoveUnusedNames.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

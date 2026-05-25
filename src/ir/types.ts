@@ -24,7 +24,7 @@
  * console.log(typeToString(tuple)); // "(i32 f64)"
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { isRefType, refTypeToString, type RefType } from "./gc-types.ts";

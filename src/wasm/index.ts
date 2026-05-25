@@ -14,7 +14,7 @@
  * and Phase 3 binary encoder produce the embedded bytes. No external
  * toolchain dependency.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 export { DEMO_BYTES } from "./demo_bytes.ts";

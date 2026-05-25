@@ -63,7 +63,7 @@
  * └── upstream/      Upstream Binaryen C++ source (git submodule, reference)
  * ```
  *
- * @license Apache-2.0
+ * @license MIT
  */
 
 import process from "node:process";

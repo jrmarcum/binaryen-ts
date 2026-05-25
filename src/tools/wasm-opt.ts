@@ -20,7 +20,7 @@
  * bun main.ts wasm-opt input.wasm -o output.wasm -O2
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { readFile, writeFile } from "node:fs/promises";

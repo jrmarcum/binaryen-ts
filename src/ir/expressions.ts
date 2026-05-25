@@ -21,7 +21,7 @@
  * );
  * ```
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { None, Type, Unreachable, ValType } from "./types.ts";

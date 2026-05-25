@@ -9,7 +9,7 @@
  * - Optimization levels and explicit pass selection
  * - listPasses registry sanity check
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import { assert, assertEquals, assertInstanceOf } from "jsr:@std/assert";

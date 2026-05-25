@@ -6,7 +6,7 @@
  * This is the inverse of the Phase 2 parser (`src/binary/wasm-parser.ts`).
  * The output is a valid WebAssembly 1.0 binary that can be re-parsed or executed.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

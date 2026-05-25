@@ -33,7 +33,7 @@
  *
  * Reference: `upstream/src/passes/PickLoadSigns.cpp`
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

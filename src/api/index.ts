@@ -33,7 +33,7 @@
  * Node 18+, Bun, and any modern browser. The `optimize()` shorthand uses the
  * subprocess bridge when `hybridMode: true`, which is Node/Deno/Bun only.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 import {

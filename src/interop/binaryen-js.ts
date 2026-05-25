@@ -38,7 +38,7 @@
  * the browser — use the pure-TypeScript {@link ../passes/index.ts | pass pipeline}
  * for browser environments.
  *
- * @license MIT OR Apache-2.0
+ * @license MIT
  */
 
 // ---------------------------------------------------------------------------
