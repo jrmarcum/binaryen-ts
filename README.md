@@ -50,7 +50,7 @@ binaryen-ts/
 ├── src/interop/   Upstream binaryen.js bridge (hybrid mode)  → @jrmarcum/binaryen-ts/interop
 ├── src/wasm/      Embedded WASM kernels (Phase 10)            → @jrmarcum/binaryen-ts/wasm
 ├── src/wasm-runtime.ts  Lazy-load + cache for WASM kernels   → @jrmarcum/binaryen-ts/wasm-runtime
-└── upstream/      Upstream Binaryen C++ source (git submodule, reference only)
+└── upstream/      Upstream Binaryen C++ source (gitignored local clone, reference only)
 ```
 
 ## Installation
@@ -365,8 +365,8 @@ deno task lint
 deno task ci
 ```
 
-`deno fmt` and `deno lint` are configured to skip the `upstream/` and `wabt-ts/` submodules, so
-local runs see the same file set CI does (CI checkout does not pull submodules).
+`deno fmt` and `deno lint` are configured to skip the `upstream/` reference clone (formerly a git
+submodule, now gitignored) so local runs see the same file set CI does.
 
 ## Publishing
 
@@ -419,21 +419,29 @@ deno task publish:dry
 > current and next version from `deno.json`, so the suggested `git commit`/`git tag`/`git push`
 > commands are copy-pasteable.
 
-## Submodule references
+## External references
 
-To update the upstream binaryen C++ reference:
+This repo does not depend on any other source tree at build time. Two related projects are useful to
+keep on disk for cross-reference, but they are **not** tracked from inside this repo — both are
+gitignored so the publish manifest stays clean and CI clones stay fast.
 
-```sh
-cd upstream && git fetch --depth 1 origin main && git checkout FETCH_HEAD
-cd .. && git add upstream && git commit -m "bump upstream binaryen"
-```
+- **`upstream/`** — Read-only clone of
+  [WebAssembly/binaryen](https://github.com/WebAssembly/binaryen). Consult its `src/` when porting
+  passes or parsing logic. Refresh whenever you want:
 
-To update the wabt-ts sibling reference:
+  ```sh
+  cd upstream && git pull
+  ```
 
-```sh
-cd wabt-ts && git fetch --depth 1 origin main && git checkout FETCH_HEAD
-cd .. && git add wabt-ts && git commit -m "bump wabt-ts reference"
-```
+- **wabt-ts** — Sibling TypeScript port of [wabt](https://github.com/WebAssembly/wabt) at
+  [jsr:@jrmarcum/wabt-ts](https://jsr.io/@jrmarcum/wabt-ts). Provides the WAT front door and the IR
+  bridge that walks wabt's tree into binaryen-ts's constructor API. binaryen-ts does **not** import
+  wabt-ts; the dependency arrow points the other way (wabt-ts imports `@jrmarcum/binaryen-ts/ir` and
+  `/encoder`). Keep a sibling clone next to this repo if you want to read its source:
+
+  ```sh
+  cd .. && git clone https://github.com/jrmarcum/wabt-ts.git
+  ```
 
 ## License
 
