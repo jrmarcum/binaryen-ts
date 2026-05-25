@@ -123,7 +123,12 @@ export const shrinkPassOptions: PassOptions = {
 // Pass registry
 // ---------------------------------------------------------------------------
 
-type PassCtor = new () => Pass;
+/**
+ * Constructor signature for a {@link Pass} subclass — any zero-argument class
+ * that produces a {@link Pass} instance. Used by {@link registerPass} to record
+ * pass types in the global registry.
+ */
+export type PassCtor = new () => Pass;
 const registry = new Map<string, PassCtor>();
 
 /**
@@ -186,8 +191,11 @@ export class PassRunner {
   private readonly _queue: Pass[] = [];
 
   /**
-   * @param module - The module to optimize.
-   * @param options - Runner options (defaults to {@link defaultPassOptions}).
+   * Creates a runner bound to a specific module.
+   *
+   * @param module - The module to optimize. The runner mutates this module
+   *   in place — clone it first if you need to keep the original.
+   * @param options - Runner options merged on top of {@link defaultPassOptions}.
    */
   constructor(module: WasmModule, options: Partial<PassOptions> = {}) {
     this._module = module;

@@ -190,5 +190,6 @@ export function listLoadedKernels(): string[] {
 
 /** Thrown when a kernel cannot be loaded or fails an export check. */
 export class WasmRuntimeError extends Error {
+  /** Always `"WasmRuntimeError"` — identifies the error class for `instanceof`-free dispatch. */
   override readonly name = "WasmRuntimeError";
 }

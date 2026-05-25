@@ -9,6 +9,14 @@
 
 /** Thrown when the binary data is malformed or truncated. */
 export class WasmBinaryError extends Error {
+  /**
+   * Creates a binary-error with an optional byte offset.
+   *
+   * @param message - Human-readable description of the failure.
+   * @param offset - Byte offset within the WASM input where the failure was
+   *   detected, or `undefined` if not available. When provided, the offset is
+   *   appended to the message in hex form.
+   */
   constructor(message: string, public readonly offset?: number) {
     super(offset !== undefined ? `${message} (at offset 0x${offset.toString(16)})` : message);
     this.name = "WasmBinaryError";
@@ -25,23 +33,33 @@ export class BinaryReader {
   private readonly bytes: Uint8Array;
   private pos: number;
 
+  /**
+   * Creates a reader over a byte slice.
+   *
+   * @param bytes - The raw WebAssembly binary data.
+   * @param startOffset - Initial cursor position (defaults to 0).
+   */
   constructor(bytes: Uint8Array, startOffset = 0) {
     this.bytes = bytes;
     this.pos = startOffset;
   }
 
+  /** Current cursor position (byte offset within the input). */
   get position(): number {
     return this.pos;
   }
 
+  /** Total length of the input in bytes. */
   get length(): number {
     return this.bytes.length;
   }
 
+  /** Number of bytes remaining from the current cursor to the end. */
   get remaining(): number {
     return this.bytes.length - this.pos;
   }
 
+  /** `true` when the cursor has reached the end of the input. */
   get eof(): boolean {
     return this.pos >= this.bytes.length;
   }
@@ -55,11 +73,13 @@ export class BinaryReader {
   // Raw reads
   // ---------------------------------------------------------------------------
 
+  /** Read one byte as an unsigned 8-bit integer. */
   readU8(): number {
     this.checkBounds(1);
     return this.bytes[this.pos++];
   }
 
+  /** Read two bytes as a little-endian unsigned 16-bit integer. */
   readU16(): number {
     this.checkBounds(2);
     const v = this.bytes[this.pos] | (this.bytes[this.pos + 1] << 8);
@@ -67,6 +87,7 @@ export class BinaryReader {
     return v >>> 0;
   }
 
+  /** Read four bytes as a little-endian fixed-width unsigned 32-bit integer. */
   readU32Fixed(): number {
     this.checkBounds(4);
     const v =
@@ -78,6 +99,7 @@ export class BinaryReader {
     return v >>> 0;
   }
 
+  /** Read four bytes as a little-endian IEEE-754 single-precision float. */
   readF32(): number {
     this.checkBounds(4);
     const view = new DataView(this.bytes.buffer, this.bytes.byteOffset + this.pos, 4);
@@ -86,6 +108,7 @@ export class BinaryReader {
     return val;
   }
 
+  /** Read eight bytes as a little-endian IEEE-754 double-precision float. */
   readF64(): number {
     this.checkBounds(8);
     const view = new DataView(this.bytes.buffer, this.bytes.byteOffset + this.pos, 8);
@@ -194,10 +217,12 @@ export class BinaryReader {
     this.pos = pos;
   }
 
+  /** Throw a {@link WasmBinaryError} stamped with the current cursor offset. */
   error(msg: string): never {
     throw new WasmBinaryError(msg, this.pos);
   }
 
+  /** @internal — throws if reading `n` more bytes would exceed the buffer. */
   private checkBounds(n: number): void {
     if (this.pos + n > this.bytes.length) {
       throw new WasmBinaryError(

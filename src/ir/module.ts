@@ -71,6 +71,7 @@ export interface WasmImport {
   base: string;
   /** Internal name used to reference this import within the module. */
   name: string;
+  /** Which kind of entity is being imported. */
   kind: "function" | "global" | "table" | "memory";
   /** For function imports: parameter types. */
   params?: ValType[];
@@ -99,6 +100,7 @@ export interface WasmExport {
   name: string;
   /** The internal name of the exported entity. */
   value: string;
+  /** Which kind of entity is being exported. */
   kind: "function" | "global" | "table" | "memory";
 }
 
@@ -106,8 +108,11 @@ export interface WasmExport {
  * A WASM global variable.
  */
 export interface WasmGlobal {
+  /** Internal name used to reference this global from instructions. */
   name: string;
+  /** Value type of the global. */
   type: ValType;
+  /** Whether the global is writable via `global.set`. */
   mutable: boolean;
   /** Constant initializer expression. */
   init: Expression;
@@ -123,6 +128,7 @@ export interface DataSegment {
   passive: boolean;
   /** Offset expression (for active segments). */
   offset: Expression | null;
+  /** Raw bytes copied into linear memory. */
   data: Uint8Array;
 }
 
@@ -130,12 +136,15 @@ export interface DataSegment {
  * A linear memory definition.
  */
 export interface WasmMemory {
+  /** Internal name used to reference the memory from instructions. */
   name: string;
   /** Initial size in pages (64 KiB each). */
   initial: number;
   /** Maximum size in pages, or `null` for unbounded. */
   max: number | null;
+  /** Whether this memory is shared (atomics proposal). */
   shared: boolean;
+  /** Whether this memory uses 64-bit addressing (memory64 proposal). */
   is64: boolean;
 }
 
@@ -143,9 +152,13 @@ export interface WasmMemory {
  * A table definition (for indirect calls and reference types).
  */
 export interface WasmTable {
+  /** Internal name used to reference the table from instructions. */
   name: string;
+  /** Element value type — typically a reference type. */
   type: ValType;
+  /** Initial number of slots. */
   initial: number;
+  /** Maximum number of slots, or `null` for unbounded. */
   max: number | null;
 }
 
@@ -164,10 +177,14 @@ export interface WasmTag {
  * An element segment (populates a table).
  */
 export interface ElementSegment {
+  /** Segment name (for WAT output). */
   name: string;
+  /** Name of the target table that this segment initializes. */
   table: string;
+  /** Offset expression — index into the target table where copying begins. */
   offset: Expression | null;
-  data: string[]; // function names
+  /** Names of the functions referenced by this segment, in order. */
+  data: string[];
 }
 
 // ---------------------------------------------------------------------------
@@ -179,13 +196,21 @@ export interface ElementSegment {
  * Analogous to `Module` in `src/wasm.h`.
  */
 export interface WasmModule {
+  /** All locally-defined functions in declaration order. */
   functions: WasmFunction[];
+  /** All locally-defined globals in declaration order. */
   globals: WasmGlobal[];
+  /** All linear-memory definitions (typically 0 or 1 entry pre-multi-memory). */
   memories: WasmMemory[];
+  /** All table definitions in declaration order. */
   tables: WasmTable[];
+  /** Element segments that initialize tables. */
   elements: ElementSegment[];
+  /** Data segments that initialize linear memory. */
   dataSegments: DataSegment[];
+  /** Imported entities (functions, globals, memories, tables). */
   imports: WasmImport[];
+  /** Names exported to the host. */
   exports: WasmExport[];
   /** Exception tags (EH proposal). */
   tags: WasmTag[];

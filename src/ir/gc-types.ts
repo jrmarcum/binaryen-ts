@@ -134,6 +134,7 @@ export interface FieldType {
  * ```
  */
 export interface StructTypeDef {
+  /** Discriminant — identifies this entry as a struct type. */
   kind: "struct";
   /** The ordered list of field declarations. */
   fields: FieldType[];
@@ -151,6 +152,7 @@ export interface StructTypeDef {
  * ```
  */
 export interface ArrayTypeDef {
+  /** Discriminant — identifies this entry as an array type. */
   kind: "array";
   /** The element field declaration. */
   element: FieldType;
@@ -161,8 +163,11 @@ export interface ArrayTypeDef {
  * Used when GC types are present (so all type indices are stable).
  */
 export interface FuncTypeDef {
+  /** Discriminant — identifies this entry as a function type. */
   kind: "func";
+  /** Parameter types in declaration order. */
   params: (ValType | RefType)[];
+  /** Result types in declaration order (empty array = void). */
   results: (ValType | RefType)[];
 }
 

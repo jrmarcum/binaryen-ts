@@ -85,10 +85,12 @@ export enum ValType {
 
 /** Signals a diverging / bottom computation. Used as the type of `unreachable`. */
 export const Unreachable = "unreachable" as const;
+/** The singleton literal type for {@link Unreachable}. */
 export type Unreachable = typeof Unreachable;
 
 /** The empty type — represents a void return or the empty tuple. */
 export const None = "none" as const;
+/** The singleton literal type for {@link None}. */
 export type None = typeof None;
 
 // ---------------------------------------------------------------------------

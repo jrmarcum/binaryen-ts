@@ -30,7 +30,7 @@ export {
   registerPass,
   shrinkPassOptions,
 } from "./pass.ts";
-export type { Pass, PassOptions } from "./pass.ts";
+export type { Pass, PassCtor, PassOptions } from "./pass.ts";
 
 // Side-effect imports: register all built-in passes.
 import "./dce.ts";

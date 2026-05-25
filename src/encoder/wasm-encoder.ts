@@ -1642,6 +1642,13 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
  * Thrown when the IR cannot be serialized (e.g. unknown expression kind).
  */
 export class WasmEncodeError extends Error {
+  /**
+   * Creates an encode error with the given message.
+   *
+   * @param message - Human-readable description of what couldn't be encoded
+   *   (e.g. "unknown expression kind: BrOn"). The error's `name` is always
+   *   `"WasmEncodeError"` for `instanceof`-free type discrimination.
+   */
   constructor(message: string) {
     super(message);
     this.name = "WasmEncodeError";
