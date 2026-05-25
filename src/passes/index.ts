@@ -43,3 +43,4 @@ import "./local-cse.ts";
 import "./remove-unused-module-elements.ts";
 import "./pick-load-signs.ts";
 import "./inlining.ts";
+import "./remove-unused-names.ts";

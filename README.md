@@ -110,7 +110,7 @@ import { ModuleBuilder } from "@jrmarcum/binaryen-ts/ir";
 
 // ["CoalesceLocals", "DCE", "Inlining", "InliningOptimizing", "LocalCSE",
 //  "OptimizeInstructions", "PickLoadSigns", "RemoveUnusedBrs",
-//  "RemoveUnusedModuleElements", "SimplifyLocals", "Vacuum"]
+//  "RemoveUnusedModuleElements", "RemoveUnusedNames", "SimplifyLocals", "Vacuum"]
 console.log(listPasses());
 
 const runner = new PassRunner(module, { optimizeLevel: 2, shrinkLevel: 0 });
@@ -120,24 +120,36 @@ runner.addDefaultOptimizationPasses().run();
 ### CLI — wasm-opt
 
 ```sh
-# Optimize a WASM file (uses upstream wasm-opt subprocess in hybrid mode)
-deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -Oz
+# Optimize a WASM file (native TypeScript passes — no subprocess required)
+deno run --allow-read --allow-write jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -O2
 
-# Emit WAT text
-deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -S
+# Size-optimize
+deno run --allow-read --allow-write jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -Oz
+
+# Run specific passes only
+deno run --allow-read --allow-write jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm --vacuum --dce
+
+# List all registered passes
+deno run jsr:@jrmarcum/binaryen-ts wasm-opt --print-all-passes
+
+# Per-pass argument
+deno run --allow-read --allow-write jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm --pass-arg inlining@maxSize=20
+
+# Use upstream wasm-opt subprocess (hybrid mode, requires wasm-opt on PATH)
+deno run --allow-all jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -Oz --hybrid
 ```
 
-## Hybrid mode
+## Optimization modes
 
-`binaryen-ts` uses a **hybrid** approach to optimization:
+`binaryen-ts` supports three optimization modes:
 
 | Mode | What runs | Use when |
 | ---- | --------- | -------- |
-| Native TypeScript | Built-in passes (`DCE`, `Vacuum`, `OptimizeInstructions`, `CoalesceLocals`, `Inlining`, etc.) | Fast iteration, unit testing passes |
-| Hybrid (subprocess) | Upstream `wasm-opt` binary on `PATH` | Maximum optimization quality |
-| Hybrid (binaryen.js) | Upstream `binaryen.js` WASM binary | No binary dependency, browser compat |
+| **Native TypeScript** (default) | Built-in passes in `src/passes/` — no subprocess, no binary | Default; all phases 0–6 complete |
+| **Hybrid subprocess** (`--hybrid`) | Upstream `wasm-opt` binary on `PATH` | Maximum optimization fidelity; requires installed `wasm-opt` |
+| **Hybrid binaryen.js** | Upstream `binaryen.js` WASM binary | Deferred — not on critical path |
 
-Enable hybrid mode by passing `hybridMode: true` to optimization calls, or by using the `--hybrid` CLI flag. The upstream `wasm-opt` binary must be on `PATH` for subprocess mode.
+The native path is the default as of Phase 6: `parseWasm` → `PassRunner` → `encodeWasm`. Pass `hybridMode: true` (or `--hybrid`) to delegate to the upstream subprocess instead.
 
 ## Module exports (JSR)
 
@@ -162,10 +174,10 @@ This is an active port — see [TASKS.md](TASKS.md) for the full task list.
 | 1 | ✅ Done | WAT text parser (WASM → IR) |
 | 2 | ✅ Done | WASM binary parser (binary → IR) |
 | 3 | ✅ Done | WASM binary encoder (IR → .wasm) — full round-trip verified |
-| 4 | ✅ Done | Core optimization passes — 8 passes (Vacuum, OptimizeInstructions, CoalesceLocals, LocalCSE, …) |
+| 4 | ✅ Done | Core optimization passes — 9 passes (Vacuum, OptimizeInstructions, CoalesceLocals, LocalCSE, …) |
 | 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, call-graph analysis, dead-callee removal |
-| 6 | 🚧 Next | `wasm-opt` native CLI (no subprocess dependency) |
-| 7 | Planned | GC proposal types and instructions |
+| 6 | ✅ Done | `wasm-opt` native CLI — pure TypeScript pipeline, no subprocess; `RemoveUnusedNames` pass |
+| 7 | 🚧 Next | GC proposal types and instructions |
 | 8 | Planned | Exception-handling proposal |
 | 9 | Planned | SIMD instructions |
 | 10 | Planned | Compile performance-critical passes to WASM via `wasic` |

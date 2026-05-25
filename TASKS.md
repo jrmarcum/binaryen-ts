@@ -204,18 +204,31 @@ Reference: `upstream/src/passes/Inlining.cpp`
 
 ---
 
-## Phase 6 — `wasm-opt` CLI Integration
+## Phase 6 — `wasm-opt` CLI Integration ✅ COMPLETE
 
 **Goal**: Wire the native TypeScript optimization passes into the `wasm-opt` CLI tool
 so it operates without the subprocess hybrid. WAT↔binary conversion and disassembly
 are handled by `wabt-ts` and are out of scope here.
 
-- [ ] `wasm-opt` reads `.wasm` binary → parses IR (requires Phase 2)
-- [ ] Runs selected optimization passes (requires Phase 4)
-- [ ] Writes optimized `.wasm` binary (requires Phase 3)
-- [ ] `-O1`/`-O2`/`-O3`/`-Os`/`-Oz` flag mapping to pass sets
-- [ ] `--pass-arg` for per-pass tuning
-- [ ] Remove subprocess hybrid dependency once native passes are complete
+- [x] `wasm-opt` reads `.wasm` binary → `parseWasm` → IR (Phase 2 pipeline wired)
+- [x] Runs selected optimization passes via `PassRunner` (Phase 4 passes wired)
+- [x] Writes optimized `.wasm` binary via `encodeWasm` (Phase 3 encoder wired)
+- [x] `-O1`/`-O2`/`-O3`/`-Os`/`-Oz` flag mapping to pass sets
+- [x] `--pass-arg key=value` for per-pass tuning (forwarded as `PassOptions.passArgs`)
+- [x] Explicit pass names via `--passname` CLI flags (e.g. `--vacuum --dce`)
+- [x] `--print-all-passes` lists all registered passes and exits
+- [x] Subprocess hybrid kept behind `--hybrid` flag for backward compat
+- [x] **RemoveUnusedNames pass** (`src/passes/remove-unused-names.ts`) — strips unused
+      block/loop labels; replaces no-back-edge loops with their bodies
+- [x] `passArgs: Record<string, string>` added to `PassOptions` for future per-pass tuning
+- [x] 14/14 tests passing (`tests/tools/wasm_opt_test.ts`)
+
+**Implementation files**:
+
+- `src/tools/wasm-opt.ts` — native pipeline (`_nativeOptimize`), updated CLI parser
+- `src/passes/remove-unused-names.ts` — RemoveUnusedNames pass
+- `src/passes/pass.ts` — `PassOptions.passArgs` field; `defaultPassOptions`/`shrinkPassOptions` updated
+- `src/passes/index.ts` — RemoveUnusedNames registered
 
 ---
 

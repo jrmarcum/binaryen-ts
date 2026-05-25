@@ -92,6 +92,13 @@ export interface PassOptions {
    * When `true`, passes may assume all callers of internal functions are visible.
    */
   closedWorld: boolean;
+
+  /**
+   * Per-pass arguments forwarded from `--pass-arg` CLI flags.
+   * Keys follow the upstream convention `passname@argname`; values are strings.
+   * Passes look up their own arguments by key at runtime.
+   */
+  passArgs: Record<string, string>;
 }
 
 /** Default pass options matching Binaryen's `-O2` preset. */
@@ -100,6 +107,7 @@ export const defaultPassOptions: PassOptions = {
   shrinkLevel: 0,
   debugInfo: false,
   closedWorld: false,
+  passArgs: {},
 };
 
 /** Pass options for size-optimized `-Oz` output (used by `wasic`). */
@@ -108,6 +116,7 @@ export const shrinkPassOptions: PassOptions = {
   shrinkLevel: 2,
   debugInfo: false,
   closedWorld: false,
+  passArgs: {},
 };
 
 // ---------------------------------------------------------------------------

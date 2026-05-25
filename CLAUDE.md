@@ -226,6 +226,7 @@ binaryen-ts/
 │   │   ├── remove-unused-module-elements.ts  Reachability-based dead function/global removal
 │   │   ├── pick-load-signs.ts              Sign/unsigned selection for narrow loads
 │   │   ├── inlining.ts                     Inlining + InliningOptimizing (Phase 5)
+│   │   ├── remove-unused-names.ts          Strip unused block/loop labels (Phase 6)
 │   │   └── index.ts                        Re-exports + side-effect pass registration
 │   ├── encoder/        WASM binary encoder (Phase 3)
 │   │   ├── wasm-encoder.ts BinaryWriter + WasmEncoder (IR → .wasm)
@@ -253,7 +254,7 @@ binaryen-ts/
 | 3 | ✅ Done | WASM binary encoder (IR → .wasm) — 14/14 tests passing; full round-trip verified |
 | 4 | ✅ Done | Core optimization passes — 8 passes, 26/26 tests passing |
 | 5 | ✅ Done | Inlining pass — `Inlining` + `InliningOptimizing`, 14/14 tests passing |
-| 6 | Planned | `wasm-opt` native CLI (no subprocess dependency) |
+| 6 | ✅ Done | `wasm-opt` native CLI + RemoveUnusedNames pass — 14/14 tests passing |
 | 7+ | Planned | GC, EH, SIMD, wasic compilation |
 
 ### Key Design Decisions
@@ -312,6 +313,7 @@ Key design decisions:
 - **LocalCSE**: keys pure sub-expressions by structural string hash. Invalidates on `local.set`, `global.set`, calls, and stores. Recurses into `drop`/`return`/`local.set` children when counting and rewriting.
 - **RemoveUnusedModuleElements**: seeds from exports + element segments; fixed-point call-graph walk via `Call` and `RefFunc` nodes. Imported elements are never removed.
 - **PickLoadSigns**: tracks `local.set(i, narrow_load)` → counts signed/unsigned uses of `i` → flips load sign if all uses agree. Uses parent-context walk to classify comparison operators.
+- **RemoveUnusedNames**: two-pass per function — collect branch targets, then strip unused block/loop labels bottom-up. Loops with no back-edge are replaced by their bodies. (Phase 6)
 
 #### Inlining pass design (Phase 5)
 
@@ -327,6 +329,29 @@ Key design decisions:
 - **Dead callee removal**: after each iteration, functions whose entire ref-count was consumed by inlining and that are not globally used are removed from `module.functions`.
 - **Iteration**: up to `min(5, numFunctions+1)` rounds; stops early when no inlining occurs.
 - **Deferred**: split/partial inlining (Pattern A/B), return-call handling, post-inline cleanup passes inside `InliningOptimizing`.
+
+#### wasm-opt native CLI design (Phase 6)
+
+`src/tools/wasm-opt.ts` implements the native pipeline: `.wasm` → `parseWasm` → `PassRunner` → `encodeWasm` → `.wasm`. No subprocess required.
+
+Key design decisions:
+
+- **Native path** (`_nativeOptimize`): pure TypeScript — `parseWasm` (Phase 2) feeds into `PassRunner` (Phase 4), which feeds into `encodeWasm` (Phase 3). Completely subprocess-free.
+- **Hybrid path** (`--hybrid`): the original `BinaryenInterop.optimizeViaSubprocess` path is preserved for users who need the upstream binary. `emitText` (`-S`) is only supported in hybrid mode (WAT output is wabt-ts's domain).
+- **Pass selection**: if `opts.passes` is non-empty, only those passes run; otherwise `addDefaultOptimizationPasses()` is called for `-O1` and above.
+- **CLI flags**: `--<passname>` (e.g. `--vacuum`) appends to the explicit pass list; `--pass-arg key=val` populates `PassOptions.passArgs`; `--print-all-passes` lists the registry and exits.
+- **`passArgs: Record<string, string>`**: added to `PassOptions` for per-pass tuning arguments. Keys follow the upstream convention `passname@argname`. Currently plumbing only; individual passes can look up their args at runtime.
+
+#### RemoveUnusedNames pass design (Phase 6)
+
+`src/passes/remove-unused-names.ts` — reference: `upstream/src/passes/RemoveUnusedNames.cpp`.
+
+Two-pass approach per function:
+
+1. **Collect branch targets** (`walkExpression`): gather every label named by `br`, `br_if`, and `br_table` instructions.
+2. **Strip unused names** (`mapExpression`, bottom-up): for each `BlockExpr`, if its `name` is not in the targets set, set `name: null`. For each `LoopExpr`, if its `name` is not in the targets set (no back-edge `br`), replace the loop with its body (since a loop with no back-edge executes at most once — equivalent to straight-line code). Type guard: only replace when `loop.type === loop.body.type`.
+
+Deferred from upstream: single-child named-block merge (redirect branches from outer to inner block and eliminate the outer wrapper).
 
 #### Upstream C++ reference
 

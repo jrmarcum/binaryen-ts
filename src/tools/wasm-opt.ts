@@ -4,23 +4,33 @@
  * TypeScript implementation of the `wasm-opt` optimization tool.
  *
  * `wasm-opt` is the primary CLI tool produced by the upstream Binaryen project.
- * It reads a `.wasm` or `.wat` file, applies optimization passes, and writes
- * an optimized `.wasm` binary.
+ * It reads a `.wasm` binary (or `.wat` text), applies optimization passes, and
+ * writes an optimized `.wasm` binary.
  *
- * This module provides a TypeScript-native implementation that delegates to
- * either the built-in TypeScript pass infrastructure or the upstream
- * `binaryen.js` WASM binary (hybrid mode), depending on the configuration.
+ * **Native path** (default): `.wasm` → {@link parseWasm} → {@link PassRunner} →
+ * {@link encodeWasm} → `.wasm`. Pure TypeScript; no subprocess required.
  *
- * **CLI usage** (via `deno run` or `wasmtk`):
+ * **Hybrid path** (`--hybrid`): delegates to the upstream `wasm-opt` subprocess
+ * for cases not yet covered by the TypeScript pass set.
+ *
+ * **CLI usage**:
  * ```sh
- * deno run --allow-read --allow-write --allow-run main.ts wasm-opt input.wasm -o output.wasm -Oz
+ * deno run --allow-read --allow-write main.ts wasm-opt input.wasm -o output.wasm -O2
  * ```
  *
  * @license MIT OR Apache-2.0
  */
 
+import { parseWasm } from "../binary/index.ts";
+import { encodeWasm } from "../encoder/index.ts";
+import { parseWat } from "../parser/wat-parser.ts";
 import { BinaryenInterop } from "../interop/binaryen-js.ts";
-import { defaultPassOptions, PassRunner, shrinkPassOptions } from "../passes/index.ts";
+import {
+  defaultPassOptions,
+  listPasses,
+  PassRunner,
+  shrinkPassOptions,
+} from "../passes/index.ts";
 import { PassOptions } from "../passes/pass.ts";
 import { ModuleBuilder } from "../ir/module.ts";
 
@@ -42,6 +52,7 @@ export interface WasmOptOptions {
   /**
    * Whether to emit WAT text instead of binary WASM.
    * Equivalent to `--emit-text` / `-S`.
+   * Only supported in `--hybrid` mode; the native path encodes binary only.
    */
   emitText: boolean;
   /**
@@ -50,12 +61,12 @@ export interface WasmOptOptions {
    */
   validate: boolean;
   /**
-   * Specific passes to run (overrides the default pass sequence).
+   * Specific passes to run (overrides the default pass sequence for the level).
    * Equivalent to listing pass names on the `wasm-opt` command line.
    */
   passes: string[];
   /**
-   * Hybrid mode: when `true`, delegate to the upstream `binaryen.js` binary
+   * Hybrid mode: when `true`, delegate to the upstream `wasm-opt` subprocess
    * via {@link BinaryenInterop} rather than the TypeScript pass infrastructure.
    * Default: `false` (use TypeScript passes).
    */
@@ -64,6 +75,12 @@ export interface WasmOptOptions {
   debugInfo: boolean;
   /** Whether to enable closed-world optimizations. Default: `false`. */
   closedWorld: boolean;
+  /**
+   * Per-pass tuning arguments, forwarded to {@link PassOptions.passArgs}.
+   * Keys follow the upstream convention `passname@argname`; values are strings.
+   * Example: `{ "inlining@maxSize": "20" }`.
+   */
+  passArgs: Record<string, string>;
 }
 
 const defaults: WasmOptOptions = {
@@ -76,6 +93,7 @@ const defaults: WasmOptOptions = {
   hybridMode: false,
   debugInfo: false,
   closedWorld: false,
+  passArgs: {},
 };
 
 // ---------------------------------------------------------------------------
@@ -85,12 +103,14 @@ const defaults: WasmOptOptions = {
 /**
  * Runs `wasm-opt` on the given input file.
  *
- * When `hybridMode` is `false` (default), the TypeScript pass infrastructure
- * is used. When `true`, the upstream `binaryen.js` binary is invoked.
+ * The default (native) path uses the TypeScript pass infrastructure:
+ * parse → run passes → encode. Pass `hybridMode: true` to delegate to the
+ * upstream `wasm-opt` subprocess instead.
  *
  * @param inputPath - Path to the input `.wasm` or `.wat` file.
- * @param options - Optimization options.
- * @returns The optimized WASM binary (or WAT text when `emitText` is true).
+ * @param options   - Optimization options.
+ * @returns The optimized WASM binary, or WAT text when `emitText` is `true`
+ *          (hybrid mode only).
  */
 export async function wasmOpt(
   inputPath: string,
@@ -104,7 +124,7 @@ export async function wasmOpt(
   if (opts.hybridMode) {
     return await _hybridOptimize(inputBytes, isWat, opts);
   }
-  return await _nativeOptimize(inputBytes, isWat, opts);
+  return _nativeOptimize(inputBytes, isWat, opts);
 }
 
 // ---------------------------------------------------------------------------
@@ -117,18 +137,29 @@ export async function wasmOpt(
  *
  * @example
  * ```sh
- * deno run --allow-all tools/wasm-opt.ts input.wasm -o out.wasm -Oz
+ * deno run --allow-all tools/wasm-opt.ts input.wasm -o out.wasm -O2
  * ```
  */
 export async function main(args: string[] = Deno.args): Promise<void> {
   const parsed = parseArgs(args);
+
+  if (parsed.printAllPasses) {
+    for (const name of listPasses()) {
+      console.log(name);
+    }
+    return;
+  }
+
   if (!parsed.input) {
     console.error("Usage: wasm-opt <input.wasm> [options]");
-    console.error("  -o <file>      Output file (default: output.wasm)");
-    console.error("  -O0 .. -O4     Optimization level");
-    console.error("  -Os, -Oz       Size optimization (shrink level 1, 2)");
-    console.error("  -S             Emit WAT text instead of binary");
-    console.error("  --hybrid       Use upstream binaryen.js for optimization");
+    console.error("  -o <file>            Output file (default: output.wasm)");
+    console.error("  -O0 .. -O4           Optimization level");
+    console.error("  -Os, -Oz             Size optimization (shrink level 1, 2)");
+    console.error("  -S                   Emit WAT text (hybrid mode only)");
+    console.error("  --<pass-name>        Run a specific pass by name");
+    console.error("  --pass-arg key=val   Per-pass argument (passname@key=val)");
+    console.error("  --print-all-passes   List all registered passes and exit");
+    console.error("  --hybrid             Use upstream wasm-opt subprocess");
     Deno.exit(1);
   }
 
@@ -156,25 +187,42 @@ export async function main(args: string[] = Deno.args): Promise<void> {
 // Internal: native TypeScript optimization
 // ---------------------------------------------------------------------------
 
-async function _nativeOptimize(
+function _nativeOptimize(
   inputBytes: Uint8Array,
   isWat: boolean,
   opts: WasmOptOptions,
-): Promise<Uint8Array | string> {
-  // TODO(phase 2): implement WAT/WASM parser to load the module into the IR.
-  // For now, fall through to subprocess mode and log a warning.
-  console.warn(
-    "[wasm-opt] Native TypeScript IR optimization is not yet implemented.\n" +
-      "Falling back to wasm-opt subprocess. Use --hybrid for binaryen.js mode.",
-  );
-  const wat = isWat
-    ? new TextDecoder().decode(inputBytes)
-    : await _disassembleViaSubprocess(inputBytes);
+): Uint8Array {
+  if (opts.emitText) {
+    throw new Error(
+      "WAT text output (--emit-text / -S) requires wabt-ts wasm2wat. " +
+        "Use --hybrid for subprocess-based WAT output.",
+    );
+  }
 
-  return BinaryenInterop.optimizeViaSubprocess(
-    wat,
-    buildSubprocessFlags(opts),
-  );
+  const module = isWat
+    ? parseWat(new TextDecoder().decode(inputBytes))
+    : parseWasm(inputBytes);
+
+  const passOpts: PassOptions = {
+    optimizeLevel: opts.optimizeLevel,
+    shrinkLevel: opts.shrinkLevel,
+    debugInfo: opts.debugInfo,
+    closedWorld: opts.closedWorld,
+    passArgs: opts.passArgs,
+  };
+
+  const runner = new PassRunner(module, passOpts);
+
+  if (opts.passes.length > 0) {
+    for (const name of opts.passes) {
+      runner.add(name);
+    }
+  } else if (opts.optimizeLevel > 0 || opts.shrinkLevel > 0) {
+    runner.addDefaultOptimizationPasses();
+  }
+
+  runner.run();
+  return encodeWasm(module);
 }
 
 // ---------------------------------------------------------------------------
@@ -229,13 +277,42 @@ async function _disassembleViaSubprocess(wasm: Uint8Array): Promise<string> {
   return new TextDecoder().decode(stdout);
 }
 
+// ---------------------------------------------------------------------------
+// Arg parser
+// ---------------------------------------------------------------------------
+
 interface ParsedArgs {
   input: string | null;
   options: Partial<WasmOptOptions>;
+  printAllPasses: boolean;
 }
 
+/**
+ * Recognized long-option names that are NOT pass names.
+ * Everything else that starts with `--` is treated as an explicit pass name.
+ */
+const RECOGNIZED_LONG_FLAGS = new Set([
+  "--output",
+  "--emit-text",
+  "--debug-info",
+  "--hybrid",
+  "--validate",
+  "--no-validate",
+  "--closed-world",
+  "--pass-arg",
+  "--print-all-passes",
+  "--help",
+]);
+
 function parseArgs(args: string[]): ParsedArgs {
-  const result: ParsedArgs = { input: null, options: {} };
+  const result: ParsedArgs = {
+    input: null,
+    options: {},
+    printAllPasses: false,
+  };
+  const passes: string[] = [];
+  const passArgs: Record<string, string> = {};
+
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-o" || a === "--output") {
@@ -262,18 +339,42 @@ function parseArgs(args: string[]): ParsedArgs {
       result.options.debugInfo = true;
     } else if (a === "--hybrid") {
       result.options.hybridMode = true;
+    } else if (a === "--validate") {
+      result.options.validate = true;
+    } else if (a === "--no-validate") {
+      result.options.validate = false;
+    } else if (a === "--closed-world") {
+      result.options.closedWorld = true;
+    } else if (a === "--pass-arg") {
+      const kv = args[++i];
+      if (kv) {
+        const eq = kv.indexOf("=");
+        if (eq > 0) {
+          passArgs[kv.slice(0, eq)] = kv.slice(eq + 1);
+        } else {
+          passArgs[kv] = "";
+        }
+      }
+    } else if (a === "--print-all-passes") {
+      result.printAllPasses = true;
+    } else if (a.startsWith("--") && !RECOGNIZED_LONG_FLAGS.has(a)) {
+      // Treat unknown --flags as pass names (e.g. --vacuum, --dce)
+      passes.push(a.slice(2));
     } else if (!a.startsWith("-")) {
       result.input = a;
     }
   }
+
+  if (passes.length > 0) result.options.passes = passes;
+  if (Object.keys(passArgs).length > 0) result.options.passArgs = passArgs;
   return result;
 }
 
 // ---------------------------------------------------------------------------
-// Convenience re-exports from pass layer (avoids separate imports for callers)
+// Convenience re-exports from pass layer
 // ---------------------------------------------------------------------------
 
-export { PassRunner, defaultPassOptions, shrinkPassOptions };
+export { defaultPassOptions, listPasses, PassRunner, shrinkPassOptions };
 export type { PassOptions };
 
 // Allow `ignore unused` for ModuleBuilder re-export (used in JSDoc examples)
