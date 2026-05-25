@@ -1,0 +1,42 @@
+# Continuous integration — type-check + tests on every push and pull request.
+#
+# Runs on Deno (the canonical authoring runtime). The published library is
+# verified to be runtime-agnostic via `deno publish --dry-run`, which checks the
+# JSR slow-types lint and the publish manifest.
+
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+jobs:
+  test:
+    name: Type-check + test
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Format check
+        run: deno fmt --check
+
+      - name: Lint
+        run: deno lint
+
+      - name: Type-check
+        run: deno task check
+
+      - name: Test
+        run: deno task test
+
+      - name: Verify publish manifest (dry run, no provenance)
+        run: deno publish --dry-run --allow-dirty

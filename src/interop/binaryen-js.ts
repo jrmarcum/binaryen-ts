@@ -31,6 +31,13 @@
  * const optimized = await interop.optimizeWat(watText, "-Oz");
  * ```
  *
+ * ## Runtime requirements
+ *
+ * Subprocess-based interop uses `node:child_process` and therefore requires a
+ * Node-compatible runtime (Deno 1.40+, Node 18+, Bun). It is not available in
+ * the browser — use the pure-TypeScript {@link ../passes/index.ts | pass pipeline}
+ * for browser environments.
+ *
  * @license MIT OR Apache-2.0
  */
 
@@ -136,24 +143,41 @@ export class BinaryenInterop {
     wat: string,
     flags: string[] = ["-Oz"],
   ): Promise<Uint8Array> {
-    const encoder = new TextEncoder();
-    const cmd = new Deno.Command("wasm-opt", {
-      args: [...flags, "--output=-", "-"],
-      stdin: "piped",
-      stdout: "piped",
-      stderr: "piped",
+    const { spawn } = await import("node:child_process");
+    return await new Promise((resolve, reject) => {
+      const proc = spawn("wasm-opt", [...flags, "--output=-", "-"], {
+        stdio: ["pipe", "pipe", "pipe"],
+      });
+      const stdoutChunks: Uint8Array[] = [];
+      const stderrChunks: Uint8Array[] = [];
+      proc.stdout.on("data", (c: Uint8Array) => stdoutChunks.push(c));
+      proc.stderr.on("data", (c: Uint8Array) => stderrChunks.push(c));
+      proc.on("error", reject);
+      proc.on("close", (code: number | null) => {
+        if (code !== 0) {
+          reject(
+            new Error(
+              `wasm-opt failed (exit ${code}):\n` +
+                new TextDecoder().decode(_concatU8(stderrChunks)),
+            ),
+          );
+        } else {
+          resolve(_concatU8(stdoutChunks));
+        }
+      });
+      proc.stdin.end(new TextEncoder().encode(wat));
     });
-
-    const proc = cmd.spawn();
-    const writer = proc.stdin.getWriter();
-    await writer.write(encoder.encode(wat));
-    await writer.close();
-
-    const { code, stdout, stderr } = await proc.output();
-    if (code !== 0) {
-      const errText = new TextDecoder().decode(stderr);
-      throw new Error(`wasm-opt failed (exit ${code}):\n${errText}`);
-    }
-    return stdout;
   }
+}
+
+function _concatU8(chunks: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const c of chunks) total += c.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
+  }
+  return out;
 }

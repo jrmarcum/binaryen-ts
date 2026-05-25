@@ -13,14 +13,18 @@
  * **Hybrid path** (`--hybrid`): delegates to the upstream `wasm-opt` subprocess
  * for cases not yet covered by the TypeScript pass set.
  *
- * **CLI usage**:
+ * **CLI usage** (runs on Deno, Node 18+, and Bun):
  * ```sh
- * deno run --allow-read --allow-write main.ts wasm-opt input.wasm -o output.wasm -O2
+ * deno run -A jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o output.wasm -O2
+ * node main.ts wasm-opt input.wasm -o output.wasm -O2
+ * bun main.ts wasm-opt input.wasm -o output.wasm -O2
  * ```
  *
  * @license MIT OR Apache-2.0
  */
 
+import { readFile, writeFile } from "node:fs/promises";
+import process from "node:process";
 import { parseWasm } from "../binary/index.ts";
 import { encodeWasm } from "../encoder/index.ts";
 import { parseWat } from "../parser/wat-parser.ts";
@@ -118,7 +122,7 @@ export async function wasmOpt(
 ): Promise<Uint8Array | string> {
   const opts: WasmOptOptions = { ...defaults, ...options };
 
-  const inputBytes = await Deno.readFile(inputPath);
+  const inputBytes = new Uint8Array(await readFile(inputPath));
   const isWat = inputPath.endsWith(".wat");
 
   if (opts.hybridMode) {
@@ -132,15 +136,18 @@ export async function wasmOpt(
 // ---------------------------------------------------------------------------
 
 /**
- * Parses `Deno.args` and runs `wasm-opt`.
- * Called when this module is executed directly as a CLI script.
+ * Parses CLI args and runs `wasm-opt`.
+ * Defaults to `process.argv.slice(2)` when invoked as a CLI script.
+ *
+ * Works on Deno, Node 18+, and Bun via `node:` standard-library imports.
  *
  * @example
  * ```sh
- * deno run --allow-all tools/wasm-opt.ts input.wasm -o out.wasm -O2
+ * deno run -A jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -O2
+ * node main.ts wasm-opt input.wasm -o out.wasm -O2
  * ```
  */
-export async function main(args: string[] = Deno.args): Promise<void> {
+export async function main(args: string[] = process.argv.slice(2)): Promise<void> {
   const parsed = parseArgs(args);
 
   if (parsed.printAllPasses) {
@@ -160,7 +167,7 @@ export async function main(args: string[] = Deno.args): Promise<void> {
     console.error("  --pass-arg key=val   Per-pass argument (passname@key=val)");
     console.error("  --print-all-passes   List all registered passes and exit");
     console.error("  --hybrid             Use upstream wasm-opt subprocess");
-    Deno.exit(1);
+    process.exit(1);
   }
 
   const result = await wasmOpt(parsed.input, parsed.options);
@@ -170,14 +177,14 @@ export async function main(args: string[] = Deno.args): Promise<void> {
     if (outPath === "-") {
       console.log(result);
     } else {
-      await Deno.writeTextFile(outPath, result);
+      await writeFile(outPath, result);
       console.log(`Wrote WAT: ${outPath}`);
     }
   } else {
     if (outPath === "-") {
-      await Deno.stdout.write(result);
+      process.stdout.write(result);
     } else {
-      await Deno.writeFile(outPath, result);
+      await writeFile(outPath, result);
       console.log(`Wrote WASM: ${outPath} (${result.byteLength} bytes)`);
     }
   }
@@ -258,23 +265,42 @@ function buildSubprocessFlags(opts: WasmOptOptions): string[] {
 }
 
 async function _disassembleViaSubprocess(wasm: Uint8Array): Promise<string> {
-  const cmd = new Deno.Command("wasm-opt", {
-    args: ["--emit-text", "-"],
-    stdin: "piped",
-    stdout: "piped",
-    stderr: "piped",
+  const { spawn } = await import("node:child_process");
+  return await new Promise((resolve, reject) => {
+    const proc = spawn("wasm-opt", ["--emit-text", "-"], {
+      stdio: ["pipe", "pipe", "pipe"],
+    });
+    const stdoutChunks: Uint8Array[] = [];
+    const stderrChunks: Uint8Array[] = [];
+    proc.stdout.on("data", (c: Uint8Array) => stdoutChunks.push(c));
+    proc.stderr.on("data", (c: Uint8Array) => stderrChunks.push(c));
+    proc.on("error", reject);
+    proc.on("close", (code: number | null) => {
+      const decoder = new TextDecoder();
+      if (code !== 0) {
+        reject(
+          new Error(
+            `wasm-opt disassemble failed: ${decoder.decode(_concatU8(stderrChunks))}`,
+          ),
+        );
+      } else {
+        resolve(decoder.decode(_concatU8(stdoutChunks)));
+      }
+    });
+    proc.stdin.end(wasm);
   });
-  const proc = cmd.spawn();
-  const writer = proc.stdin.getWriter();
-  await writer.write(wasm);
-  await writer.close();
-  const { code, stdout, stderr } = await proc.output();
-  if (code !== 0) {
-    throw new Error(
-      `wasm-opt disassemble failed: ${new TextDecoder().decode(stderr)}`,
-    );
+}
+
+function _concatU8(chunks: Uint8Array[]): Uint8Array {
+  let total = 0;
+  for (const c of chunks) total += c.byteLength;
+  const out = new Uint8Array(total);
+  let offset = 0;
+  for (const c of chunks) {
+    out.set(c, offset);
+    offset += c.byteLength;
   }
-  return new TextDecoder().decode(stdout);
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -381,9 +407,12 @@ export type { PassOptions };
 export { ModuleBuilder };
 
 // ---------------------------------------------------------------------------
-// Run as CLI if executed directly
+// CLI entrypoint
 // ---------------------------------------------------------------------------
-
-if (import.meta.main) {
-  await main();
-}
+//
+// For CLI use, invoke via the top-level `main.ts` dispatcher (works on Deno,
+// Node 18+, and Bun). The `if (import.meta.main)` check used in Deno-only
+// builds is intentionally omitted here for cross-runtime portability —
+// `import.meta.main` is not yet universal across Node versions binaryen-ts
+// supports. Callers that need standalone execution can import `main` from
+// this module and call it directly.

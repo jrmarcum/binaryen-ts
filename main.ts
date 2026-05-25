@@ -23,6 +23,7 @@
  *
  * ```ts
  * import { createModule, BinaryOp, ValType } from "@jrmarcum/binaryen-ts/api";
+ * import { writeFile } from "node:fs/promises";
  *
  * const mod = createModule((b, e) => {
  *   b.addFunction("add", [ValType.I32, ValType.I32], [ValType.I32],
@@ -32,13 +33,22 @@
  * });
  *
  * const wasm = await mod.optimize("-Oz", true); // hybrid mode via wasm-opt
- * await Deno.writeFile("add.wasm", wasm);
+ * await writeFile("add.wasm", wasm);
  * ```
  *
  * ## CLI
  *
+ * Runs on Deno, Node 18+, and Bun. Examples:
+ *
  * ```sh
- * deno run --allow-all https://jsr.io/@jrmarcum/binaryen-ts/main.ts wasm-opt input.wasm -o out.wasm -Oz
+ * # Deno (no install — runs directly from JSR)
+ * deno run -A jsr:@jrmarcum/binaryen-ts wasm-opt input.wasm -o out.wasm -Oz
+ *
+ * # Node (after `npx jsr add @jrmarcum/binaryen-ts`)
+ * node --experimental-strip-types node_modules/@jrmarcum/binaryen-ts/main.ts wasm-opt input.wasm
+ *
+ * # Bun
+ * bun node_modules/@jrmarcum/binaryen-ts/main.ts wasm-opt input.wasm
  * ```
  *
  * ## Architecture
@@ -56,6 +66,7 @@
  * @license Apache-2.0
  */
 
+import process from "node:process";
 import { main as wasmOptMain } from "./src/tools/wasm-opt.ts";
 
 // ---------------------------------------------------------------------------
@@ -67,7 +78,7 @@ const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
 };
 
 async function main(): Promise<void> {
-  const [command, ...rest] = Deno.args;
+  const [command, ...rest] = process.argv.slice(2);
 
   if (!command || command === "--help" || command === "-h") {
     printHelp();
@@ -83,7 +94,7 @@ async function main(): Promise<void> {
   if (!handler) {
     console.error(`Unknown command: ${command}`);
     console.error(`Run with --help to see available commands.`);
-    Deno.exit(1);
+    process.exit(1);
   }
 
   await handler(rest);
@@ -93,7 +104,9 @@ function printHelp(): void {
   console.log(`binaryen-ts 0.1.0 — TypeScript port of Binaryen WebAssembly toolchain
 
 USAGE:
-  deno run --allow-all main.ts <command> [options]
+  deno run -A jsr:@jrmarcum/binaryen-ts <command> [options]
+  node main.ts <command> [options]    (Node 22+ with --experimental-strip-types)
+  bun main.ts <command> [options]
 
 COMMANDS:
   wasm-opt <input>    Optimize a WASM or WAT file

@@ -1661,12 +1661,13 @@ export class WasmEncodeError extends Error {
  * ```ts
  * import { encodeWasm } from "@jrmarcum/binaryen-ts/encoder";
  * import { parseWasm } from "@jrmarcum/binaryen-ts/binary";
+ * import { readFile, writeFile } from "node:fs/promises";
  *
- * const bytes = await Deno.readFile("module.wasm");
+ * const bytes = new Uint8Array(await readFile("module.wasm"));
  * const mod = parseWasm(bytes);
  * // ... run passes ...
  * const optimized = encodeWasm(mod);
- * await Deno.writeFile("module.opt.wasm", optimized);
+ * await writeFile("module.opt.wasm", optimized);
  * ```
  */
 export function encodeWasm(mod: WasmModule): Uint8Array {

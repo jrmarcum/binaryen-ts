@@ -18,3 +18,7 @@ out/
 # Test artifacts
 *.wasm
 *.wat.out
+
+# Local-only working notes (not synced via git)
+CLAUDE.md
+TASKS.md

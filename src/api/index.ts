@@ -14,6 +14,7 @@
  * @example
  * ```ts
  * import { createModule, BinaryOp, ValType } from "@jrmarcum/binaryen-ts/api";
+ * import { writeFile } from "node:fs/promises";
  *
  * const mod = createModule((b) => {
  *   b.addFunction("add", [ValType.I32, ValType.I32], [ValType.I32], (e) =>
@@ -23,8 +24,14 @@
  * });
  *
  * const wasm = await mod.optimize("-Oz");
- * await Deno.writeFile("add.wasm", wasm);
+ * await writeFile("add.wasm", wasm);
  * ```
+ *
+ * ## Runtime support
+ *
+ * Pure-TypeScript paths (IR construction, encoder, pass pipeline) run on Deno,
+ * Node 18+, Bun, and any modern browser. The `optimize()` shorthand uses the
+ * subprocess bridge when `hybridMode: true`, which is Node/Deno/Bun only.
  *
  * @license MIT OR Apache-2.0
  */

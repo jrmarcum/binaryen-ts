@@ -10,11 +10,17 @@
  * ```ts
  * import { encodeWasm } from "@jrmarcum/binaryen-ts/encoder";
  * import { parseWasm } from "@jrmarcum/binaryen-ts/binary";
+ * import { readFile, writeFile } from "node:fs/promises";
  *
- * const bytes = await Deno.readFile("module.wasm");
+ * const bytes = new Uint8Array(await readFile("module.wasm"));
  * const mod = parseWasm(bytes);
  * const reencoded = encodeWasm(mod);
- * await Deno.writeFile("module.out.wasm", reencoded);
+ * await writeFile("module.out.wasm", reencoded);
+ * ```
+ *
+ * In the browser, source bytes via `fetch`:
+ * ```ts
+ * const bytes = new Uint8Array(await (await fetch("module.wasm")).arrayBuffer());
  * ```
  *
  * @license MIT OR Apache-2.0

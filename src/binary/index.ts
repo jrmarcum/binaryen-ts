@@ -8,10 +8,17 @@
  * @example
  * ```ts
  * import { parseWasm } from "@jrmarcum/binaryen-ts/binary";
+ * import { readFile } from "node:fs/promises";
  *
- * const bytes = await Deno.readFile("module.wasm");
+ * const bytes = new Uint8Array(await readFile("module.wasm"));
  * const mod = parseWasm(bytes, "module.wasm");
  * console.log(mod.functions.length);
+ * ```
+ *
+ * In the browser, source bytes via `fetch`:
+ * ```ts
+ * const bytes = new Uint8Array(await (await fetch("module.wasm")).arrayBuffer());
+ * const mod = parseWasm(bytes);
  * ```
  *
  * @license MIT OR Apache-2.0

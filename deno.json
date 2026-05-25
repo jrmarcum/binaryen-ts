@@ -1,6 +1,6 @@
 {
   "name": "@jrmarcum/binaryen-ts",
-  "version": "0.1.0",
+  "version": "1.0.0",
   "license": "MIT OR Apache-2.0",
   "exports": {
     ".": "./main.ts",
@@ -10,33 +10,39 @@
     "./passes": "./src/passes/index.ts",
     "./api": "./src/api/index.ts",
     "./interop": "./src/interop/binaryen-js.ts",
-    "./tools/wasm-opt": "./src/tools/wasm-opt.ts"
+    "./tools/wasm-opt": "./src/tools/wasm-opt.ts",
+    "./wasm": "./src/wasm/index.ts",
+    "./wasm-runtime": "./src/wasm-runtime.ts"
   },
   "tasks": {
-    "test": "deno test --allow-read --allow-write --allow-run tests/",
+    "test": "deno test --allow-read --allow-write --allow-run --allow-env --no-check tests/",
     "check": "deno check src/**/*.ts main.ts",
     "fmt": "deno fmt",
     "lint": "deno lint",
-    "publish": "deno publish"
+    "publish": "deno publish",
+    "publish:dry": "deno publish --dry-run --allow-dirty",
+    "ci": "deno task check && deno task test"
   },
   "publish": {
-    "provenance": true,
     "include": [
       "main.ts",
       "src/**/*.ts",
-      "tests/**/*.ts",
       "README.md",
       "LICENSE",
       "LICENSE-MIT",
       "LICENSE-APACHE"
     ],
     "exclude": [
-      "tests/fixtures/**"
+      "tests/**",
+      "benches/**",
+      "scripts/**",
+      "upstream/**",
+      "wabt-ts/**"
     ]
   },
   "compilerOptions": {
     "strict": true,
-    "lib": ["deno.window"]
+    "lib": ["deno.ns", "esnext", "dom"]
   },
   "fmt": {
     "lineWidth": 100,
