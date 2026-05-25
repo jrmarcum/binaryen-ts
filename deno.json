@@ -1,6 +1,6 @@
 {
   "name": "@jrmarcum/binaryen-ts",
-  "version": "1.1.2",
+  "version": "1.1.3",
   "license": "MIT",
   "exports": {
     ".": "./main.ts",
