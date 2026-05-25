@@ -45,7 +45,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@v6
         with:
-          fetch-depth: 0  # need full history + tags so `git rev-parse refs/tags/...` works
+          fetch-depth: 0 # need full history + tags so `git rev-parse refs/tags/...` works
 
       - name: Install Deno
         uses: denoland/setup-deno@v2
