@@ -1,0 +1,91 @@
+# Auto-tag main when `deno.json` version is ahead of the latest tag.
+#
+# Closes the gap between `deno task bump` + commit and the tag push that
+# triggers `.github/workflows/publish.yml`. Without this workflow, the user has
+# to remember a separate `git tag vX.Y.Z && git push origin vX.Y.Z` step — and
+# missing that step silently skips the release (the publish workflow is keyed
+# to `push: tags: v*`).
+#
+# Trigger logic:
+#   1. On every push to main, read `version` from `deno.json`.
+#   2. If `vX.Y.Z` does not already exist, create + push the annotated tag.
+#   3. Explicitly dispatch `publish.yml` on the new tag.
+#
+# Why the explicit dispatch: GitHub does not fire workflows in response to
+# pushes (tag or branch) authored by `GITHUB_TOKEN`. This is GitHub's recursion
+# guard — without it, a workflow that pushes could trigger itself. So pushing
+# `v1.0.8` here would not start `publish.yml` on its own; the `gh workflow run`
+# call uses the same token with `actions: write` permission to dispatch the
+# publish workflow on the freshly pushed tag.
+#
+# Required permissions:
+#   - contents: write   → push the tag
+#   - actions:  write   → workflow_dispatch trigger for publish.yml
+
+name: Auto-tag on version bump
+
+on:
+  push:
+    branches:
+      - main
+
+concurrency:
+  group: auto-tag
+  cancel-in-progress: false
+
+jobs:
+  auto-tag:
+    name: Tag deno.json version if new
+    runs-on: ubuntu-latest
+    permissions:
+      contents: write
+      actions: write
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v6
+        with:
+          fetch-depth: 0  # need full history + tags so `git rev-parse refs/tags/...` works
+
+      - name: Install Deno
+        uses: denoland/setup-deno@v2
+        with:
+          deno-version: v2.x
+
+      - name: Read version from deno.json
+        id: ver
+        run: |
+          V="$(deno eval 'console.log(JSON.parse(Deno.readTextFileSync("deno.json")).version)')"
+          echo "version=$V" >> "$GITHUB_OUTPUT"
+          echo "deno.json version: $V"
+
+      - name: Check whether tag already exists
+        id: check
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          if git rev-parse -q --verify "refs/tags/$TAG" >/dev/null; then
+            echo "exists=true" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG already exists — nothing to do."
+          else
+            echo "exists=false" >> "$GITHUB_OUTPUT"
+            echo "Tag $TAG does not exist — will create + push + dispatch publish."
+          fi
+
+      - name: Create and push tag
+        if: steps.check.outputs.exists == 'false'
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          git config user.name  "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git tag -a "$TAG" -m "Release $TAG"
+          git push origin "$TAG"
+          echo "Pushed $TAG"
+
+      - name: Dispatch publish workflow on new tag
+        if: steps.check.outputs.exists == 'false'
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          TAG="v${{ steps.ver.outputs.version }}"
+          gh workflow run publish.yml --ref "$TAG"
+          echo "Dispatched publish.yml on ref $TAG"
