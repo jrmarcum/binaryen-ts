@@ -43,6 +43,8 @@ import { ValType } from "../ir/types.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 import { mapExpression } from "../ir/walk.ts";
 
+const _VAL_TYPES = new Set<string>(Object.values(ValType) as string[]);
+
 // ---------------------------------------------------------------------------
 // Pass class
 // ---------------------------------------------------------------------------
@@ -76,7 +78,7 @@ function _cseFunction(fn: WasmFunction): Expression {
 
   const body = mapExpression(fn.body, (expr) => {
     if (expr.kind !== ExpressionKind.Block) return expr;
-    return _cseBlock(expr, fn, state);
+    return _cseBlock(expr, state);
   });
 
   // Append any newly created locals
@@ -93,7 +95,6 @@ interface CSEState {
 
 function _cseBlock(
   block: Extract<Expression, { kind: ExpressionKind.Block }>,
-  fn: WasmFunction,
   state: CSEState,
 ): Expression {
   // --- Pass 1: count occurrences of each keyed expression ---
@@ -103,9 +104,10 @@ function _cseBlock(
   }
 
   // Only proceed if any expression appears more than once
-  const candidates = new Set<string>(
-    [...counts.entries()].filter(([, n]) => n > 1).map(([k]) => k),
-  );
+  const candidates = new Set<string>();
+  for (const [k, n] of counts) {
+    if (n > 1) candidates.add(k);
+  }
   if (candidates.size === 0) return block;
 
   // --- Pass 2: rewrite first occurrence → tee, subsequent → get ---
@@ -117,7 +119,7 @@ function _cseBlock(
     // Invalidate cache entries affected by side effects in this child
     _invalidate(child, cache);
 
-    const rewritten = _rewriteExpr(child, candidates, cache, fn, state);
+    const rewritten = _rewriteExpr(child, candidates, cache, state);
     if (rewritten !== child) changed = true;
     newChildren.push(rewritten);
   }
@@ -244,7 +246,6 @@ function _rewriteExpr(
   expr: Expression,
   candidates: Set<string>,
   cache: Map<string, number>,
-  fn: WasmFunction,
   state: CSEState,
 ): Expression {
   const key = _exprKey(expr);
@@ -258,7 +259,6 @@ function _rewriteExpr(
       const slot = state.nextLocal++;
       const localType = _exprType(expr);
       state.newLocals.push({ type: localType as ValType });
-      fn.locals; // reference to suppress unused warning
       cache.set(key, slot);
       const tee: LocalTeeExpr = {
         kind: ExpressionKind.LocalTee,
@@ -275,8 +275,8 @@ function _rewriteExpr(
     case ExpressionKind.Binary:
       return {
         ...expr,
-        left: _rewriteExpr(expr.left, candidates, cache, fn, state),
-        right: _rewriteExpr(expr.right, candidates, cache, fn, state),
+        left: _rewriteExpr(expr.left, candidates, cache, state),
+        right: _rewriteExpr(expr.right, candidates, cache, state),
       };
     case ExpressionKind.Unary:
     case ExpressionKind.Drop:
@@ -285,11 +285,11 @@ function _rewriteExpr(
     case ExpressionKind.GlobalSet:
       return {
         ...expr,
-        value: _rewriteExpr(expr.value, candidates, cache, fn, state),
+        value: _rewriteExpr(expr.value, candidates, cache, state),
       };
     case ExpressionKind.Return:
       if (expr.value) {
-        const v = _rewriteExpr(expr.value, candidates, cache, fn, state);
+        const v = _rewriteExpr(expr.value, candidates, cache, state);
         return v === expr.value ? expr : { ...expr, value: v };
       }
       return expr;
@@ -300,7 +300,7 @@ function _rewriteExpr(
 
 function _exprType(expr: Expression): ValType {
   const t = expr.type;
-  if (typeof t === "string" && Object.values(ValType).includes(t as ValType)) {
+  if (typeof t === "string" && _VAL_TYPES.has(t)) {
     return t as ValType;
   }
   return ValType.I32; // fallback

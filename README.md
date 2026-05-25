@@ -302,6 +302,7 @@ console.log(add(3, 4)); // 7
 | 10    | ✅ Partial | WASM-kernel runtime + dogfood embed pipeline; demo kernel + boundary-cost benchmark prove single-op dispatch regresses, kernel migration deferred until profiling identifies workloads that amortize the ~3 ns/call WASM boundary tax                                                                                |
 | 11    | ✅ Done    | Cross-runtime migration + JSR publish hardening — single source tree runs on Deno, Node 18+, Bun, and modern browsers; tag-push CI publishes to JSR with OIDC provenance; license arrangement: MIT primary + Apache-2.0 alternative; JSDoc symbol coverage clean (0 `deno doc --lint` errors); 179/179 tests passing |
 | 11.1  | ✅ Done    | CI hardening + automated GitHub Release — `deno fmt`/`deno lint` clean across `src/` and `tests/`; `@std/assert` declared via import map; `actions/checkout` bumped to `@v6` (Node 24 runtime); publish workflow auto-creates a matching GitHub Release on tag push                                                  |
+| 11.2  | ✅ Done    | Code-review housekeeping — LocalCSE internal cleanup (dropped dead `fn` parameter, hoisted `Object.values(ValType)` to a Set cache, single-pass candidate construction); JSDoc factory references corrected in `src/ir/expressions.ts`; no behavioral change, 179/179 tests still pass                               |
 
 ## Contributing
 

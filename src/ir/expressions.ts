@@ -12,12 +12,12 @@
  *
  * @example
  * ```ts
- * import { makeConst, makeLocalGet, makeBinary } from "@jrmarcum/binaryen-ts/ir";
+ * import { makeBinary, makeI32Const, makeLocalGet } from "@jrmarcum/binaryen-ts/ir";
  *
  * const expr = makeBinary(
  *   BinaryOp.AddI32,
  *   makeLocalGet(0, ValType.I32),
- *   makeConst({ i32: 1 }),
+ *   makeI32Const(1),
  * );
  * ```
  *
@@ -684,7 +684,7 @@ export interface ReturnExpr extends ExprBase {
   value: Expression | null;
 }
 
-/** {@link ConstExpr} — see {@link makeConst} for the factory. */
+/** {@link ConstExpr} — see {@link makeI32Const}, {@link makeI64Const}, {@link makeF32Const}, {@link makeF64Const} for factories. */
 export interface ConstExpr extends ExprBase {
   /** Discriminant — identifies which expression variant this is. */
   kind: ExpressionKind.Const;
