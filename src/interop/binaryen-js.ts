@@ -1,42 +1,48 @@
 /**
  * @module binaryen-ts/interop
  *
- * Interoperability bridge to the upstream `binaryen.js` WASM binary.
+ * Interoperability bridge to the upstream `binaryen.js` WASM binary
+ * (the Emscripten-compiled build of the upstream C++ Binaryen library).
  *
- * This module provides a thin TypeScript wrapper around the `binaryen.js`
- * Emscripten-compiled WASM library from the upstream Binaryen project.
- * It is used in **hybrid mode** to delegate complex optimization passes
- * (e.g. Binaryen's full `-Oz` pipeline) to the battle-tested C++ implementation
- * while the rest of the toolchain runs as native TypeScript.
+ * This module provides a thin TypeScript wrapper used in **hybrid mode** to
+ * delegate optimization passes to the upstream C++ implementation while the
+ * rest of the toolchain runs as native TypeScript.
  *
- * **Hybrid mode architecture:**
- * ```
- * TypeScript IR  ──serialize──▶  WAT text  ──parse──▶  binaryen.js
- *                                                            │
- *                                                      optimize (C++)
- *                                                            │
- * TypeScript IR  ◀──deserialize──  WAT text  ◀──print──  binaryen.js
- * ```
+ * Two tiers of hybrid execution are available:
  *
- * @example
+ * **Tier 2 — subprocess**: invokes a `wasm-opt` binary on `PATH`. Use
+ * {@link BinaryenInterop.optimizeViaSubprocess} — it does not require loading
+ * binaryen.js itself, just the `wasm-opt` CLI. Works whenever the upstream
+ * binary is installed.
+ *
+ * **Tier 3 — in-process binaryen.js**: dynamically loads the upstream
+ * `binaryen.js` Emscripten build and calls its API in-process. Use
+ * {@link BinaryenInterop.create} + {@link BinaryenInterop.optimizeWat}. No
+ * subprocess required, suitable for browser environments that have loaded
+ * binaryen.js.
+ *
+ * @example Subprocess (tier 2)
  * ```ts
  * import { BinaryenInterop } from "@jrmarcum/binaryen-ts/interop";
- * import { ModuleBuilder, ValType } from "@jrmarcum/binaryen-ts/ir";
+ * const optimized = await BinaryenInterop.optimizeViaSubprocess(watText, ["-Oz"]);
+ * ```
  *
- * const mod = new ModuleBuilder()
- *   .addFunction("add", [ValType.I32, ValType.I32], [ValType.I32], body)
- *   .build();
+ * @example In-process (tier 3)
+ * ```ts
+ * import { BinaryenInterop } from "@jrmarcum/binaryen-ts/interop";
  *
- * const interop = await BinaryenInterop.create();
- * const optimized = await interop.optimizeWat(watText, "-Oz");
+ * // Deno auto-resolves npm: specifiers.
+ * const interop = await BinaryenInterop.create({ binaryenJsPath: "npm:binaryen" });
+ * const optimizedWat = interop.optimizeWat(watText, { optimizeLevel: 2, shrinkLevel: 2 });
  * ```
  *
  * ## Runtime requirements
  *
- * Subprocess-based interop uses `node:child_process` and therefore requires a
- * Node-compatible runtime (Deno 1.40+, Node 18+, Bun). It is not available in
- * the browser — use the pure-TypeScript {@link ../passes/index.ts | pass pipeline}
- * for browser environments.
+ * - Subprocess (`optimizeViaSubprocess`) uses `node:child_process` — Deno 1.40+,
+ *   Node 18+, or Bun. Not available in the browser.
+ * - In-process (`create`) is browser-safe **as long as** the caller supplies a
+ *   binaryen.js module that resolves under the target runtime (e.g. via an
+ *   ESM CDN URL or pre-loaded instance).
  *
  * @license MIT
  */
@@ -44,91 +50,182 @@
 // ---------------------------------------------------------------------------
 // Binaryen.js type stubs
 // These describe the subset of the binaryen.js API used for interop.
-// The full API is documented at https://github.com/WebAssembly/binaryen#binaryenjs
+// Reference: upstream/src/js/binaryen.js-post.js — the Module namespace
+// (factory) and the object returned by Module['parseText'] / wrapModule.
 // ---------------------------------------------------------------------------
 
 /**
- * Minimal type declaration for the binaryen.js module factory.
- * The full binaryen.js type definitions can be installed from the `binaryen`
- * npm package (`npm:binaryen` in a Deno import map).
- *
- * @internal
+ * The wrapped Module object returned by binaryen.js's `parseText` / `readBinary`.
+ * Methods invoke the underlying C++ Binaryen `_BinaryenModule*` functions.
  */
-export interface BinaryenModule {
-  /** Parse WAT text into a module. Returns 0 on failure. */
-  parseText(wat: string): number;
-  /** Serialize a module reference to WAT text. */
-  emitText(moduleRef: number): string;
-  /** Serialize a module reference to binary WASM. */
-  emitBinary(moduleRef: number): Uint8Array;
-  /** Run optimization passes on a module reference. */
-  runPasses(moduleRef: number, passes: string[]): void;
-  /** Set optimization level (0-4). */
-  setOptimizeLevel(level: number): void;
-  /** Set shrink level (0-2). */
-  setShrinkLevel(level: number): void;
-  /** Free a module reference. */
-  disposeModule(moduleRef: number): void;
+export interface BinaryenWrappedModule {
+  /** Serialize this module to WAT text. */
+  emitText(): string;
+  /** Serialize this module to a binary `.wasm` byte sequence. */
+  emitBinary(sourceMapUrl?: string): Uint8Array;
+  /** Run the default optimization pipeline (uses module-level shrink/optimize levels). */
+  optimize(): void;
+  /** Run the named passes in order. */
+  runPasses(passes: string[]): void;
+  /** Validate this module. Returns truthy on success. */
+  validate(): number;
+  /** Release native resources held by this module. */
+  dispose(): void;
 }
 
-/** Options for the {@link BinaryenInterop} bridge. */
+/**
+ * The binaryen.js factory/namespace — the object returned by `require("binaryen")`
+ * or `import * as binaryen from "binaryen"`. Holds the parse entry points and the
+ * module-level shrink/optimize settings the C++ pipeline reads when `optimize()`
+ * runs.
+ */
+export interface BinaryenJsLib {
+  /** Parse WAT text into a wrapped module. Throws/returns 0 on failure. */
+  parseText(text: string): BinaryenWrappedModule;
+  /** Parse a `.wasm` byte sequence into a wrapped module. */
+  readBinary(data: Uint8Array): BinaryenWrappedModule;
+  /** Set the optimization level the next `optimize()` call will use (0–4). */
+  setOptimizeLevel(level: number): void;
+  /** Set the shrink level the next `optimize()` call will use (0–2). */
+  setShrinkLevel(level: number): void;
+  /** Get the current optimization level. */
+  getOptimizeLevel?(): number;
+  /** Get the current shrink level. */
+  getShrinkLevel?(): number;
+}
+
+/** Options for {@link BinaryenInterop.create}. */
 export interface BinaryenInteropOptions {
   /**
-   * Path or URL to the `binaryen.js` file.
-   * Defaults to the version bundled with the upstream submodule.
+   * Module specifier or URL passed directly to dynamic `import()`. The default,
+   * `"npm:binaryen"`, works under Deno and Bun without setup; under Node it
+   * requires `npm install binaryen` first.
+   *
+   * Other examples:
+   * - `"npm:binaryen"` — Deno / Bun
+   * - `"binaryen"` — Node (after `npm install binaryen`)
+   * - `"https://esm.sh/binaryen"` — browser / Deno via ESM CDN
+   * - `"./vendor/binaryen.js"` — file path
    */
   binaryenJsPath?: string;
+  /**
+   * An already-loaded binaryen.js factory. Takes precedence over
+   * `binaryenJsPath` if both are provided. Useful for tests and for runtimes
+   * where the caller has its own loading strategy.
+   */
+  binaryen?: BinaryenJsLib;
+}
+
+/** Options for {@link BinaryenInterop.optimizeWat} and {@link BinaryenInterop.optimizeBinary}. */
+export interface OptimizeOptions {
+  /** Optimization level (0–4). Default: 2. */
+  optimizeLevel?: number;
+  /** Shrink level (0–2). Default: 0. */
+  shrinkLevel?: number;
+  /**
+   * Optional explicit pass list. When provided, the named passes run in order
+   * INSTEAD of the default pipeline driven by `optimizeLevel` / `shrinkLevel`.
+   */
+  passes?: string[];
 }
 
 /**
  * Bridge to the upstream `binaryen.js` WASM binary for hybrid mode.
  *
- * Use {@link BinaryenInterop.create} to instantiate. The bridge is stateless
- * after creation — optimization calls are independent and thread-safe.
+ * Use {@link BinaryenInterop.create} to instantiate.
  */
 export class BinaryenInterop {
-  private readonly _binaryen: BinaryenModule;
+  private readonly _binaryen: BinaryenJsLib;
 
-  private constructor(binaryen: BinaryenModule) {
+  private constructor(binaryen: BinaryenJsLib) {
     this._binaryen = binaryen;
   }
 
   /**
-   * Loads and initializes the `binaryen.js` module.
+   * Loads and initializes a `binaryen.js` instance.
    *
-   * @param options - Optional configuration.
-   * @throws If the `binaryen.js` binary cannot be loaded.
+   * @param options - Either `binaryen` (pre-loaded) or `binaryenJsPath` (module
+   *                  specifier). Defaults to `binaryenJsPath: "npm:binaryen"`.
+   * @throws If the binaryen.js module cannot be loaded or does not match the
+   *         expected API shape.
    */
-  static create(_options: BinaryenInteropOptions = {}): Promise<BinaryenInterop> {
-    // TODO(phase 1): dynamically import binaryen.js from the upstream submodule
-    // or from npm:binaryen. For now this is a placeholder that returns a
-    // rejected promise so callers know the feature is not yet implemented.
-    return Promise.reject(
-      new Error(
-        "BinaryenInterop.create() is not yet implemented.\n" +
-          "Track progress in: https://github.com/jrmarcum/binaryen-ts/issues\n\n" +
-          "Workaround: use the upstream binaryen.js directly via `npm:binaryen`\n" +
-          "or run wasm-opt as a subprocess via BinaryenInterop.optimizeViaSubprocess().",
-      ),
-    );
+  static async create(options: BinaryenInteropOptions = {}): Promise<BinaryenInterop> {
+    if (options.binaryen) {
+      _validateBinaryenLib(options.binaryen, "<options.binaryen>");
+      return new BinaryenInterop(options.binaryen);
+    }
+    const path = options.binaryenJsPath ?? "npm:binaryen";
+    let mod: unknown;
+    try {
+      mod = await import(path);
+    } catch (err) {
+      throw new Error(
+        `BinaryenInterop.create: failed to import binaryen.js from "${path}".\n` +
+          `Underlying error: ${(err as Error).message}\n\n` +
+          `Hint: install via "npm install binaryen" (Node) or use a path/URL that\n` +
+          `resolves under your runtime. To supply an already-loaded instance, pass\n` +
+          `{ binaryen: <loaded binaryen module> } instead of binaryenJsPath.`,
+      );
+    }
+    // ESM modules expose the binaryen namespace as `default`; CJS modules
+    // (Node `require("binaryen")`) expose it directly.
+    const binaryen = (mod as { default?: BinaryenJsLib }).default ?? (mod as BinaryenJsLib);
+    _validateBinaryenLib(binaryen, path);
+    return new BinaryenInterop(binaryen);
   }
 
   /**
-   * Optimizes WAT text using the upstream `binaryen.js` WASM binary.
+   * Optimize a WAT text snippet and return optimized WAT.
    *
    * @param wat - Input WAT text.
-   * @param flags - Optimization flags (e.g. `"-Oz"`, `"-O3"`).
+   * @param options - Optimization settings; defaults to `{ optimizeLevel: 2 }`.
+   *                  String shorthand `"-Oz"`, `"-O3"` etc. is also accepted.
    * @returns Optimized WAT text.
    */
-  optimizeWat(wat: string, _flags = "-Oz"): string {
+  optimizeWat(wat: string, options: OptimizeOptions | string = {}): string {
+    const opts = typeof options === "string" ? _parseFlagShorthand(options) : options;
     const ref = this._binaryen.parseText(wat);
-    if (ref === 0) throw new Error("binaryen.js: failed to parse WAT");
+    if (!ref) throw new Error("binaryen.js: parseText failed");
     try {
-      this._binaryen.runPasses(ref, ["Vacuum", "DCE", "OptimizeInstructions"]);
-      return this._binaryen.emitText(ref);
+      this._runOptimization(ref, opts);
+      return ref.emitText();
     } finally {
-      this._binaryen.disposeModule(ref);
+      ref.dispose();
     }
+  }
+
+  /**
+   * Optimize a `.wasm` binary and return the optimized binary.
+   *
+   * @param bytes - Input `.wasm` bytes.
+   * @param options - Optimization settings; defaults to `{ optimizeLevel: 2 }`.
+   * @returns Optimized `.wasm` bytes.
+   */
+  optimizeBinary(bytes: Uint8Array, options: OptimizeOptions | string = {}): Uint8Array {
+    const opts = typeof options === "string" ? _parseFlagShorthand(options) : options;
+    const ref = this._binaryen.readBinary(bytes);
+    if (!ref) throw new Error("binaryen.js: readBinary failed");
+    try {
+      this._runOptimization(ref, opts);
+      return ref.emitBinary();
+    } finally {
+      ref.dispose();
+    }
+  }
+
+  /** Returns the underlying binaryen.js factory. Escape hatch for advanced uses. */
+  get binaryen(): BinaryenJsLib {
+    return this._binaryen;
+  }
+
+  private _runOptimization(ref: BinaryenWrappedModule, opts: OptimizeOptions): void {
+    if (opts.passes && opts.passes.length > 0) {
+      ref.runPasses(opts.passes);
+      return;
+    }
+    this._binaryen.setOptimizeLevel(opts.optimizeLevel ?? 2);
+    this._binaryen.setShrinkLevel(opts.shrinkLevel ?? 0);
+    ref.optimize();
   }
 
   /**
@@ -169,6 +266,52 @@ export class BinaryenInterop {
       });
       proc.stdin.end(new TextEncoder().encode(wat));
     });
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Helpers
+// ---------------------------------------------------------------------------
+
+function _validateBinaryenLib(bin: unknown, source: string): asserts bin is BinaryenJsLib {
+  const b = bin as Partial<BinaryenJsLib>;
+  if (
+    !b ||
+    typeof b.parseText !== "function" ||
+    typeof b.readBinary !== "function" ||
+    typeof b.setOptimizeLevel !== "function" ||
+    typeof b.setShrinkLevel !== "function"
+  ) {
+    throw new Error(
+      `BinaryenInterop: module loaded from "${source}" does not match the ` +
+        `binaryen.js API (missing parseText / readBinary / setOptimizeLevel / setShrinkLevel).`,
+    );
+  }
+}
+
+/**
+ * Translate `-O0`/`-O1`/`-O2`/`-O3`/`-O4`/`-Os`/`-Oz` to the
+ * (optimizeLevel, shrinkLevel) pair upstream uses. Matches the mapping in
+ * `wasm-opt`'s argument parser.
+ */
+function _parseFlagShorthand(flag: string): OptimizeOptions {
+  switch (flag) {
+    case "-O0":
+      return { optimizeLevel: 0, shrinkLevel: 0 };
+    case "-O1":
+      return { optimizeLevel: 1, shrinkLevel: 0 };
+    case "-O2":
+      return { optimizeLevel: 2, shrinkLevel: 0 };
+    case "-O3":
+      return { optimizeLevel: 3, shrinkLevel: 0 };
+    case "-O4":
+      return { optimizeLevel: 4, shrinkLevel: 0 };
+    case "-Os":
+      return { optimizeLevel: 2, shrinkLevel: 1 };
+    case "-Oz":
+      return { optimizeLevel: 2, shrinkLevel: 2 };
+    default:
+      throw new Error(`Unknown optimization shorthand: "${flag}"`);
   }
 }
 
