@@ -720,6 +720,30 @@ export interface LocalTeeExpr extends ExprBase {
   value: Expression;
 }
 
+/** {@link TableGetExpr} — see {@link makeTableGet} for the factory.
+ *  `table.get $t index` — reads the element at `index` from table `$t`. */
+export interface TableGetExpr extends ExprBase {
+  /** Discriminant — identifies which expression variant this is. */
+  kind: ExpressionKind.TableGet;
+  /** Internal name of the table being read. */
+  table: string;
+  /** i32 index into the table. */
+  index: Expression;
+}
+
+/** {@link TableSetExpr} — see {@link makeTableSet} for the factory.
+ *  `table.set $t index value` — writes `value` to `index` in table `$t`. */
+export interface TableSetExpr extends ExprBase {
+  /** Discriminant — identifies which expression variant this is. */
+  kind: ExpressionKind.TableSet;
+  /** Internal name of the table being written. */
+  table: string;
+  /** i32 index into the table. */
+  index: Expression;
+  /** New reference value to store. */
+  value: Expression;
+}
+
 /** {@link GlobalGetExpr} — see {@link makeGlobalGet} for the factory. */
 export interface GlobalGetExpr extends ExprBase {
   /** Discriminant — identifies which expression variant this is. */
@@ -1331,6 +1355,8 @@ export type Expression =
   | LocalGetExpr
   | LocalSetExpr
   | LocalTeeExpr
+  | TableGetExpr
+  | TableSetExpr
   | GlobalGetExpr
   | GlobalSetExpr
   | UnaryExpr
@@ -1425,6 +1451,26 @@ export function makeLocalSet(index: number, value: Expression): LocalSetExpr {
 /** Creates a `local.tee` expression (result type matches the value). */
 export function makeLocalTee(index: number, value: Expression, type: ValType): LocalTeeExpr {
   return { kind: ExpressionKind.LocalTee, type, index, value };
+}
+
+/** Creates a `table.get` expression. Default element type is `funcref` (the
+ *  most common reference table); pass `externref` for tables holding host
+ *  references. */
+export function makeTableGet(
+  table: string,
+  index: Expression,
+  type: ValType = ValType.FuncRef,
+): TableGetExpr {
+  return { kind: ExpressionKind.TableGet, type, table, index };
+}
+
+/** Creates a `table.set` expression (result type is `none`). */
+export function makeTableSet(
+  table: string,
+  index: Expression,
+  value: Expression,
+): TableSetExpr {
+  return { kind: ExpressionKind.TableSet, type: None, table, index, value };
 }
 
 /** Creates a binary expression. */

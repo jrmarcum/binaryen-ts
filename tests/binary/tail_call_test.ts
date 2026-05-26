@@ -123,12 +123,7 @@ Deno.test("Phase 13: WAT (return_call $f) → encode → parse round-trip preser
   assertEquals((target as CallExpr).isReturn, true);
 });
 
-Deno.test("Phase 13: WAT (return_call_indirect ...) → encode → parse round-trip preserves isReturn", () => {
-  // Note: using explicit `(param ...)` / `(result ...)` rather than
-  // `(type $sig)`. The latter is a separate Phase 1 gap — the WAT parser's
-  // parseCallIndirect skips the type reference without looking up the
-  // signature, leaving params/results empty. Filing that fix as future work;
-  // it's orthogonal to tail-call binary support.
+Deno.test("Phase 13: WAT (return_call_indirect ...) with explicit (param ...)/(result ...) round-trips", () => {
   const mod = parseWat(`(module
     (table $t 1 funcref)
     (func $f (param i32) (result i32)
@@ -138,6 +133,28 @@ Deno.test("Phase 13: WAT (return_call_indirect ...) → encode → parse round-t
   const target = unwrapSingle(reparsed.functions[0].body);
   assertEquals(target.kind, ExpressionKind.CallIndirect);
   assertEquals((target as CallIndirectExpr).isReturn, true);
+});
+
+Deno.test("Phase 13 + Phase 1: WAT (return_call_indirect (type $sig) ...) resolves type ref", () => {
+  // Same as the test above but using `(type $sig)` to reference a
+  // module-level function-type declaration. Exercises the Phase 1 fix that
+  // makes parseCallIndirect look up the signature via `funcTypeDefs`
+  // instead of silently skipping the type reference (which previously left
+  // params/results empty and broke encoding).
+  const mod = parseWat(`(module
+    (table $t 1 funcref)
+    (type $sig (func (param i32) (result i32)))
+    (func $f (param i32) (result i32)
+      (return_call_indirect (type $sig) (local.get 0) (i32.const 0))))`);
+  const out = encodeWasm(mod);
+  const reparsed = parseWasm(out);
+  const target = unwrapSingle(reparsed.functions[0].body);
+  assertEquals(target.kind, ExpressionKind.CallIndirect);
+  assertEquals((target as CallIndirectExpr).isReturn, true);
+  // Params/results were populated from the type reference.
+  const ci = target as CallIndirectExpr;
+  assertEquals(ci.params.length, 1);
+  assertEquals(ci.results.length, 1);
 });
 
 // ---------------------------------------------------------------------------

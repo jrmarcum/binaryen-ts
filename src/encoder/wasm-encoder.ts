@@ -63,6 +63,8 @@ import {
   type StructNewExpr,
   type StructSetExpr,
   type SwitchExpr,
+  type TableGetExpr,
+  type TableSetExpr,
   type ThrowExpr,
   type ThrowRefExpr,
   type TryExpr,
@@ -1326,6 +1328,22 @@ class WasmEncoder {
         break;
       }
 
+      case ExpressionKind.TableGet: {
+        const e = expr as TableGetExpr;
+        this.encodeExpr(w, e.index, labels);
+        w.writeU8(0x25);
+        w.writeU32(this.tableIndex.get(e.table) ?? 0);
+        break;
+      }
+      case ExpressionKind.TableSet: {
+        const e = expr as TableSetExpr;
+        this.encodeExpr(w, e.index, labels);
+        this.encodeExpr(w, e.value, labels);
+        w.writeU8(0x26);
+        w.writeU32(this.tableIndex.get(e.table) ?? 0);
+        break;
+      }
+
       case ExpressionKind.Unary: {
         const e = expr as UnaryExpr;
         this.encodeExpr(w, e.value, labels);
@@ -1825,6 +1843,15 @@ function walkChildren(expr: Expression, visit: (child: Expression) => void): voi
     case ExpressionKind.GlobalSet:
       visit((expr as GlobalSetExpr).value);
       break;
+    case ExpressionKind.TableGet:
+      visit((expr as TableGetExpr).index);
+      break;
+    case ExpressionKind.TableSet: {
+      const e = expr as TableSetExpr;
+      visit(e.index);
+      visit(e.value);
+      break;
+    }
     case ExpressionKind.Unary:
       visit((expr as UnaryExpr).value);
       break;

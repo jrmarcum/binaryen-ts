@@ -116,6 +116,16 @@ function _mapChildren(
     case ExpressionKind.LocalTee:
       return { ...expr, value: mapExpression(expr.value, fn) };
 
+    case ExpressionKind.TableGet:
+      return { ...expr, index: mapExpression(expr.index, fn) };
+
+    case ExpressionKind.TableSet:
+      return {
+        ...expr,
+        index: mapExpression(expr.index, fn),
+        value: mapExpression(expr.value, fn),
+      };
+
     case ExpressionKind.GlobalSet:
       return { ...expr, value: mapExpression(expr.value, fn) };
 
@@ -364,6 +374,13 @@ function _visitChildren(
       break;
     case ExpressionKind.LocalSet:
     case ExpressionKind.LocalTee:
+      visit(expr.value);
+      break;
+    case ExpressionKind.TableGet:
+      visit(expr.index);
+      break;
+    case ExpressionKind.TableSet:
+      visit(expr.index);
       visit(expr.value);
       break;
     case ExpressionKind.GlobalSet:

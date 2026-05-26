@@ -448,6 +448,84 @@ Deno.test("CoalesceLocals: used local.set is preserved", () => {
   assertEquals(hasSet, true);
 });
 
+Deno.test("CoalesceLocals: two locals with disjoint live ranges coalesce", () => {
+  // Two locals used in sequence:
+  //   local.set $a 1
+  //   call $use $a
+  //   local.set $b 2
+  //   call $use $b
+  // `$a` is dead after its single use; `$b` is defined after that. Linear-scan
+  // with live holes recognizes the gap and assigns both to the same slot.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(1)),
+      makeDrop(makeLocalGet(0, ValType.I32)),
+      makeLocalSet(1, makeI32Const(2)),
+      makeDrop(makeLocalGet(1, ValType.I32)),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // Both locals should map to slot 0 — only one local remains.
+  assertEquals(mod.functions[0].locals.length, 1);
+});
+
+Deno.test("CoalesceLocals: two locals with overlapping live ranges stay distinct", () => {
+  // Both live simultaneously: $a's set + use brackets $b's set + use.
+  //   set $a 1; set $b 2; use $a; use $b
+  // Can't coalesce.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(1)),
+      makeLocalSet(1, makeI32Const(2)),
+      makeDrop(makeLocalGet(0, ValType.I32)),
+      makeDrop(makeLocalGet(1, ValType.I32)),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // Both locals are live simultaneously between their two reads — must stay
+  // separate.
+  assertEquals(mod.functions[0].locals.length, 2);
+});
+
+Deno.test("CoalesceLocals: single local with two value lifetimes doesn't blow up", () => {
+  // Same local written twice — two separate value lifetimes for the same
+  // slot. After coalescing, just one local should remain (mapped to itself).
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }],
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(1)),
+      makeDrop(makeLocalGet(0, ValType.I32)),
+      makeLocalSet(0, makeI32Const(2)),
+      makeDrop(makeLocalGet(0, ValType.I32)),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  assertEquals(mod.functions[0].locals.length, 1);
+});
+
 // ---------------------------------------------------------------------------
 // RemoveUnusedModuleElements pass
 // ---------------------------------------------------------------------------

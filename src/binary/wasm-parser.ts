@@ -58,6 +58,8 @@ import {
   makeSIMDTernary,
   makeStore,
   makeSwitch,
+  makeTableGet,
+  makeTableSet,
   makeThrow,
   makeThrowRef,
   makeTry,
@@ -1261,17 +1263,19 @@ class WasmParser {
           break;
         }
 
-        case 0x25: { // table.get -- stub
-          r.readU32();
-          pop();
-          push(makeNop());
+        case 0x25: { // table.get $t
+          const tidx = r.readU32();
+          const table = ctx.tableNames[tidx] ?? `$table${tidx}`;
+          const indexExpr = pop();
+          push(makeTableGet(table, indexExpr));
           break;
         }
-        case 0x26: { // table.set -- stub
-          r.readU32();
-          pop();
-          pop();
-          push(makeNop());
+        case 0x26: { // table.set $t
+          const tidx = r.readU32();
+          const table = ctx.tableNames[tidx] ?? `$table${tidx}`;
+          const value = pop();
+          const indexExpr = pop();
+          push(makeTableSet(table, indexExpr, value));
           break;
         }
 

@@ -113,6 +113,7 @@ import { None, type Type, Unreachable, ValType } from "../ir/types.ts";
 import {
   AbstractHeapType,
   type FieldType,
+  type FuncTypeDef,
   type HeapType,
   type RefType,
   type StorageType,
@@ -222,6 +223,12 @@ class WatModuleParser {
 
   // GC type name → heapTypes index
   private typeNames = new Map<string, number>();
+
+  // Function-signature type name → FuncTypeDef. Populated from
+  // `(type $sig (func (param ...) (result ...)))` declarations. Used by
+  // `parseCallIndirect` / `parseTryTable` / etc. to resolve `(type $sig)`
+  // references back to the underlying params/results.
+  private funcTypeDefs = new Map<string, FuncTypeDef>();
 
   // EH tag name → tag index
   private tagNames = new Map<string, number>();
@@ -602,6 +609,28 @@ class WatModuleParser {
       const name = this.resolveGlobalName(args[0], head);
       const value = this.parseExpr(args[1], ctx);
       return { kind: ExpressionKind.GlobalSet, type: None, name, value } as GlobalSetExpr;
+    }
+    if (head === "table.get") {
+      // `(table.get [$t] <index>)` — optional table ref, then an i32 index.
+      const { table, rest } = this._takeOptionalTableRef(args);
+      if (rest.length < 1) this.err("table.get: missing index operand", list.pos);
+      const index = this.parseExpr(rest[0], ctx);
+      return {
+        kind: ExpressionKind.TableGet,
+        // Element type defaults to funcref — the most common table type and
+        // what the binary parser assumes when it can't see the table decl.
+        type: ValType.FuncRef,
+        table,
+        index,
+      };
+    }
+    if (head === "table.set") {
+      // `(table.set [$t] <index> <value>)`.
+      const { table, rest } = this._takeOptionalTableRef(args);
+      if (rest.length < 2) this.err("table.set: need index and value operands", list.pos);
+      const index = this.parseExpr(rest[0], ctx);
+      const value = this.parseExpr(rest[1], ctx);
+      return { kind: ExpressionKind.TableSet, type: None, table, index, value };
     }
 
     // -----------------------------------------------------------------------
@@ -1165,19 +1194,43 @@ class WatModuleParser {
         idx++;
       }
     }
-    // (type $name)
-    if (idx < args.length && isListWith(args[idx], "type")) idx++;
-    // (param ...) and (result ...)
-    const params: ValType[] = [];
+    // (type $name) — resolve to a previously-declared FuncTypeDef, if any.
+    // Wasm spec: when both `(type ...)` and explicit `(param ...)` / `(result ...)`
+    // are present they must agree; the type-ref is authoritative, so we use
+    // its values and ignore any redundant inline lists.
+    let typeRefParams: ValType[] | null = null;
+    let typeRefResults: ValType[] | null = null;
+    if (idx < args.length && isListWith(args[idx], "type")) {
+      const tChildren = listChildren(args[idx] as SList);
+      const typeRef = atomText(tChildren[0]);
+      if (typeRef) {
+        const def = this.funcTypeDefs.get(typeRef);
+        if (def) {
+          // FuncTypeDef stores (ValType | RefType)[]; CallIndirect needs
+          // ValType[]. The two unions overlap on every ValType member and
+          // RefType is collapsed to AnyRef by `tryParseValType` elsewhere,
+          // so the cast is safe in practice.
+          typeRefParams = def.params as ValType[];
+          typeRefResults = def.results as ValType[];
+        }
+      }
+      idx++;
+    }
+    // (param ...) and (result ...) — only consulted if the type ref didn't
+    // resolve. Always advance `idx` past them so the operand parser is
+    // aligned regardless.
+    const inlineParams: ValType[] = [];
     while (idx < args.length && isListWith(args[idx], "param")) {
-      for (const t of listChildren(args[idx] as SList)) params.push(this.parseValType(t));
+      for (const t of listChildren(args[idx] as SList)) inlineParams.push(this.parseValType(t));
       idx++;
     }
-    const results: ValType[] = [];
+    const inlineResults: ValType[] = [];
     while (idx < args.length && isListWith(args[idx], "result")) {
-      for (const t of listChildren(args[idx] as SList)) results.push(this.parseValType(t));
+      for (const t of listChildren(args[idx] as SList)) inlineResults.push(this.parseValType(t));
       idx++;
     }
+    const params = typeRefParams ?? inlineParams;
+    const results = typeRefResults ?? inlineResults;
     // Operands then target index
     const operands = args.slice(idx, args.length - 1).map((a) => this.parseExpr(a, ctx));
     const target = this.parseExpr(args[args.length - 1], ctx);
@@ -1629,10 +1682,19 @@ class WatModuleParser {
     } else if (bodyHead === "array") {
       const element = this.parseArrayElement(body);
       if (element) def = { kind: "array", element };
+    } else if (bodyHead === "func") {
+      // (type $sig (func (param ...) (result ...))) — module-level function
+      // signature declaration. parseFuncType accepts an unnamed func-shape
+      // list (the inner body here has no $name atom in position 0).
+      const ft = this.parseFuncType(body);
+      def = { kind: "func", params: ft.params, results: ft.results };
     }
     if (def) {
       const ti = this.builder.addHeapType(def);
-      if (name) this.typeNames.set(name, ti);
+      if (name) {
+        this.typeNames.set(name, ti);
+        if (def.kind === "func") this.funcTypeDefs.set(name, def);
+      }
     }
   }
 
@@ -1775,6 +1837,21 @@ class WatModuleParser {
   private resolveGlobalName(s: SExpr | undefined, instr: string): string {
     if (!s) this.err(`${instr}: missing global reference`);
     return atomText(s!) ?? this.err(`${instr}: expected global name`, s!.pos);
+  }
+
+  /** If `args[0]` is a `$name` atom that names a known table, consume it as
+   *  the table reference; otherwise default to the first defined table.
+   *  Returns the table name and the unconsumed remaining args. */
+  private _takeOptionalTableRef(args: SExpr[]): { table: string; rest: SExpr[] } {
+    if (args.length > 0 && args[0].kind === "atom") {
+      const raw = (args[0] as Atom).token.raw;
+      if (raw.startsWith("$") && this.tableNames.has(raw)) {
+        return { table: raw, rest: args.slice(1) };
+      }
+    }
+    // No explicit table ref — default to the first table by name.
+    const defaultTable = this.tableNames.keys().next().value ?? "$table0";
+    return { table: defaultTable, rest: args };
   }
 
   private resolveLabel(ref: string, ctx: FuncContext, pos: TextPos): string {

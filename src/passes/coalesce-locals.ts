@@ -3,7 +3,8 @@
  *
  * CoalesceLocals pass — reduces the number of distinct local variable slots.
  *
- * **Phase 4 implementation: dead-write elimination + live-range coalescing.**
+ * **Phase 4 implementation: dead-write elimination + linear-scan with live
+ * holes.**
  *
  * Two transformations are applied per function:
  *
@@ -12,19 +13,24 @@
  *    Replace `local.set(i, v)` with `drop(v)` so that any side effects in `v`
  *    are still executed while the dead store is removed.
  *
- * 2. **Slot coalescing**: two locals whose live ranges do not overlap can share
- *    the same slot. This pass uses a simple linear-scan approximation:
- *    - A local's live range is approximated by its first write and last read in
- *      a pre-order traversal of the function body.
- *    - Locals are sorted by first write; each is assigned the lowest available
- *      slot not currently occupied by an overlapping local.
- *    - All `local.get`, `local.set`, and `local.tee` references, plus the
- *      `WasmFunction.locals` array, are updated accordingly.
+ * 2. **Slot coalescing via multi-segment live ranges**: a local's lifetime is
+ *    split into multiple `[defOrd, lastUseOrd]` segments — each `local.set`
+ *    starts a new segment that ends at the last `local.get` / `local.tee` of
+ *    the same local before the next set. This is more precise than the older
+ *    `[firstDef, lastUse]` single-interval approach, because a local that is
+ *    repeatedly written and read can free its slot in the gaps between value
+ *    lifetimes. Two locals interfere iff any of their segments overlap.
+ *    Greedy slot assignment then maps each non-param local to the lowest
+ *    available slot whose existing segments don't conflict.
  *
- * **Limitations**: the linear-scan approximation is conservative — loops may
- * cause live ranges to appear longer than they truly are, inhibiting some
- * coalescing opportunities that a full dataflow analysis would find. Full
- * liveness analysis is deferred to a later phase.
+ * **Residual limitation**: ordinals are pre-order — for code inside loops,
+ * the analyzer treats one iteration as the unit. A value defined on one
+ * iteration and read on the next would (theoretically) need its segment to
+ * span the back-edge. In practice this is rare: explicit back-edge-carried
+ * values are unusual in wasm because most loop state is in locals that are
+ * also written in the loop body (creating segment breaks anyway). Full
+ * CFG-based dataflow with fixed-point iteration would close this gap
+ * completely — that's tracked as a future refinement.
  *
  * Reference: `upstream/src/passes/CoalesceLocals.cpp`
  *
@@ -97,63 +103,82 @@ function _coalesceFunction(fn: WasmFunction): void {
     });
   }
 
-  // --- Step 3: compute linear-scan live ranges ---
-  // firstDef[i] = ordinal of first write; lastUse[i] = ordinal of last read/tee
-  const firstDef = new Array<number>(numLocals).fill(Infinity);
-  const lastUse = new Array<number>(numLocals).fill(-1);
+  // --- Step 3: build per-local segments (def-to-last-use, split at each def) ---
+  // Each segment represents a single "value lifetime": from the local.set/tee
+  // that produced it, to the last local.get/tee that read it before the next
+  // write. Multiple segments per local enable coalescing during gaps between
+  // value lifetimes.
+  const segments: Segment[][] = Array.from({ length: numLocals }, () => []);
+  // Params have an implicit pre-existing segment starting at ordinal -1 (i.e.
+  // "before the function body"). If a param is never read, the segment ends
+  // at -1 and is effectively zero-width — won't interfere with anything.
+  for (let i = 0; i < fn.params.length; i++) {
+    segments[i].push({ defOrd: -1, lastUseOrd: -1 });
+  }
   let ordinal = 0;
-
   walkExpression(fn.body, (e) => {
     const ord = ordinal++;
     if (e.kind === ExpressionKind.LocalSet || e.kind === ExpressionKind.LocalTee) {
       if (e.index < numLocals) {
-        if (ord < firstDef[e.index]) firstDef[e.index] = ord;
+        // Close any current segment; open a new one. (Param segments are
+        // already in `segments[i]` — a subsequent param write closes them
+        // naturally.)
+        segments[e.index].push({ defOrd: ord, lastUseOrd: ord });
       }
     }
     if (e.kind === ExpressionKind.LocalGet || e.kind === ExpressionKind.LocalTee) {
       if (e.index < numLocals) {
-        if (ord > lastUse[e.index]) lastUse[e.index] = ord;
+        const segs = segments[e.index];
+        if (segs.length === 0) {
+          // Read of an as-yet-undefined local (e.g. a non-param local that
+          // wasm spec zero-initializes). Synthesize a segment from ord 0.
+          segs.push({ defOrd: 0, lastUseOrd: ord });
+        } else {
+          segs[segs.length - 1].lastUseOrd = ord;
+        }
       }
     }
   });
 
   // --- Step 4: greedy slot assignment for non-params ---
+  // Try to assign each non-param local to the lowest existing slot whose
+  // currently-committed segments don't overlap with the local's segments.
+  // Fall back to a fresh slot.
   const mapping = new Array<number>(numLocals);
   for (let i = 0; i < fn.params.length; i++) mapping[i] = i; // params are fixed
 
-  // Work list of non-param locals sorted by firstDef
-  const nonParams: number[] = [];
-  for (let i = fn.params.length; i < numLocals; i++) {
-    if (firstDef[i] !== Infinity || lastUse[i] !== -1) nonParams.push(i);
-    else nonParams.push(i); // unreferenced locals still need a slot
+  // Slot → committed segment list (segments currently assigned to that slot).
+  const slotSegments = new Map<number, Segment[]>();
+  for (let i = 0; i < fn.params.length; i++) {
+    slotSegments.set(i, segments[i].slice());
   }
-  nonParams.sort((a, b) => firstDef[a] - firstDef[b]);
 
-  // Active intervals: [firstDef, lastUse] for each assigned slot
-  const slotLastUse = new Map<number, number>(); // slot → lastUse ordinal
+  // Process non-params in declaration order so the output is deterministic.
   let nextNewSlot = fn.params.length;
+  for (let local = fn.params.length; local < numLocals; local++) {
+    const mySegs = segments[local];
 
-  for (const local of nonParams) {
-    const fd = firstDef[local];
-    const lu = lastUse[local];
-
-    // Find a free slot whose previous occupant's range has ended
     let assigned = -1;
-    for (const [slot, slu] of slotLastUse) {
-      if (slu < fd) {
-        // This slot's last occupant expired before our firstDef
+    // Try existing slots first (slots 0..nextNewSlot-1) in order.
+    for (let slot = 0; slot < nextNewSlot; slot++) {
+      // Param slots are reserved for their original params — non-param
+      // locals never get coalesced into a param slot (would corrupt
+      // argument passing).
+      if (slot < fn.params.length) continue;
+      const existing = slotSegments.get(slot);
+      if (existing && !_anySegmentsOverlap(existing, mySegs)) {
         assigned = slot;
-        slotLastUse.delete(slot);
         break;
       }
     }
-
     if (assigned === -1) {
       assigned = nextNewSlot++;
     }
 
     mapping[local] = assigned;
-    slotLastUse.set(assigned, lu);
+    const list = slotSegments.get(assigned) ?? [];
+    list.push(...mySegs);
+    slotSegments.set(assigned, list);
   }
 
   // --- Step 5: apply renaming if any slot changed ---
@@ -173,6 +198,33 @@ function _coalesceFunction(fn: WasmFunction): void {
     if (!newLocals[i]) newLocals[i] = fn.locals[fn.params.length] ?? fn.locals[0];
   }
   fn.locals = newLocals;
+}
+
+// ---------------------------------------------------------------------------
+// Live-segment interference
+// ---------------------------------------------------------------------------
+
+/** A single value-lifetime: from the `local.set`/`local.tee` that produced
+ *  the value (`defOrd`) through the last `local.get`/`local.tee` that read
+ *  it (`lastUseOrd`) before the next write. Closed interval — two segments
+ *  with `seg1.lastUseOrd === seg2.defOrd` are treated as overlapping because
+ *  both values are live at that ordinal. */
+interface Segment {
+  defOrd: number;
+  lastUseOrd: number;
+}
+
+function _segmentsOverlap(a: Segment, b: Segment): boolean {
+  return Math.max(a.defOrd, b.defOrd) <= Math.min(a.lastUseOrd, b.lastUseOrd);
+}
+
+function _anySegmentsOverlap(existing: Segment[], candidate: Segment[]): boolean {
+  for (const a of existing) {
+    for (const b of candidate) {
+      if (_segmentsOverlap(a, b)) return true;
+    }
+  }
+  return false;
 }
 
 // ---------------------------------------------------------------------------
