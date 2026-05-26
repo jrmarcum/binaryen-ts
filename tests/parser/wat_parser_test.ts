@@ -299,6 +299,66 @@ Deno.test("parseWat — br_table with a single target (degenerate but valid)", (
 });
 
 // ---------------------------------------------------------------------------
+// Phase 8.1a — old EH `try` with inline body (no `(do ...)` wrapper)
+// ---------------------------------------------------------------------------
+
+Deno.test("parseWat — try with inline body and catch clause", () => {
+  const mod = parseWat(`(module
+    (tag $e (param i32))
+    (func $f (result i32)
+      (try $t (result i32)
+        (i32.const 1)
+        (catch $e (i32.const 99)))))`);
+  const body = mod.functions[0].body as { kind: ExpressionKind; catchTags?: string[] };
+  assertEquals(body.kind, ExpressionKind.Try);
+  assertEquals(body.catchTags, ["$e"]);
+});
+
+Deno.test("parseWat — try with inline multi-instruction body wraps into a block", () => {
+  const mod = parseWat(`(module
+    (tag $e)
+    (func $f
+      (try $t
+        (nop)
+        (nop)
+        (catch $e))))`);
+  const t = mod.functions[0].body as {
+    kind: ExpressionKind;
+    body: { kind: ExpressionKind; children?: unknown[] };
+  };
+  assertEquals(t.kind, ExpressionKind.Try);
+  // Two body items → wrapped in an anonymous block
+  assertEquals(t.body.kind, ExpressionKind.Block);
+  assertEquals((t.body.children ?? []).length, 2);
+});
+
+Deno.test("parseWat — try inline body still accepts catch_all and delegate clauses", () => {
+  const mod = parseWat(`(module
+    (tag $e)
+    (func $f
+      (try $t
+        (nop)
+        (catch $e)
+        (catch_all (nop)))))`);
+  const t = mod.functions[0].body as { kind: ExpressionKind; catchTags: string[] };
+  assertEquals(t.kind, ExpressionKind.Try);
+  // catch_all is recorded with the special placeholder tag "$__catch_all"
+  assertEquals(t.catchTags, ["$e", "$__catch_all"]);
+});
+
+Deno.test("parseWat — (do ...) wrapped body still works (regression)", () => {
+  const mod = parseWat(`(module
+    (tag $e)
+    (func $f
+      (try $t
+        (do (nop))
+        (catch $e))))`);
+  const t = mod.functions[0].body as { kind: ExpressionKind; catchTags: string[] };
+  assertEquals(t.kind, ExpressionKind.Try);
+  assertEquals(t.catchTags, ["$e"]);
+});
+
+// ---------------------------------------------------------------------------
 // Helper
 // ---------------------------------------------------------------------------
 

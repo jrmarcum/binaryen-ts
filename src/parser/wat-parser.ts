@@ -1113,14 +1113,19 @@ class WatModuleParser {
       idx++;
     }
     const innerCtx = this.pushLabel(label, ctx);
-    // Body: (do ...) block or raw instructions
+    // Body: (do ...) block or inline instructions before any catch/catch_all/delegate clause
     let bodyExprs: Expression[] = [];
     if (idx < children.length && isListWith(children[idx], "do")) {
       bodyExprs = listChildren(children[idx] as SList).map((e) => this.parseExpr(e, innerCtx));
       idx++;
     } else {
-      while (idx < children.length && children[idx].kind !== "list") {
-        bodyExprs.push(this.parseExpr(children[idx], innerCtx));
+      while (idx < children.length) {
+        const child = children[idx];
+        if (child.kind === "list") {
+          const h = listHead(child as SList);
+          if (h === "catch" || h === "catch_all" || h === "delegate") break;
+        }
+        bodyExprs.push(this.parseExpr(child, innerCtx));
         idx++;
       }
     }

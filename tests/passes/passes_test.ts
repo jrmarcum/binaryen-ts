@@ -23,6 +23,9 @@ import {
   makeLocalSet,
   makeNop,
   makeReturn,
+  makeThrow,
+  makeTry,
+  makeTryTable,
   makeUnary,
   makeUnreachable,
   UnaryOp,
@@ -716,6 +719,161 @@ Deno.test("PassRunner: DCE + Vacuum chain removes unreachable code", () => {
   const body = mod.functions[0].body;
   // After DCE, only unreachable remains in block; after Vacuum, block collapses
   assertEquals(body.kind, ExpressionKind.Unreachable);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8.1b — DCE recurses into Try / TryTable
+// ---------------------------------------------------------------------------
+
+Deno.test("DCE: recurses into TryTable body — dead tail after throw is trimmed", () => {
+  const mod = emptyModule();
+  // try_table body = (block [throw $e, i32.const 99 /* dead */])
+  const innerBlock = makeBlock([
+    makeThrow("$e", []),
+    makeI32Const(99),
+  ]);
+  const tt = makeTryTable(null, innerBlock, [], None);
+  mod.functions.push(makeTestFn("f", makeBlock([tt])));
+
+  new PassRunner(mod).add("DCE").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  const ttOut = outer.children[0] as { body: BlockExpr };
+  assertEquals(ttOut.body.kind, ExpressionKind.Block);
+  // Dead i32.const should have been dropped — body now ends at throw
+  assertEquals(ttOut.body.children.length, 1);
+  assertEquals(ttOut.body.children[0].kind, ExpressionKind.Throw);
+});
+
+Deno.test("DCE: recurses into Try body — dead tail after throw is trimmed", () => {
+  const mod = emptyModule();
+  const innerBlock = makeBlock([
+    makeThrow("$e", []),
+    makeI32Const(42), // dead
+  ]);
+  const t = makeTry(null, innerBlock, [], [], null, None);
+  mod.functions.push(makeTestFn("f", makeBlock([t])));
+
+  new PassRunner(mod).add("DCE").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  const tOut = outer.children[0] as { body: BlockExpr };
+  assertEquals(tOut.body.children.length, 1);
+  assertEquals(tOut.body.children[0].kind, ExpressionKind.Throw);
+});
+
+Deno.test("DCE: recurses into Try catchBodies — dead tail after throw is trimmed", () => {
+  const mod = emptyModule();
+  const catchBody = makeBlock([
+    makeThrow("$e", []),
+    makeNop(), // dead
+    makeI32Const(7), // dead
+  ]);
+  const t = makeTry(null, makeNop(), ["$e"], [catchBody], null, None);
+  mod.functions.push(makeTestFn("f", makeBlock([t])));
+
+  new PassRunner(mod).add("DCE").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  const tOut = outer.children[0] as { catchBodies: BlockExpr[] };
+  assertEquals(tOut.catchBodies.length, 1);
+  assertEquals(tOut.catchBodies[0].children.length, 1);
+  assertEquals(tOut.catchBodies[0].children[0].kind, ExpressionKind.Throw);
+});
+
+Deno.test("DCE: Try expression itself is preserved (recursion does not strip the node)", () => {
+  const mod = emptyModule();
+  const t = makeTry(null, makeNop(), [], [], null, None);
+  mod.functions.push(makeTestFn("f", makeBlock([t, makeI32Const(1)])));
+
+  new PassRunner(mod).add("DCE").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  // The Try itself has type=none (not unreachable), so the i32.const survives.
+  assertEquals(outer.children.length, 2);
+  assertEquals(outer.children[0].kind, ExpressionKind.Try);
+});
+
+// ---------------------------------------------------------------------------
+// Phase 8.1c — StripEH pass
+// ---------------------------------------------------------------------------
+
+Deno.test("StripEH: registered in pass registry", () => {
+  assertEquals(listPasses().includes("StripEH"), true);
+});
+
+Deno.test("StripEH: throw becomes unreachable, operands wrapped in drop", () => {
+  const mod = emptyModule();
+  // throw $e (i32.const 42)
+  mod.functions.push(makeTestFn("f", makeBlock([makeThrow("$e", [makeI32Const(42)])])));
+  mod.tags.push({ name: "$e", params: [ValType.I32] });
+  mod.hasExceptionHandling = true;
+
+  new PassRunner(mod).add("StripEH").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  // The throw was replaced by a block [drop(i32.const 42), unreachable].
+  const replacement = outer.children[0] as BlockExpr;
+  assertEquals(replacement.kind, ExpressionKind.Block);
+  assertEquals(replacement.children.length, 2);
+  assertEquals(replacement.children[0].kind, ExpressionKind.Drop);
+  assertEquals(replacement.children[1].kind, ExpressionKind.Unreachable);
+});
+
+Deno.test("StripEH: throw with no operands becomes bare unreachable", () => {
+  const mod = emptyModule();
+  mod.functions.push(makeTestFn("f", makeBlock([makeThrow("$e", [])])));
+  mod.tags.push({ name: "$e", params: [] });
+  mod.hasExceptionHandling = true;
+
+  new PassRunner(mod).add("StripEH").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  assertEquals(outer.children[0].kind, ExpressionKind.Unreachable);
+});
+
+Deno.test("StripEH: try is replaced by its body; catch is discarded", () => {
+  const mod = emptyModule();
+  const tryBody = makeI32Const(1);
+  const catchBody = makeI32Const(99);
+  const t = makeTry(null, tryBody, ["$e"], [catchBody], null, ValType.I32);
+  mod.functions.push(makeTestFn("f", makeBlock([t])));
+  mod.tags.push({ name: "$e", params: [] });
+  mod.hasExceptionHandling = true;
+
+  new PassRunner(mod).add("StripEH").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  // The try was substituted by its body (the i32.const 1).
+  assertEquals(outer.children[0].kind, ExpressionKind.Const);
+  assertEquals((outer.children[0] as { value: { i32: number } }).value.i32, 1);
+});
+
+Deno.test("StripEH: try_table is replaced by its body", () => {
+  const mod = emptyModule();
+  const tt = makeTryTable(null, makeI32Const(7), [], ValType.I32);
+  mod.functions.push(makeTestFn("f", makeBlock([tt])));
+  mod.tags.push({ name: "$e", params: [] });
+  mod.hasExceptionHandling = true;
+
+  new PassRunner(mod).add("StripEH").run();
+
+  const outer = mod.functions[0].body as BlockExpr;
+  assertEquals(outer.children[0].kind, ExpressionKind.Const);
+  assertEquals((outer.children[0] as { value: { i32: number } }).value.i32, 7);
+});
+
+Deno.test("StripEH: module.tags cleared and hasExceptionHandling reset", () => {
+  const mod = emptyModule();
+  mod.functions.push(makeTestFn("f", makeBlock([makeNop()])));
+  mod.tags.push({ name: "$e", params: [ValType.I32] });
+  mod.tags.push({ name: "$f", params: [] });
+  mod.hasExceptionHandling = true;
+
+  new PassRunner(mod).add("StripEH").run();
+
+  assertEquals(mod.tags.length, 0);
+  assertEquals(mod.hasExceptionHandling, false);
 });
 
 // ---------------------------------------------------------------------------
