@@ -167,6 +167,7 @@ interface DecoderCtx {
   funcTypes: FuncType[];
   heapTypeDefs: TypeDef[];
   importedFuncCount: number;
+  importedFuncTypeIndices: number[];
   funcTypeIndices: number[];
   globalInfos: GlobalInfo[];
   tableNames: string[];
@@ -439,6 +440,23 @@ function resolveLabel(frames: ControlFrame[], depth: number): string {
   return frames[idx].label;
 }
 
+/**
+ * Returns the number of values a branch to `depth` consumes from the operand
+ * stack. For `loop`, MVP semantics: branching jumps to the loop entry and
+ * consumes no inputs (multi-value loops with inputs are post-MVP). For all
+ * other frames (`block` / `if` / `try` / `try_table` / `func`), consumes the
+ * target's result-type arity.
+ *
+ * @internal
+ */
+function _branchValueArity(frames: ControlFrame[], depth: number): number {
+  const idx = frames.length - 1 - depth;
+  if (idx < 0) return 0;
+  const target = frames[idx];
+  if (target.kind === "loop") return 0;
+  return target.resultTypes.length;
+}
+
 function sealFrame(frame: ControlFrame): Expression {
   if (frame.exprs.length === 0) return makeNop();
   if (frame.exprs.length === 1) return frame.exprs[0];
@@ -455,6 +473,7 @@ class WasmParser {
   private funcTypes: FuncType[] = [];
   private heapTypeDefs: TypeDef[] = [];
   private importedFuncCount = 0;
+  private importedFuncTypeIndices: number[] = [];
   private funcTypeIndices: number[] = [];
   private globalInfos: GlobalInfo[] = [];
   private tableNames: string[] = [];
@@ -630,6 +649,7 @@ class WasmParser {
           const ft = this.funcTypes[typeIdx];
           const name = `$import${this.importedFuncCount}`;
           this.builder.addFunctionImport(name, module, base, ft.params, ft.results);
+          this.importedFuncTypeIndices.push(typeIdx);
           this.importedFuncCount++;
           break;
         }
@@ -774,6 +794,7 @@ class WasmParser {
       funcTypes: this.funcTypes,
       heapTypeDefs: this.heapTypeDefs,
       importedFuncCount: this.importedFuncCount,
+      importedFuncTypeIndices: this.importedFuncTypeIndices,
       funcTypeIndices: this.funcTypeIndices,
       globalInfos: this.globalInfos,
       tableNames: this.tableNames,
@@ -1073,11 +1094,19 @@ class WasmParser {
             const body = sealFrame(frame);
             push(makeTryTable(frame.label, body, frame.tryCatches ?? [], resultType));
           } else {
-            const body = sealFrame(frame);
-            if (frame.exprs.length > 0 || frame.label) {
-              push(makeBlock(frame.kind === "block" ? [body] : frame.exprs, frame.label));
+            // block (only remaining kind here — func/if/else/loop/try*
+            // were handled above).
+            //
+            // `makeBlock` infers `.type` from the last child, which is wrong
+            // when the body exits via `br` (last child is the Break, whose
+            // own type is always `None`). We trust the frame's declared
+            // result type instead — it came from the `0x02 RESULTTYPE` byte.
+            if (frame.exprs.length === 0 && !frame.label) {
+              push(makeNop());
             } else {
-              push(body);
+              const blk = makeBlock(frame.exprs, frame.label);
+              blk.type = resultType;
+              push(blk);
             }
           }
           break;
@@ -1085,22 +1114,37 @@ class WasmParser {
 
         case 0x0c: { // br
           const depth = r.readU32();
-          push(makeBreak(resolveLabel(frames, depth)));
+          // A br consumes the target block's result values from the operand
+          // stack. For a `loop`, branching jumps to the loop entry (and in
+          // MVP loops have no inputs, so nothing is consumed). For
+          // `block`/`if`/`try`/etc., it consumes the target's result types.
+          // Our BreakExpr.value is single-valued; multi-value branches are
+          // not yet representable in IR and fall through as value-less
+          // (preserves existing behavior on those, fixes the common case).
+          const value = _branchValueArity(frames, depth) === 1 ? pop() : null;
+          push(makeBreak(resolveLabel(frames, depth), null, value));
           break;
         }
         case 0x0d: { // br_if
           const depth = r.readU32();
+          // br_if stack order: ..., value, condition. Pop condition first.
           const cond = pop();
-          push(makeBreak(resolveLabel(frames, depth), cond));
+          const value = _branchValueArity(frames, depth) === 1 ? pop() : null;
+          push(makeBreak(resolveLabel(frames, depth), cond, value));
           break;
         }
         case 0x0e: { // br_table
           const n = r.readU32();
-          const targets: string[] = [];
-          for (let i = 0; i <= n; i++) targets.push(resolveLabel(frames, r.readU32()));
-          const defaultTarget = targets.pop()!;
+          const depths: number[] = [];
+          for (let i = 0; i <= n; i++) depths.push(r.readU32());
+          const defaultDepth = depths.pop()!;
+          // br_table stack order: ..., value, index. Pop index first, then
+          // value if any target has results (all targets must share arity).
           const cond = pop();
-          push(makeSwitch(targets, defaultTarget, cond));
+          const value = _branchValueArity(frames, defaultDepth) === 1 ? pop() : null;
+          const targets = depths.map((d) => resolveLabel(frames, d));
+          const defaultTarget = resolveLabel(frames, defaultDepth);
+          push(makeSwitch(targets, defaultTarget, cond, value));
           break;
         }
         case 0x0f: { // return
@@ -1111,7 +1155,7 @@ class WasmParser {
         case 0x10: { // call
           const fidx = r.readU32();
           const typeIdx = fidx < ctx.importedFuncCount
-            ? undefined
+            ? ctx.importedFuncTypeIndices[fidx]
             : ctx.funcTypeIndices[fidx - ctx.importedFuncCount];
           const cft = typeIdx !== undefined ? ctx.funcTypes[typeIdx] : { params: [], results: [] };
           const operands = popN(cft.params.length);
@@ -1136,7 +1180,7 @@ class WasmParser {
         case 0x12: { // return_call (tail-call proposal)
           const fidx = r.readU32();
           const typeIdx = fidx < ctx.importedFuncCount
-            ? undefined
+            ? ctx.importedFuncTypeIndices[fidx]
             : ctx.funcTypeIndices[fidx - ctx.importedFuncCount];
           const cft = typeIdx !== undefined ? ctx.funcTypes[typeIdx] : { params: [], results: [] };
           const operands = popN(cft.params.length);

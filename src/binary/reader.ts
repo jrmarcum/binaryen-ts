@@ -171,7 +171,7 @@ export class BinaryReader {
       byte = this.readU8();
       result |= (byte & 0x7f) << shift;
       shift += 7;
-      if (shift >= 35) {
+      if (shift > 35) {
         this.error("LEB128 i32 overflow");
         break;
       }
@@ -189,7 +189,7 @@ export class BinaryReader {
       byte = BigInt(this.readU8());
       result |= (byte & 0x7fn) << shift;
       shift += 7n;
-      if (shift >= 70n) {
+      if (shift > 70n) {
         this.error("LEB128 i64 overflow");
         break;
       }
