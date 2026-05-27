@@ -168,6 +168,7 @@ export async function main(args: string[] = process.argv.slice(2)): Promise<void
     console.error("  -S                   Emit WAT text (hybrid mode only)");
     console.error("  --<pass-name>        Run a specific pass by name");
     console.error("  --pass-arg key=val   Per-pass argument (passname@key=val)");
+    console.error("  --partial-inlining-ifs N  Enable split inlining (Pattern A/B); -pii N");
     console.error("  --print-all-passes   List all registered passes and exit");
     console.error("  --hybrid             Use upstream wasm-opt subprocess");
     process.exit(1);
@@ -261,6 +262,7 @@ function buildSubprocessFlags(opts: WasmOptOptions): string[] {
   if (opts.shrinkLevel === 2) flags.push("-Oz");
   if (opts.debugInfo) flags.push("-g");
   if (opts.closedWorld) flags.push("--closed-world");
+  if (opts.partialInliningIfs > 0) flags.push("-pii", String(opts.partialInliningIfs));
   for (const p of opts.passes) flags.push(`--${p}`);
   if (opts.emitText) flags.push("-S");
   return flags;
@@ -309,9 +311,13 @@ function _concatU8(chunks: Uint8Array[]): Uint8Array {
 // Arg parser
 // ---------------------------------------------------------------------------
 
-interface ParsedArgs {
+/** Result of parsing `wasm-opt` CLI arguments. Exposed for embedders and tests. */
+export interface ParsedArgs {
+  /** Positional input file path, or `null` if missing. */
   input: string | null;
+  /** Parsed option overrides, layered on top of {@link wasmOpt} defaults. */
   options: Partial<WasmOptOptions>;
+  /** Whether `--print-all-passes` was supplied. */
   printAllPasses: boolean;
 }
 
@@ -328,11 +334,16 @@ const RECOGNIZED_LONG_FLAGS = new Set([
   "--no-validate",
   "--closed-world",
   "--pass-arg",
+  "--partial-inlining-ifs",
   "--print-all-passes",
   "--help",
 ]);
 
-function parseArgs(args: string[]): ParsedArgs {
+/**
+ * Parses `wasm-opt` CLI argv into a {@link ParsedArgs} structure. Exposed so
+ * embedders (and tests) can drive the same parser used by the CLI entry point.
+ */
+export function parseArgs(args: string[]): ParsedArgs {
   const result: ParsedArgs = {
     input: null,
     options: {},
@@ -383,6 +394,9 @@ function parseArgs(args: string[]): ParsedArgs {
           passArgs[kv] = "";
         }
       }
+    } else if (a === "--partial-inlining-ifs" || a === "-pii") {
+      const n = Number.parseInt(args[++i] ?? "", 10);
+      if (Number.isFinite(n) && n >= 0) result.options.partialInliningIfs = n;
     } else if (a === "--print-all-passes") {
       result.printAllPasses = true;
     } else if (a.startsWith("--") && !RECOGNIZED_LONG_FLAGS.has(a)) {

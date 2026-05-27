@@ -186,7 +186,8 @@ import { ModuleBuilder } from "@jrmarcum/binaryen-ts/ir";
 
 // ["CoalesceLocals", "DCE", "Inlining", "InliningOptimizing", "LocalCSE",
 //  "OptimizeInstructions", "PickLoadSigns", "RemoveUnusedBrs",
-//  "RemoveUnusedModuleElements", "RemoveUnusedNames", "SimplifyLocals", "Vacuum"]
+//  "RemoveUnusedModuleElements", "RemoveUnusedNames", "SimplifyLocals",
+//  "StripEH", "Vacuum"]
 console.log(listPasses());
 
 const runner = new PassRunner(module, { optimizeLevel: 2, shrinkLevel: 0 });
@@ -226,6 +227,9 @@ wasm-opt --print-all-passes
 # Per-pass argument
 wasm-opt input.wasm -o out.wasm --pass-arg inlining@maxSize=20
 
+# Enable split / partial inlining (Pattern A/B); also accepts -pii N
+wasm-opt input.wasm -o out.wasm -O3 --partial-inlining-ifs 4
+
 # Use upstream wasm-opt subprocess (hybrid mode, requires wasm-opt on PATH)
 wasm-opt input.wasm -o out.wasm -Oz --hybrid
 ```
@@ -234,14 +238,31 @@ wasm-opt input.wasm -o out.wasm -Oz --hybrid
 
 `binaryen-ts` supports three optimization modes:
 
-| Mode                               | What runs                                                   | Use when                                                     |
-| ---------------------------------- | ----------------------------------------------------------- | ------------------------------------------------------------ |
-| **Native TypeScript** (default)    | Built-in passes in `src/passes/` — no subprocess, no binary | Default; all phases 0–9 complete                             |
-| **Hybrid subprocess** (`--hybrid`) | Upstream `wasm-opt` binary on `PATH`                        | Maximum optimization fidelity; requires installed `wasm-opt` |
-| **Hybrid binaryen.js**             | Upstream `binaryen.js` WASM binary                          | Deferred — not on critical path                              |
+| Mode                                | What runs                                                          | Use when                                                                                |
+| ----------------------------------- | ------------------------------------------------------------------ | --------------------------------------------------------------------------------------- |
+| **Native TypeScript** (default)     | Built-in passes in `src/passes/` — no subprocess, no binary        | Default for `mod.optimize()` and `wasm-opt` CLI                                         |
+| **Hybrid subprocess** (`--hybrid`)  | Upstream `wasm-opt` binary on `PATH`                               | Maximum optimization fidelity; requires installed `wasm-opt`                            |
+| **In-process binaryen.js** (tier 3) | Upstream `binaryen.js` Emscripten build, loaded via dynamic import | No subprocess required; browser-safe when binaryen.js resolves under the target runtime |
 
 The native path is the default as of Phase 6: `parseWasm` → `PassRunner` → `encodeWasm`. Pass
-`hybridMode: true` (or `--hybrid`) to delegate to the upstream subprocess instead.
+`hybridMode: true` (or `--hybrid`) to delegate to the upstream `wasm-opt` subprocess. The in-process
+binaryen.js path (tier 3) is opt-in — instantiate the bridge yourself:
+
+```ts
+import { BinaryenInterop } from "@jrmarcum/binaryen-ts/interop";
+
+// Deno/Bun resolve npm: specifiers natively; Node requires `npm install binaryen` first.
+const interop = await BinaryenInterop.create({ binaryenJsPath: "npm:binaryen" });
+
+// WAT round-trip — `-Oz` shorthand or explicit { optimizeLevel, shrinkLevel, passes }
+const optimizedWat = interop.optimizeWat(watText, "-Oz");
+
+// Binary round-trip
+const optimizedBytes = interop.optimizeBinary(wasmBytes, { optimizeLevel: 2 });
+```
+
+Pass a pre-loaded factory via `{ binaryen: <loaded module> }` to skip the dynamic import — useful
+for tests, browser-loaded binaryen.js, or runtimes where dynamic `import()` is awkward.
 
 ## Migrating from `npm:binaryen`
 
@@ -348,6 +369,7 @@ console.log(add(3, 4)); // 7
 | 7.1   | ✅ Done    | Pre-Phase-8 closure — three loose-end items: `parseCallIndirect` now resolves `(type $sig)` references via a `funcTypeDefs` map; `table.get` / `table.set` ported end-to-end (new IR nodes + factories, WAT parser, binary parser/encoder, walker support — previously stubbed as `nop` in the binary parser); `CoalesceLocals` rewritten to multi-segment liveness (each `local.set` opens a new segment, interference checked per-segment) — catches sequentially-used locals the old single-interval scan missed. 225/225 passing                                                                                                             |
 | 8.1   | ✅ Done    | EH closure — three deferred Phase 8 items shipped: WAT inline-body `try` now accepts inline instructions (not just the `(do ...)` wrapped form); `DCE` is EH-aware (`Try`/`TryTable` cases added; `eliminateDeadBlock` now actually recurses into nested constructs); new `StripEH` pass rewrites `Throw`/`ThrowRef`/`Rethrow`/`Try`/`TryTable` for callers that need to strip the EH proposal entirely. 14 new tests; 239/239 passing                                                                                                                                                                                                           |
 | 0.1   | ✅ Done    | Phase 0 closure — `BinaryenInterop.create()` in-process binaryen.js bridge. Was a stubbed `Promise.reject`. New `optimizeWat` / `optimizeBinary` honor `{ optimizeLevel, shrinkLevel, passes }` or shorthand (`-Oz`, `-O3`, …). Type stubs split into the actual upstream shape (`BinaryenJsLib` factory + `BinaryenWrappedModule` instance). Default specifier `"npm:binaryen"` (Deno/Bun resolve natively; Node needs `npm install binaryen`); a pre-loaded `{ binaryen: <factory> }` escape hatch skips the import for tests / browser. 12 new mock tests (real-binaryen test gated on `BINARYEN_LIVE=1`); 251/251 passing                    |
+| 5.1c  | ✅ Done    | Phase 5.1 CLI flag wiring closure — `--partial-inlining-ifs N` / `-pii N` wired through the `wasm-opt` arg parser and forwarded to the upstream subprocess in `--hybrid` mode; previously settable programmatically only. `parseArgs` + `ParsedArgs` exported from `src/tools/wasm-opt.ts` for embedders. 4 new arg-parser tests; 260/260 passing                                                                                                                                                                                                                                                                                                |
 
 ## Contributing
 

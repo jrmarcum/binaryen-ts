@@ -34,7 +34,7 @@ import { None, ValType } from "../../src/ir/types.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { parseWasm } from "../../src/binary/index.ts";
 import { listPasses, PassRunner } from "../../src/passes/index.ts";
-import { wasmOpt } from "../../src/tools/wasm-opt.ts";
+import { parseArgs, wasmOpt } from "../../src/tools/wasm-opt.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -305,6 +305,38 @@ Deno.test("wasmOpt: passArgs are accepted without error", async () => {
       passArgs: { "inlining@maxSize": "10" },
     }));
   assertInstanceOf(result, Uint8Array);
+});
+
+// ---------------------------------------------------------------------------
+// parseArgs — CLI flag wiring
+// ---------------------------------------------------------------------------
+
+Deno.test("parseArgs: --partial-inlining-ifs N sets PassOptions.partialInliningIfs", () => {
+  const parsed = parseArgs(["--partial-inlining-ifs", "4", "input.wasm"]);
+  assertEquals(parsed.options.partialInliningIfs, 4);
+  assertEquals(parsed.input, "input.wasm");
+});
+
+Deno.test("parseArgs: -pii N alias sets PassOptions.partialInliningIfs", () => {
+  const parsed = parseArgs(["-pii", "8", "in.wasm", "-o", "out.wasm"]);
+  assertEquals(parsed.options.partialInliningIfs, 8);
+  assertEquals(parsed.options.output, "out.wasm");
+});
+
+Deno.test("parseArgs: --partial-inlining-ifs is NOT misread as a pass name", () => {
+  const parsed = parseArgs(["--partial-inlining-ifs", "2", "in.wasm"]);
+  assertEquals(parsed.options.partialInliningIfs, 2);
+  // The flag is recognized, so it must not also appear in the explicit pass list.
+  assertEquals(parsed.options.passes, undefined);
+});
+
+Deno.test("parseArgs: --partial-inlining-ifs missing/invalid arg leaves option unset", () => {
+  // Trailing flag with no value → no crash, option not set.
+  const parsedTrailing = parseArgs(["in.wasm", "--partial-inlining-ifs"]);
+  assertEquals(parsedTrailing.options.partialInliningIfs, undefined);
+  // Negative value rejected.
+  const parsedNeg = parseArgs(["--partial-inlining-ifs", "-1", "in.wasm"]);
+  assertEquals(parsedNeg.options.partialInliningIfs, undefined);
 });
 
 Deno.test("wasmOpt: -O2 with RemoveUnusedNames strips block names", async () => {

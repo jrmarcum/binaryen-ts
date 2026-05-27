@@ -3,36 +3,40 @@
  *
  * CoalesceLocals pass — reduces the number of distinct local variable slots.
  *
- * **Phase 4 implementation: dead-write elimination + linear-scan with live
- * holes.**
+ * **Implementation: CFG-based liveness + greedy graph colouring.**
  *
- * Two transformations are applied per function:
+ * For each function, the pass:
  *
- * 1. **Dead-write elimination**: if a local is written (`local.set`) but never
- *    read (`local.get` / `local.tee`), the write has no observable effect.
- *    Replace `local.set(i, v)` with `drop(v)` so that any side effects in `v`
- *    are still executed while the dead store is removed.
+ * 1. Builds a control-flow graph over the function body (handling `block`,
+ *    `if`, `loop`, `br` / `br_if` / `br_table`, `return`, `unreachable`,
+ *    `throw` / `try` / `try_table`).
+ * 2. Runs backward-flow liveness to compute, per basic block, the set of
+ *    locals live on entry (`start`) and on exit (`end`). This is a standard
+ *    monotonically-growing fixed-point.
+ * 3. Determines which `local.set` / `local.tee` instructions are *effective*
+ *    (their value can be read by a later use) and which `local.get`s end a
+ *    live range — both fall out of the backward scan over each block's
+ *    actions starting from the block's `end`.
+ * 4. Builds an interference graph by walking each block forward: at each
+ *    effective set, all currently live locals (other than the one being
+ *    written) interfere with it. Params interfere with each other
+ *    pairwise; zero-initialised locals that are live at function entry
+ *    interfere with every param.
+ * 5. Greedily colours the interference graph — each non-param local is
+ *    assigned to the lowest slot whose existing tenants do not interfere.
+ * 6. Rewrites the body: renames local indices through the mapping, replaces
+ *    ineffective `local.set` with `drop`, replaces ineffective `local.tee`
+ *    with the bare value. The `fn.locals` array is rebuilt to match the
+ *    new slot count.
  *
- * 2. **Slot coalescing via multi-segment live ranges**: a local's lifetime is
- *    split into multiple `[defOrd, lastUseOrd]` segments — each `local.set`
- *    starts a new segment that ends at the last `local.get` / `local.tee` of
- *    the same local before the next set. This is more precise than the older
- *    `[firstDef, lastUse]` single-interval approach, because a local that is
- *    repeatedly written and read can free its slot in the gaps between value
- *    lifetimes. Two locals interfere iff any of their segments overlap.
- *    Greedy slot assignment then maps each non-param local to the lowest
- *    available slot whose existing segments don't conflict.
+ * Because liveness is computed across CFG edges, values that flow around
+ * loop back-edges are kept live across the back-edge — so two locals whose
+ * values are simultaneously live on different iterations are correctly
+ * treated as interfering. This closes the residual gap from the previous
+ * ordinal-based segment model.
  *
- * **Residual limitation**: ordinals are pre-order — for code inside loops,
- * the analyzer treats one iteration as the unit. A value defined on one
- * iteration and read on the next would (theoretically) need its segment to
- * span the back-edge. In practice this is rare: explicit back-edge-carried
- * values are unusual in wasm because most loop state is in locals that are
- * also written in the loop body (creating segment breaks anyway). Full
- * CFG-based dataflow with fixed-point iteration would close this gap
- * completely — that's tracked as a future refinement.
- *
- * Reference: `upstream/src/passes/CoalesceLocals.cpp`
+ * Reference: `upstream/src/passes/CoalesceLocals.cpp`,
+ * `upstream/src/cfg/liveness-traversal.h`
  *
  * @license MIT
  */
@@ -40,20 +44,21 @@
 import { type Expression, ExpressionKind, makeDrop } from "../ir/expressions.ts";
 import type { WasmFunction, WasmModule } from "../ir/module.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
-import { mapExpression, walkExpression } from "../ir/walk.ts";
+import { mapExpression } from "../ir/walk.ts";
+import { buildCFG, type CFG, computeLiveness, type LivenessAction } from "./cfg.ts";
 
 // ---------------------------------------------------------------------------
 // Pass class
 // ---------------------------------------------------------------------------
 
 /**
- * Eliminates dead local writes and merges non-overlapping live ranges into
- * shared local slots.
+ * Eliminates dead local writes and merges non-interfering locals into shared
+ * slots using a CFG-based liveness analysis.
  */
 export class CoalesceLocalsPass implements Pass {
   readonly name = "CoalesceLocals";
   readonly description =
-    "Eliminates dead local writes and merges non-overlapping locals into shared slots.";
+    "Eliminates dead local writes and merges non-interfering locals into shared slots.";
   readonly requiresNonNullableLocalFixups = false;
 
   run(module: WasmModule, _options: PassOptions): void {
@@ -72,196 +77,227 @@ registerPass(CoalesceLocalsPass);
 function _coalesceFunction(fn: WasmFunction): void {
   const numLocals = fn.locals.length;
   if (numLocals === 0) return;
+  const numParams = fn.params.length;
 
-  // --- Step 1: count reads per local ---
-  const readCounts = new Array<number>(numLocals).fill(0);
-  walkExpression(fn.body, (e) => {
-    if (
-      e.kind === ExpressionKind.LocalGet ||
-      e.kind === ExpressionKind.LocalTee
-    ) {
-      if (e.index < numLocals) readCounts[e.index]++;
+  // 1. CFG + liveness ------------------------------------------------------
+  const cfg = buildCFG(fn.body);
+  computeLiveness(cfg);
+
+  // 2. Per-block effective-set / ends-live-range maps ----------------------
+  // For each LocalSet/LocalTee origin, was its result ever used?
+  // For each LocalGet origin, was it the last use within its block?
+  const effectiveSet = new Set<Expression>();
+  const endsLiveRange = new Set<Expression>();
+  for (const b of cfg.blocks) {
+    _classifyActions(b.actions, b.end, effectiveSet, endsLiveRange);
+  }
+
+  // 3. Interference matrix -------------------------------------------------
+  // Upper-triangular: interferes(low, high) only.
+  const interferes = new _InterferenceMatrix(numLocals);
+
+  // Params interfere with each other so they can never be merged.
+  for (let i = 0; i < numParams; i++) {
+    for (let j = i + 1; j < numParams; j++) interferes.set(i, j);
+  }
+  // Locals live at function entry but not in the param range are reading the
+  // wasm-spec zero-init value before any set. They interfere with all params
+  // because their "value" is conceptually a set at function start.
+  for (const x of cfg.entry.start) {
+    if (x >= numParams) {
+      for (let p = 0; p < numParams; p++) interferes.set(p, x);
     }
-  });
-
-  // --- Step 2: eliminate dead writes (locals never read) ---
-  const deadLocals = new Set<number>();
-  for (let i = fn.params.length; i < numLocals; i++) {
-    if (readCounts[i] === 0) deadLocals.add(i);
-  }
-  if (deadLocals.size > 0) {
-    fn.body = _eliminateDeadWrites(fn.body, deadLocals);
-    // Recount after elimination (tee → set that was removed could change counts)
-    readCounts.fill(0);
-    walkExpression(fn.body, (e) => {
-      if (
-        e.kind === ExpressionKind.LocalGet ||
-        e.kind === ExpressionKind.LocalTee
-      ) {
-        if (e.index < numLocals) readCounts[e.index]++;
-      }
-    });
   }
 
-  // --- Step 3: build per-local segments (def-to-last-use, split at each def) ---
-  // Each segment represents a single "value lifetime": from the local.set/tee
-  // that produced it, to the last local.get/tee that read it before the next
-  // write. Multiple segments per local enable coalescing during gaps between
-  // value lifetimes.
-  const segments: Segment[][] = Array.from({ length: numLocals }, () => []);
-  // Params have an implicit pre-existing segment starting at ordinal -1 (i.e.
-  // "before the function body"). If a param is never read, the segment ends
-  // at -1 and is effectively zero-width — won't interfere with anything.
-  for (let i = 0; i < fn.params.length; i++) {
-    segments[i].push({ defOrd: -1, lastUseOrd: -1 });
+  // Per-block forward scan to record interference at each effective set.
+  for (const b of cfg.blocks) {
+    _markBlockInterference(b, effectiveSet, endsLiveRange, interferes);
   }
-  let ordinal = 0;
-  walkExpression(fn.body, (e) => {
-    const ord = ordinal++;
-    if (e.kind === ExpressionKind.LocalSet || e.kind === ExpressionKind.LocalTee) {
-      if (e.index < numLocals) {
-        // Close any current segment; open a new one. (Param segments are
-        // already in `segments[i]` — a subsequent param write closes them
-        // naturally.)
-        segments[e.index].push({ defOrd: ord, lastUseOrd: ord });
-      }
-    }
-    if (e.kind === ExpressionKind.LocalGet || e.kind === ExpressionKind.LocalTee) {
-      if (e.index < numLocals) {
-        const segs = segments[e.index];
-        if (segs.length === 0) {
-          // Read of an as-yet-undefined local (e.g. a non-param local that
-          // wasm spec zero-initializes). Synthesize a segment from ord 0.
-          segs.push({ defOrd: 0, lastUseOrd: ord });
-        } else {
-          segs[segs.length - 1].lastUseOrd = ord;
+
+  // 4. Greedy slot assignment ---------------------------------------------
+  const mapping = new Array<number>(numLocals);
+  for (let i = 0; i < numParams; i++) mapping[i] = i;
+
+  // Slot → list of locals currently assigned to it.
+  const slotMembers = new Map<number, number[]>();
+  for (let i = 0; i < numParams; i++) slotMembers.set(i, [i]);
+
+  let nextSlot = numParams;
+  for (let local = numParams; local < numLocals; local++) {
+    const myType = fn.locals[local].type;
+    let assigned = -1;
+    // Try existing non-param slots in order.
+    for (let slot = numParams; slot < nextSlot; slot++) {
+      const members = slotMembers.get(slot)!;
+      // Type must match (slots are typed).
+      if (fn.locals[members[0]].type !== myType) continue;
+      let ok = true;
+      for (const m of members) {
+        if (interferes.get(m, local)) {
+          ok = false;
+          break;
         }
       }
-    }
-  });
-
-  // --- Step 4: greedy slot assignment for non-params ---
-  // Try to assign each non-param local to the lowest existing slot whose
-  // currently-committed segments don't overlap with the local's segments.
-  // Fall back to a fresh slot.
-  const mapping = new Array<number>(numLocals);
-  for (let i = 0; i < fn.params.length; i++) mapping[i] = i; // params are fixed
-
-  // Slot → committed segment list (segments currently assigned to that slot).
-  const slotSegments = new Map<number, Segment[]>();
-  for (let i = 0; i < fn.params.length; i++) {
-    slotSegments.set(i, segments[i].slice());
-  }
-
-  // Process non-params in declaration order so the output is deterministic.
-  let nextNewSlot = fn.params.length;
-  for (let local = fn.params.length; local < numLocals; local++) {
-    const mySegs = segments[local];
-
-    let assigned = -1;
-    // Try existing slots first (slots 0..nextNewSlot-1) in order.
-    for (let slot = 0; slot < nextNewSlot; slot++) {
-      // Param slots are reserved for their original params — non-param
-      // locals never get coalesced into a param slot (would corrupt
-      // argument passing).
-      if (slot < fn.params.length) continue;
-      const existing = slotSegments.get(slot);
-      if (existing && !_anySegmentsOverlap(existing, mySegs)) {
+      if (ok) {
         assigned = slot;
         break;
       }
     }
     if (assigned === -1) {
-      assigned = nextNewSlot++;
+      assigned = nextSlot++;
+      slotMembers.set(assigned, []);
     }
-
     mapping[local] = assigned;
-    const list = slotSegments.get(assigned) ?? [];
-    list.push(...mySegs);
-    slotSegments.set(assigned, list);
+    slotMembers.get(assigned)!.push(local);
   }
 
-  // --- Step 5: apply renaming if any slot changed ---
-  const changed = mapping.some((slot, i) => slot !== i);
-  if (!changed) return;
+  // 5. Rewrite the body ----------------------------------------------------
+  const mappingChanged = mapping.some((v, i) => v !== i);
+  const hasIneffective = _hasAnyIneffective(cfg, effectiveSet);
 
-  fn.body = _renameLocals(fn.body, mapping);
+  if (mappingChanged || hasIneffective) {
+    fn.body = _rewriteBody(fn.body, mapping, effectiveSet);
+  }
 
-  // Rebuild locals array using the new slot assignments
-  const newLocals = new Array(nextNewSlot);
-  for (let i = 0; i < fn.params.length; i++) newLocals[i] = fn.locals[i];
-  for (let i = fn.params.length; i < numLocals; i++) {
-    newLocals[mapping[i]] = fn.locals[i];
+  // 6. Rebuild fn.locals ---------------------------------------------------
+  if (mappingChanged) {
+    const newLocals = new Array(nextSlot);
+    for (let i = 0; i < numParams; i++) newLocals[i] = fn.locals[i];
+    for (let i = numParams; i < numLocals; i++) {
+      newLocals[mapping[i]] = fn.locals[i];
+    }
+    // Defensive: fill any gaps (shouldn't happen — every slot from numParams
+    // to nextSlot-1 was allocated by the loop above).
+    for (let i = numParams; i < nextSlot; i++) {
+      if (!newLocals[i]) newLocals[i] = fn.locals[numParams] ?? fn.locals[0];
+    }
+    fn.locals = newLocals;
   }
-  // Fill any holes (slots introduced for new ranges with no original local)
-  for (let i = 0; i < nextNewSlot; i++) {
-    if (!newLocals[i]) newLocals[i] = fn.locals[fn.params.length] ?? fn.locals[0];
-  }
-  fn.locals = newLocals;
 }
 
 // ---------------------------------------------------------------------------
-// Live-segment interference
+// Backward classification: effective sets + ends-live-range gets
 // ---------------------------------------------------------------------------
 
-/** A single value-lifetime: from the `local.set`/`local.tee` that produced
- *  the value (`defOrd`) through the last `local.get`/`local.tee` that read
- *  it (`lastUseOrd`) before the next write. Closed interval — two segments
- *  with `seg1.lastUseOrd === seg2.defOrd` are treated as overlapping because
- *  both values are live at that ordinal. */
-interface Segment {
-  defOrd: number;
-  lastUseOrd: number;
+function _classifyActions(
+  actions: LivenessAction[],
+  liveAtEnd: ReadonlySet<number>,
+  effectiveSet: Set<Expression>,
+  endsLiveRange: Set<Expression>,
+): void {
+  const live = new Set(liveAtEnd);
+  for (let i = actions.length - 1; i >= 0; i--) {
+    const a = actions[i];
+    if (a.kind === "get") {
+      if (!live.has(a.index)) {
+        endsLiveRange.add(a.origin);
+        live.add(a.index);
+      }
+    } else {
+      // set / tee
+      if (live.has(a.index)) {
+        effectiveSet.add(a.origin);
+        live.delete(a.index);
+      }
+    }
+  }
 }
 
-function _segmentsOverlap(a: Segment, b: Segment): boolean {
-  return Math.max(a.defOrd, b.defOrd) <= Math.min(a.lastUseOrd, b.lastUseOrd);
+// ---------------------------------------------------------------------------
+// Forward interference marking for one block
+// ---------------------------------------------------------------------------
+
+function _markBlockInterference(
+  block: { actions: LivenessAction[]; start: ReadonlySet<number> },
+  effectiveSet: ReadonlySet<Expression>,
+  endsLiveRange: ReadonlySet<Expression>,
+  interferes: _InterferenceMatrix,
+): void {
+  const live = new Set(block.start);
+  for (const a of block.actions) {
+    if (a.kind === "get") {
+      if (endsLiveRange.has(a.origin)) live.delete(a.index);
+      continue;
+    }
+    // set
+    if (!effectiveSet.has(a.origin)) continue;
+    for (const other of live) {
+      if (other !== a.index) interferes.set(other, a.index);
+    }
+    live.add(a.index);
+  }
 }
 
-function _anySegmentsOverlap(existing: Segment[], candidate: Segment[]): boolean {
-  for (const a of existing) {
-    for (const b of candidate) {
-      if (_segmentsOverlap(a, b)) return true;
+// ---------------------------------------------------------------------------
+// Upper-triangular interference matrix
+// ---------------------------------------------------------------------------
+
+class _InterferenceMatrix {
+  private readonly n: number;
+  private readonly bits: Uint8Array;
+  constructor(n: number) {
+    this.n = n;
+    // n*(n-1)/2 entries; store as a flat byte array.
+    this.bits = new Uint8Array(Math.max(0, (n * (n - 1)) >> 1));
+  }
+  private indexOf(low: number, high: number): number {
+    // low < high; pair (i, j) → i * n - i*(i+1)/2 + (j - i - 1)
+    return low * this.n - ((low * (low + 1)) >> 1) + (high - low - 1);
+  }
+  set(a: number, b: number): void {
+    if (a === b) return;
+    const low = a < b ? a : b;
+    const high = a < b ? b : a;
+    if (low < 0 || high >= this.n) return;
+    this.bits[this.indexOf(low, high)] = 1;
+  }
+  get(a: number, b: number): boolean {
+    if (a === b) return false;
+    const low = a < b ? a : b;
+    const high = a < b ? b : a;
+    if (low < 0 || high >= this.n) return false;
+    return this.bits[this.indexOf(low, high)] === 1;
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Body rewrite — rename indices + replace ineffective sets/tees
+// ---------------------------------------------------------------------------
+
+function _hasAnyIneffective(cfg: CFG, effectiveSet: ReadonlySet<Expression>): boolean {
+  for (const b of cfg.blocks) {
+    for (const a of b.actions) {
+      if (a.kind === "set" && !effectiveSet.has(a.origin)) return true;
     }
   }
   return false;
 }
 
-// ---------------------------------------------------------------------------
-// Dead-write elimination
-// ---------------------------------------------------------------------------
-
-function _eliminateDeadWrites(
+function _rewriteBody(
   expr: Expression,
-  dead: Set<number>,
+  mapping: number[],
+  effectiveSet: ReadonlySet<Expression>,
 ): Expression {
   return mapExpression(expr, (e) => {
-    if (e.kind === ExpressionKind.LocalSet && dead.has(e.index)) {
-      return makeDrop(e.value);
+    if (e.kind === ExpressionKind.LocalSet) {
+      const renamed = mapping[e.index] !== e.index ? { ...e, index: mapping[e.index] } : e;
+      // If this set's value never gets read by any get, replace with drop.
+      if (!effectiveSet.has(e)) {
+        return makeDrop(renamed.value);
+      }
+      return renamed;
     }
-    // local.tee on a dead local: replace with just the value (the tee
-    // both sets and returns; since no one reads the local, drop the set)
-    if (e.kind === ExpressionKind.LocalTee && dead.has(e.index)) {
-      return e.value;
+    if (e.kind === ExpressionKind.LocalTee) {
+      // Tee both writes and pushes the value. If the write is ineffective,
+      // the tee degrades to just the value (which is still on the stack).
+      if (!effectiveSet.has(e)) return e.value;
+      if (mapping[e.index] !== e.index) return { ...e, index: mapping[e.index] };
+      return e;
     }
-    return e;
-  });
-}
-
-// ---------------------------------------------------------------------------
-// Local renaming
-// ---------------------------------------------------------------------------
-
-function _renameLocals(expr: Expression, mapping: number[]): Expression {
-  return mapExpression(expr, (e) => {
-    if (
-      (e.kind === ExpressionKind.LocalGet ||
-        e.kind === ExpressionKind.LocalSet ||
-        e.kind === ExpressionKind.LocalTee) &&
-      e.index < mapping.length &&
-      mapping[e.index] !== e.index
-    ) {
-      return { ...e, index: mapping[e.index] };
+    if (e.kind === ExpressionKind.LocalGet) {
+      if (e.index < mapping.length && mapping[e.index] !== e.index) {
+        return { ...e, index: mapping[e.index] };
+      }
     }
     return e;
   });

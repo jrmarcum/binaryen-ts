@@ -67,6 +67,23 @@ export function walkExpression(
   _visitChildren(expr, (child) => walkExpression(child, visitor));
 }
 
+/**
+ * Visits the immediate children of an expression in their evaluation order
+ * (matching the order the binary encoder emits them in). Unlike
+ * {@link walkExpression}, the parent itself is not visited and the recursion
+ * does not continue past the direct children — callers control whether to
+ * recurse. CFG construction uses this to walk non-control nodes generically.
+ *
+ * @param expr  - The parent expression whose children to visit.
+ * @param visit - Called on each direct child. Return value is ignored.
+ */
+export function visitChildren(
+  expr: Expression,
+  visit: (child: Expression) => void,
+): void {
+  _visitChildren(expr, visit);
+}
+
 // ---------------------------------------------------------------------------
 // Internal: map children
 // ---------------------------------------------------------------------------

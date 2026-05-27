@@ -19,8 +19,10 @@ import {
   makeDrop,
   makeI32Const,
   makeI64Const,
+  makeIf,
   makeLocalGet,
   makeLocalSet,
+  makeLoop,
   makeNop,
   makeReturn,
   makeThrow,
@@ -527,6 +529,191 @@ Deno.test("CoalesceLocals: single local with two value lifetimes doesn't blow up
   new PassRunner(mod).add("CoalesceLocals").run();
 
   assertEquals(mod.functions[0].locals.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// CoalesceLocals — CFG-based liveness (loop back-edge cases)
+// ---------------------------------------------------------------------------
+
+Deno.test("CoalesceLocals: loop-carried value interferes via back-edge", () => {
+  // $A is set before the loop and read at the loop top every iteration.
+  // $B is set/used entirely inside the body, source-order AFTER $A's read.
+  // With strictly-sequential ordinals the two ranges look disjoint, but $A's
+  // value flows around the back-edge — coalescing would corrupt it on iter 2+.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(42)),
+      makeLoop(
+        "L",
+        makeBlock([
+          makeDrop(makeLocalGet(0, ValType.I32)),
+          makeLocalSet(1, makeI32Const(5)),
+          makeDrop(makeLocalGet(1, ValType.I32)),
+          makeBreak("L", makeI32Const(0), null),
+        ]),
+      ),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // $A and $B must remain distinct — $A's value has to survive the back-edge.
+  assertEquals(mod.functions[0].locals.length, 2);
+});
+
+Deno.test(
+  "CoalesceLocals: two locals entirely within loop body coalesce when ranges are disjoint",
+  () => {
+    // $A and $B are both confined to one iteration; their live ranges don't
+    // overlap (use-A before set-B, B never alive at the same time as A within
+    // the iteration). Should still coalesce — CFG liveness shouldn't be more
+    // pessimistic than the simple disjoint case.
+    const mod = emptyModule();
+    const fn: WasmFunction = {
+      name: "f",
+      params: [],
+      results: [],
+      locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+      body: makeBlock([
+        makeLoop(
+          "L",
+          makeBlock([
+            makeLocalSet(0, makeI32Const(1)),
+            makeDrop(makeLocalGet(0, ValType.I32)),
+            makeLocalSet(1, makeI32Const(2)),
+            makeDrop(makeLocalGet(1, ValType.I32)),
+            makeBreak("L", makeI32Const(0), null),
+          ]),
+        ),
+      ]),
+    };
+    mod.functions.push(fn);
+
+    new PassRunner(mod).add("CoalesceLocals").run();
+
+    assertEquals(mod.functions[0].locals.length, 1);
+  },
+);
+
+Deno.test("CoalesceLocals: loop counter live across back-edge stays distinct from temp", () => {
+  // Classic counter pattern: $i is the loop counter (set outside, read +
+  // mutated inside, used as the back-edge condition); $tmp is a single-
+  // iteration scratch that comes after the counter update. Reading $i for
+  // the counter test means $i must be live on every iteration — coalescing
+  // it with $tmp would clobber the counter.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(0)),
+      makeLoop(
+        "L",
+        makeBlock([
+          // increment counter: $i = $i + 1
+          makeLocalSet(
+            0,
+            makeBinary(BinaryOp.AddI32, makeLocalGet(0, ValType.I32), makeI32Const(1)),
+          ),
+          // set + use a scratch value
+          makeLocalSet(1, makeI32Const(99)),
+          makeDrop(makeLocalGet(1, ValType.I32)),
+          // loop while $i < 10
+          makeBreak(
+            "L",
+            makeBinary(BinaryOp.LtSI32, makeLocalGet(0, ValType.I32), makeI32Const(10)),
+            null,
+          ),
+        ]),
+      ),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // $i (slot 0) is loop-carried; $tmp (slot 1) cannot coalesce into it.
+  assertEquals(mod.functions[0].locals.length, 2);
+});
+
+Deno.test("CoalesceLocals: if-else with overlapping liveness on merge stays distinct", () => {
+  // $A is set in the then-branch and read on the merge path; $B is set in
+  // the else-branch and read on the same merge path. Both arrive at the
+  // merge live (their values flow from one of the two branches). The merge-
+  // block read means both are live at the same program point — they must
+  // not coalesce.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [ValType.I32],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBlock([
+      makeIf(
+        makeLocalGet(0, ValType.I32),
+        makeBlock([
+          makeLocalSet(1, makeI32Const(1)), // $A
+          makeLocalSet(2, makeI32Const(2)), // $B
+        ]),
+        makeBlock([
+          makeLocalSet(1, makeI32Const(3)), // $A again
+          makeLocalSet(2, makeI32Const(4)), // $B again
+        ]),
+      ),
+      // After the if both $A and $B are live — they must stay separate.
+      makeDrop(makeLocalGet(1, ValType.I32)),
+      makeDrop(makeLocalGet(2, ValType.I32)),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // Param is at slot 0; $A and $B (slots 1, 2) must remain distinct.
+  assertEquals(mod.functions[0].locals.length, 3);
+});
+
+Deno.test("CoalesceLocals: dead set inside loop is replaced with drop", () => {
+  // A local set inside a loop whose value is never read should still be
+  // identified as ineffective by CFG-based liveness — same outcome as the
+  // straight-line case, just verifying the CFG path doesn't lose this.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }],
+    body: makeBlock([
+      makeLoop(
+        "L",
+        makeBlock([
+          makeLocalSet(0, makeI32Const(99)),
+          makeBreak("L", makeI32Const(0), null),
+        ]),
+      ),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // The dead set should have been replaced with drop(const).
+  let foundDrop = false;
+  function walk(e: Expression): void {
+    if (e.kind === ExpressionKind.Drop) foundDrop = true;
+    if (e.kind === ExpressionKind.Block) e.children.forEach(walk);
+    if (e.kind === ExpressionKind.Loop) walk(e.body);
+  }
+  walk(mod.functions[0].body);
+  assertEquals(foundDrop, true);
 });
 
 // ---------------------------------------------------------------------------
