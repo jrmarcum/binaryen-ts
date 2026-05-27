@@ -1487,8 +1487,13 @@ export function makeUnary(op: UnaryOp, value: Expression): UnaryExpr {
 
 /** Creates a `return` expression. */
 export function makeReturn(value: Expression | null = null): ReturnExpr {
-  const type: Type = value ? value.type : None;
-  return { kind: ExpressionKind.Return, type, value };
+  // A `return` is a control-flow transfer, not a value producer: it never
+  // yields a value to its enclosing block, so its type is always `unreachable`
+  // (matches upstream `Return() { type = Type::unreachable; }` in wasm.h). The
+  // returned *value's* type lives on `value.type`; the node's own type must not
+  // leak into block type-inference, or a block ending in `(return x)` would be
+  // mistyped as `x`'s type instead of `unreachable`.
+  return { kind: ExpressionKind.Return, type: Unreachable, value };
 }
 
 /** Creates a `call` expression. */
@@ -1552,7 +1557,15 @@ export function makeBreak(
   condition: Expression | null = null,
   value: Expression | null = null,
 ): BreakExpr {
-  return { kind: ExpressionKind.Break, type: None, name, condition, value };
+  // Mirrors upstream `Break::finalize`: an UNCONDITIONAL `br` always transfers
+  // control, so its type is `unreachable` — a block ending in `(br $l)` is
+  // therefore unreachable at its end, which is exactly what lets a result-typed
+  // loop/block whose body exits via a back-edge validate (the implicit end is
+  // unreachable, so no fallthrough value is required). A conditional `br_if`
+  // falls through when the condition is false, so it takes the value's type
+  // (or `none` when value-less).
+  const type: Type = condition === null ? Unreachable : value ? value.type : None;
+  return { kind: ExpressionKind.Break, type, name, condition, value };
 }
 
 /** Creates a `br_table` expression. */
@@ -1562,7 +1575,18 @@ export function makeSwitch(
   condition: Expression,
   value: Expression | null = null,
 ): SwitchExpr {
-  return { kind: ExpressionKind.Switch, type: None, targets, defaultTarget, condition, value };
+  // `br_table` always branches (it is unconditional — the operand only selects
+  // WHICH target), so it is `unreachable`, matching upstream `Switch() { type =
+  // Type::unreachable; }`. As with `br`, this keeps a block ending in a
+  // `br_table` correctly unreachable for type-inference purposes.
+  return {
+    kind: ExpressionKind.Switch,
+    type: Unreachable,
+    targets,
+    defaultTarget,
+    condition,
+    value,
+  };
 }
 
 /** Creates a `select` expression. */

@@ -457,10 +457,29 @@ function _branchValueArity(frames: ControlFrame[], depth: number): number {
   return target.resultTypes.length;
 }
 
-function sealFrame(frame: ControlFrame): Expression {
+function sealFrame(frame: ControlFrame, resultType: Type): Expression {
   if (frame.exprs.length === 0) return makeNop();
   if (frame.exprs.length === 1) return frame.exprs[0];
-  return makeBlock(frame.exprs, frame.label || null);
+  // The wrapper block is an artificial container for a multi-expression body;
+  // it must be ANONYMOUS. Callers (`loop`, `try_table`) re-apply `frame.label`
+  // to the enclosing construct (`makeLoop(frame.label, body, ...)`), so reusing
+  // it here too produced two nested constructs with the same label —
+  // `(loop $L (block $L ...))`. The encoder resolves a branch by innermost
+  // matching label, so a loop back-edge `br $L` then targeted the wrapper block
+  // (a forward exit) instead of the loop (a continue), silently changing
+  // control flow and leaving the loop's declared result value unproduced.
+  const blk = makeBlock(frame.exprs, null);
+  // The wrapper IS the construct's body, so it must carry the construct's
+  // declared result type — NOT the type `makeBlock` infers from the last child.
+  // When the body exits via a back-edge `br` (last child unreachable), inference
+  // would type the wrapper `unreachable`, which the encoder can only emit as a
+  // void blocktype; the void wrapper then "absorbs" the unreachability and
+  // yields 0 values to the enclosing result-typed loop, tripping the validator
+  // ("expected 1 elements for fallthru, found 0"). Stamping the declared type
+  // makes the encoder emit `(block (result T) ... br)`, which validates
+  // polymorphically and yields T. Mirrors the `block`-frame handling below.
+  blk.type = resultType;
+  return blk;
 }
 
 // ---------------------------------------------------------------------------
@@ -647,7 +666,16 @@ class WasmParser {
         case 0x00: { // function
           const typeIdx = this.r.readU32();
           const ft = this.funcTypes[typeIdx];
-          const name = `$import${this.importedFuncCount}`;
+          // Imported functions occupy the low end of the single function index
+          // space (global indices 0..importedFuncCount-1), so they MUST share
+          // the `$func${globalIndex}` naming used by every reference site —
+          // calls (0x10/0x12), exports, element segments, and ref.func all emit
+          // `$func${idx}`. Naming imports `$import${n}` instead left those
+          // references dangling: the encoder's funcIndex map keyed imports by
+          // their (mismatched) name, so `funcIndex.get("$func1")` missed and
+          // fell back to `?? 0`, encoding every imported-function call as index
+          // 0 (wrong target, wrong arity → "call need N got M").
+          const name = `$func${this.importedFuncCount}`;
           this.builder.addFunctionImport(name, module, base, ft.params, ft.results);
           this.importedFuncTypeIndices.push(typeIdx);
           this.importedFuncCount++;
@@ -1068,7 +1096,7 @@ class WasmParser {
             void resultType;
             push(ifExpr);
           } else if (frame.kind === "loop") {
-            const body = sealFrame(frame);
+            const body = sealFrame(frame, resultType);
             push(makeLoop(frame.label, body, resultType));
           } else if (frame.kind === "try" || frame.kind === "catch") {
             const tryBodyExprs = frame.kind === "try" ? frame.exprs : (frame.tryBody ?? []);
@@ -1091,7 +1119,7 @@ class WasmParser {
               ),
             );
           } else if (frame.kind === "try_table") {
-            const body = sealFrame(frame);
+            const body = sealFrame(frame, resultType);
             push(makeTryTable(frame.label, body, frame.tryCatches ?? [], resultType));
           } else {
             // block (only remaining kind here — func/if/else/loop/try*

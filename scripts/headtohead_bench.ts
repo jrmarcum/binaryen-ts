@@ -42,6 +42,32 @@ import upstream from "npm:binaryen@^116.0.0";
 
 // Our TypeScript implementation via the compat facade
 import * as ours from "../src/api/binaryen-compat.ts";
+import { BinaryReader } from "../src/binary/reader.ts";
+
+/**
+ * Byte size of the `code` section (id 10) of a wasm binary, and the total bytes
+ * occupied by custom sections (id 0). The total-size comparison is dominated by
+ * DWARF `.debug_*` custom sections, which our parse→encode round-trip drops
+ * entirely (the IR models only execution-relevant structure). Comparing the
+ * `code` section instead is the apples-to-apples measure of optimizer output
+ * quality; `customBytes` quantifies the debug payload that explains the rest of
+ * the total-size gap.
+ */
+function sectionSizes(bytes: Uint8Array): { code: number; customBytes: number } {
+  const r = new BinaryReader(bytes);
+  r.skip(8); // magic + version
+  let code = 0;
+  let customBytes = 0;
+  while (!r.eof) {
+    const id = r.readU8();
+    const size = r.readU32();
+    const bodyStart = r.position;
+    if (id === 10) code = size;
+    else if (id === 0) customBytes += size;
+    r.seek(bodyStart + size);
+  }
+  return { code, customBytes };
+}
 
 const ROOT = new URL("../upstream/test", import.meta.url).pathname.replace(/^\//, "");
 
@@ -61,12 +87,15 @@ const CORPUS: { label: string; rel: string }[] = [
 interface Result {
   label: string;
   inputBytes: number;
+  inputCustomBytes: number;
   upstreamMs: number;
   upstreamOutBytes: number;
+  upstreamCodeBytes: number;
   upstreamValid: boolean;
   upstreamValidErr?: string;
   oursMs: number;
   oursOutBytes: number;
+  oursCodeBytes: number;
   oursValid: boolean;
   oursValidErr?: string;
   oursErr?: string;
@@ -149,11 +178,14 @@ async function bench(label: string, rel: string): Promise<Result> {
     return {
       label,
       inputBytes: bytes.byteLength,
+      inputCustomBytes: sectionSizes(bytes).customBytes,
       upstreamMs: NaN,
       upstreamOutBytes: 0,
+      upstreamCodeBytes: 0,
       upstreamValid: false,
       oursMs: NaN,
       oursOutBytes: 0,
+      oursCodeBytes: 0,
       oursValid: false,
       oursErr: "upstream: " + (e instanceof Error ? e.message : String(e)),
     };
@@ -180,12 +212,15 @@ async function bench(label: string, rel: string): Promise<Result> {
   return {
     label,
     inputBytes: bytes.byteLength,
+    inputCustomBytes: sectionSizes(bytes).customBytes,
     upstreamMs,
     upstreamOutBytes: upstreamOut.byteLength,
+    upstreamCodeBytes: sectionSizes(upstreamOut).code,
     upstreamValid,
     upstreamValidErr,
     oursMs,
     oursOutBytes: oursOut.byteLength,
+    oursCodeBytes: oursOut.byteLength > 0 ? sectionSizes(oursOut).code : 0,
     oursValid,
     oursValidErr,
     oursErr,
@@ -204,30 +239,36 @@ for (const c of CORPUS) {
 
 console.log("# Head-to-head: npm:binaryen vs @jrmarcum/binaryen-ts/compat");
 console.log("# Workload: wasic-style -Oz optimization");
+console.log("#");
+console.log("# NOTE on size: our parse→encode pipeline drops custom sections (DWARF .debug_*,");
+console.log("# name, producers); upstream preserves them. So total-out size is NOT an");
+console.log("# apples-to-apples optimizer comparison — `code_ratio` (code-section size, ours");
+console.log("# vs upstream) is the fair metric; `cust_drop` is the input custom-section bytes");
+console.log("# we elide (the bulk of the total-size delta on DWARF-laden modules).");
 console.log();
 console.log(
-  "label             | input_b   | upstream_ms | upstream_out | upstream_ok | ours_ms     | ours_out   | ours_ok | time_ratio | size_ratio",
+  "label             | input_b   | cust_drop | up_ms   | up_code  | ours_ms | ours_code | both_ok | time_ratio | code_ratio",
 );
 console.log(
-  "----------------- | --------- | ----------- | ------------ | ----------- | ----------- | ---------- | ------- | ---------- | ----------",
+  "----------------- | --------- | --------- | ------- | -------- | ------- | --------- | ------- | ---------- | ----------",
 );
 for (const r of results) {
   const timeRatio = Number.isFinite(r.upstreamMs) && Number.isFinite(r.oursMs) && r.upstreamMs > 0
     ? r.oursMs / r.upstreamMs
     : NaN;
-  const sizeRatio = r.upstreamOutBytes > 0 ? r.oursOutBytes / r.upstreamOutBytes : NaN;
+  const codeRatio = r.upstreamCodeBytes > 0 ? r.oursCodeBytes / r.upstreamCodeBytes : NaN;
   console.log(
     [
       r.label.padEnd(17),
       r.inputBytes.toString().padStart(9),
-      r.upstreamMs.toFixed(1).padStart(11),
-      r.upstreamOutBytes.toString().padStart(12),
-      r.upstreamValid.toString().padStart(11),
-      r.oursMs.toFixed(1).padStart(11),
-      r.oursOutBytes.toString().padStart(10),
-      r.oursValid.toString().padStart(7),
+      r.inputCustomBytes.toString().padStart(9),
+      r.upstreamMs.toFixed(1).padStart(7),
+      r.upstreamCodeBytes.toString().padStart(8),
+      r.oursMs.toFixed(1).padStart(7),
+      r.oursCodeBytes.toString().padStart(9),
+      `${r.upstreamValid && r.oursValid}`.padStart(7),
       (Number.isFinite(timeRatio) ? timeRatio.toFixed(1) + "×" : "n/a").padStart(10),
-      (Number.isFinite(sizeRatio) ? sizeRatio.toFixed(2) + "×" : "n/a").padStart(10),
+      (Number.isFinite(codeRatio) ? codeRatio.toFixed(2) + "×" : "n/a").padStart(10),
     ].join(" | "),
   );
   if (r.oursErr) console.log(`  err:  ${r.oursErr.slice(0, 200)}`);
@@ -245,11 +286,15 @@ const okBoth = results.filter((r) =>
 if (okBoth.length > 0) {
   const totalUp = okBoth.reduce((a, b) => a + b.upstreamMs, 0);
   const totalUs = okBoth.reduce((a, b) => a + b.oursMs, 0);
-  console.log(`  total upstream:  ${totalUp.toFixed(1)} ms`);
-  console.log(`  total ours:      ${totalUs.toFixed(1)} ms`);
-  console.log(`  overall ratio:   ${(totalUs / totalUp).toFixed(1)}×`);
+  console.log(`  total upstream:    ${totalUp.toFixed(1)} ms`);
+  console.log(`  total ours:        ${totalUs.toFixed(1)} ms`);
+  console.log(`  overall time:      ${(totalUs / totalUp).toFixed(2)}× (ours/upstream)`);
+  const upCode = okBoth.reduce((a, b) => a + b.upstreamCodeBytes, 0);
+  const usCode = okBoth.reduce((a, b) => a + b.oursCodeBytes, 0);
+  console.log(`  total code bytes:  upstream ${upCode}, ours ${usCode}`);
+  console.log(`  overall code size: ${(usCode / upCode).toFixed(2)}× (ours/upstream; ~1 = parity)`);
   const validatedBoth = okBoth.filter((r) => r.upstreamValid && r.oursValid).length;
-  console.log(`  both validate:   ${validatedBoth}/${okBoth.length}`);
+  console.log(`  both validate:     ${validatedBoth}/${okBoth.length}`);
 }
 const failedOurs = results.filter((r) => r.oursErr);
 if (failedOurs.length > 0) {
