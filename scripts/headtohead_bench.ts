@@ -1,3 +1,6 @@
+// deno-lint-ignore-file no-import-prefix -- diagnostic script: intentionally
+// imports upstream binaryen via npm: specifier for head-to-head comparison.
+
 /**
  * @module scripts/headtohead_bench
  *
@@ -46,13 +49,13 @@ const ROOT = new URL("../upstream/test", import.meta.url).pathname.replace(/^\//
 // Selected for a representative range of small/medium/large + variety of shapes
 // (DWARF-laden, EH-using, plain compute).
 const CORPUS: { label: string; rel: string }[] = [
-  { label: "tiny",          rel: "passes/dce_vacuum_remove-unused-names.wasm" },
-  { label: "small-dwarf",   rel: "passes/fib2_dwarf.wasm" },
-  { label: "small-eh",      rel: "passes/dwarf_with_exceptions.wasm" },
-  { label: "medium-fk0",    rel: "passes/fannkuch0_dwarf.wasm" },
-  { label: "medium-class",  rel: "passes/class_with_dwarf_noprint.wasm" },
-  { label: "large-zlib",    rel: "unit/input/dwarf/zlib.wasm" },
-  { label: "large-cube",    rel: "unit/input/dwarf/cubescript.wasm" },
+  { label: "tiny", rel: "passes/dce_vacuum_remove-unused-names.wasm" },
+  { label: "small-dwarf", rel: "passes/fib2_dwarf.wasm" },
+  { label: "small-eh", rel: "passes/dwarf_with_exceptions.wasm" },
+  { label: "medium-fk0", rel: "passes/fannkuch0_dwarf.wasm" },
+  { label: "medium-class", rel: "passes/class_with_dwarf_noprint.wasm" },
+  { label: "large-zlib", rel: "unit/input/dwarf/zlib.wasm" },
+  { label: "large-cube", rel: "unit/input/dwarf/cubescript.wasm" },
 ];
 
 interface Result {
@@ -229,7 +232,9 @@ for (const r of results) {
   );
   if (r.oursErr) console.log(`  err:  ${r.oursErr.slice(0, 200)}`);
   if (r.oursValidErr) console.log(`  ours-validate-err: ${r.oursValidErr.slice(0, 200)}`);
-  if (r.upstreamValidErr) console.log(`  upstream-validate-err: ${r.upstreamValidErr.slice(0, 200)}`);
+  if (r.upstreamValidErr) {
+    console.log(`  upstream-validate-err: ${r.upstreamValidErr.slice(0, 200)}`);
+  }
 }
 
 console.log();

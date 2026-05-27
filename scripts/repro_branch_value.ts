@@ -19,11 +19,7 @@
 
 import { ModuleBuilder } from "../src/ir/module.ts";
 import { ValType } from "../src/ir/types.ts";
-import {
-  makeBlock,
-  makeBreak,
-  makeI32Const,
-} from "../src/ir/expressions.ts";
+import { makeBlock, makeBreak, makeI32Const } from "../src/ir/expressions.ts";
 import { encodeWasm } from "../src/encoder/wasm-encoder.ts";
 import { parseWat } from "../src/parser/wat-parser.ts";
 import { parseWasm } from "../src/binary/wasm-parser.ts";

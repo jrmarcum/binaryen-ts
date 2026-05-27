@@ -74,7 +74,9 @@ console.log();
   const mod = parseWasm(inputBytes);
   const out = encodeWasm(mod);
   const v = await validates(out);
-  console.log(`parse+encode (no passes): ${v.ok ? "YES" : "NO"} bytes=${out.byteLength} ${v.err ?? ""}`);
+  console.log(
+    `parse+encode (no passes): ${v.ok ? "YES" : "NO"} bytes=${out.byteLength} ${v.err ?? ""}`,
+  );
 }
 
 console.log();
@@ -85,16 +87,26 @@ for (const passName of PASSES) {
   try {
     pass.run(mod, OPTS);
   } catch (e) {
-    console.log(`${passName.padEnd(28)} CRASHED  ${e instanceof Error ? e.message.slice(0, 100) : String(e)}`);
+    console.log(
+      `${passName.padEnd(28)} CRASHED  ${e instanceof Error ? e.message.slice(0, 100) : String(e)}`,
+    );
     continue;
   }
   let out: Uint8Array;
   try {
     out = encodeWasm(mod);
   } catch (e) {
-    console.log(`${passName.padEnd(28)} ENCODE-CRASH  ${e instanceof Error ? e.message.slice(0, 100) : String(e)}`);
+    console.log(
+      `${passName.padEnd(28)} ENCODE-CRASH  ${
+        e instanceof Error ? e.message.slice(0, 100) : String(e)
+      }`,
+    );
     continue;
   }
   const v = await validates(out);
-  console.log(`${passName.padEnd(28)} ${v.ok ? "OK" : "FAIL"}  bytes=${out.byteLength}  ${v.err?.slice(0, 120) ?? ""}`);
+  console.log(
+    `${passName.padEnd(28)} ${v.ok ? "OK" : "FAIL"}  bytes=${out.byteLength}  ${
+      v.err?.slice(0, 120) ?? ""
+    }`,
+  );
 }

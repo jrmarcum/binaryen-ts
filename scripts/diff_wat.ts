@@ -1,3 +1,6 @@
+// deno-lint-ignore-file no-import-prefix -- diagnostic script: intentionally
+// imports upstream binaryen via npm: specifier as a trusted disassembler.
+
 /**
  * @module scripts/diff_wat
  *
@@ -57,7 +60,9 @@ try {
   reText = emitText(reEncoded);
 } catch (e) {
   console.log("Upstream rejected re-encoded:", e instanceof Error ? e.message : String(e));
-  console.log("(This is expected if our encode produces invalid wasm; falling back to partial dump.)");
+  console.log(
+    "(This is expected if our encode produces invalid wasm; falling back to partial dump.)",
+  );
 }
 
 // Write the two WAT outputs to disk for manual diff
