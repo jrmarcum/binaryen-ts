@@ -116,12 +116,25 @@ function _cseBlock(
   let changed = false;
 
   for (const child of block.children) {
-    // Invalidate cache entries affected by side effects in this child
+    // Pre-invalidate: clear entries this child's writes will clobber. Pre is
+    // necessary so the FIRST occurrence of a key inside this child (a tee that
+    // captures the OLD value) isn't a stale hit on a prior entry.
     _invalidate(child, cache);
 
     const rewritten = _rewriteExpr(child, candidates, cache, state);
     if (rewritten !== child) changed = true;
     newChildren.push(rewritten);
+
+    // Post-invalidate: any entry CREATED inside this child (via a tee in the
+    // child's value sub-expression) captures the pre-side-effect value. The
+    // child's surrounding write then clobbers the underlying slot, so the
+    // entry is stale for subsequent block children. Without this, e.g. a
+    // `set K (... tee N (lg K) ...)` would leave `lg:K → N` in the cache, and
+    // a later child's `lg K` would be substituted with `lg N` — reading the
+    // PRE-set value instead of the POST-set value. Was: `_fib(7)` came out as
+    // `fib(8) = 34` after the loop's `$9 == $0` test silently read the old
+    // `$8` instead of the freshly-stored `$9`, running one extra iteration.
+    _invalidate(child, cache);
   }
 
   if (!changed) return block;

@@ -44,7 +44,7 @@
 import { type Expression, ExpressionKind, makeDrop } from "../ir/expressions.ts";
 import type { WasmFunction, WasmModule } from "../ir/module.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
-import { mapExpression } from "../ir/walk.ts";
+import { mapExpression, walkExpression } from "../ir/walk.ts";
 import { buildCFG, type CFG, computeLiveness, type LivenessAction } from "./cfg.ts";
 
 // ---------------------------------------------------------------------------
@@ -273,24 +273,58 @@ function _hasAnyIneffective(cfg: CFG, effectiveSet: ReadonlySet<Expression>): bo
   return false;
 }
 
+/** Symbol marker stamped on each ineffective `LocalSet` / `LocalTee` so the
+ *  rewrite phase below can identify them after `mapExpression`'s bottom-up walk
+ *  has spread-copied their parents. See `_rewriteBody`. */
+const _INEFFECTIVE = Symbol("binaryen-ts:CoalesceLocals:ineffective");
+
+function _markIneffective(e: Expression): void {
+  (e as unknown as { [k: symbol]: unknown })[_INEFFECTIVE] = true;
+}
+
+function _isIneffective(e: Expression): boolean {
+  return (e as unknown as { [k: symbol]: unknown })[_INEFFECTIVE] === true;
+}
+
 function _rewriteBody(
   expr: Expression,
   mapping: number[],
   effectiveSet: ReadonlySet<Expression>,
 ): Expression {
+  // PRE-PASS: mark each ineffective `LocalSet` / `LocalTee` on the ORIGINAL
+  // node with a `Symbol` property.
+  //
+  // Why we can't just check `effectiveSet.has(e)` in the rewrite callback:
+  // `mapExpression` is bottom-up and `_mapChildren` UNCONDITIONALLY spreads
+  // (`{ ...expr, value: mapped }`) — so by the time the callback sees a parent
+  // `LocalSet`, any descendant `LocalGet` that got renamed has already caused
+  // every ancestor on the path to be rebuilt as a fresh object. The `e` the
+  // callback receives is therefore a brand-new spread copy with a different
+  // identity from the one `cfg.blocks[*].actions[*].origin` recorded, so
+  // `effectiveSet.has(e)` was guaranteed to return `false` — and every set
+  // came out as a drop. (Including loop-carried writes: `_fib`'s accumulator
+  // updates were all turned into drops, so the function always returned 0.)
+  //
+  // Object spread copies own-enumerable properties INCLUDING symbol-keyed ones,
+  // so a marker stamped on the original here survives every rebuild on the way
+  // up — the rewrite callback can read it from the spread copy.
+  walkExpression(expr, (e) => {
+    if (e.kind === ExpressionKind.LocalSet || e.kind === ExpressionKind.LocalTee) {
+      if (!effectiveSet.has(e)) _markIneffective(e);
+    }
+  });
+
   return mapExpression(expr, (e) => {
     if (e.kind === ExpressionKind.LocalSet) {
-      const renamed = mapping[e.index] !== e.index ? { ...e, index: mapping[e.index] } : e;
-      // If this set's value never gets read by any get, replace with drop.
-      if (!effectiveSet.has(e)) {
-        return makeDrop(renamed.value);
-      }
-      return renamed;
+      // `e.value` here is already the post-rewrite (renamed) value subtree.
+      if (_isIneffective(e)) return makeDrop(e.value);
+      if (mapping[e.index] !== e.index) return { ...e, index: mapping[e.index] };
+      return e;
     }
     if (e.kind === ExpressionKind.LocalTee) {
       // Tee both writes and pushes the value. If the write is ineffective,
-      // the tee degrades to just the value (which is still on the stack).
-      if (!effectiveSet.has(e)) return e.value;
+      // the tee degrades to just the (already-rewritten) value.
+      if (_isIneffective(e)) return e.value;
       if (mapping[e.index] !== e.index) return { ...e, index: mapping[e.index] };
       return e;
     }

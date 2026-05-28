@@ -320,3 +320,106 @@ Deno.test("regression: LocalCSE preserves a result-typed block that exits via br
   // And the encoded result must validate (this is what threw before the fix).
   await WebAssembly.compile(encodeWasm(mod) as BufferSource);
 });
+
+Deno.test("regression: CoalesceLocals preserves effective sets when remapping locals", () => {
+  // (func (param i32) (result i32)
+  //   (local i32 i32)
+  //   (local.set 1 (i32.const 7))     ;; $1 = 7
+  //   (drop (local.get 1))             ;; consume $1
+  //   (local.set 2 (i32.const 42))    ;; $2 = 42
+  //   (local.get 2))                    ;; return $2 — expect 42
+  // $1 and $2 don't interfere → CoalesceLocals merges them into one slot.
+  // Before the identity-preservation fix, `mapExpression`'s unconditional
+  // spread rebuilt every parent on the path of a renamed `local.get`, so
+  // `effectiveSet.has(spreadCopy)` was always false in the rewrite callback
+  // and every `local.set` came out as `drop` — the function returned 0 (the
+  // uninitialized slot).
+  const types = section(1, vec([[0x60, 0x01, I32, 0x01, I32]]));
+  const funcs = section(3, vec([[0x00]]));
+  const exports = section(7, vec([[0x03, 0x72, 0x75, 0x6e, 0x00, 0x00]])); // "run" -> fn 0
+  const body = [
+    0x01,
+    0x02,
+    I32, // 1 group of 2 i32 locals
+    0x41,
+    0x07,
+    0x21,
+    0x01, // i32.const 7; local.set 1
+    0x20,
+    0x01,
+    0x1a, // local.get 1; drop
+    0x41,
+    0x2a,
+    0x21,
+    0x02, // i32.const 42; local.set 2
+    0x20,
+    0x02, // local.get 2
+    0x0b, // end
+  ];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+
+  const mod = parseWasm(new Uint8Array([...MAGIC, ...[types, funcs, exports, code].flat()]));
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 0 })
+    .addPass(createPass("CoalesceLocals"))
+    .run();
+  const inst = new WebAssembly.Instance(
+    new WebAssembly.Module(encodeWasm(mod) as BufferSource),
+  );
+  const run = inst.exports.run as (n: number) => number;
+  assertEquals(run(0), 42);
+});
+
+Deno.test("regression: LocalCSE invalidates cache after a child that writes the cached local", () => {
+  // (func (param i32) (result i32)
+  //   (local i32 i32)
+  //   (local.set 1 (local.get 0))                            ;; $1 = $0
+  //   (local.set 1 (i32.add (local.get 1) (i32.const 1)))   ;; $1 = $1 + 1
+  //   (local.set 2 (i32.add (local.get 1) (i32.const 10)))  ;; $2 = NEW $1 + 10
+  //   (local.get 2))                                          ;; return $2
+  // For input 5 the right answer is 5+1+10 = 16. Before the post-invalidate
+  // fix, LocalCSE wrapped the first `(local.get 1)` in a tee that captured
+  // the PRE-set-1 value, then substituted the second `(local.get 1)` with
+  // the tee's local — silently reading the old value across the intervening
+  // `local.set 1` and producing 15. (Same root cause as `_fib(7)=fib(8)=34`
+  // observed in `-Oz` on the corpus.)
+  const types = section(1, vec([[0x60, 0x01, I32, 0x01, I32]]));
+  const funcs = section(3, vec([[0x00]]));
+  const exports = section(7, vec([[0x03, 0x72, 0x75, 0x6e, 0x00, 0x00]]));
+  const body = [
+    0x01,
+    0x02,
+    I32, // 1 group of 2 i32 locals
+    0x20,
+    0x00,
+    0x21,
+    0x01, // local.get 0; local.set 1
+    0x20,
+    0x01,
+    0x41,
+    0x01,
+    0x6a,
+    0x21,
+    0x01, // lg1; const 1; add; set 1
+    0x20,
+    0x01,
+    0x41,
+    0x0a,
+    0x6a,
+    0x21,
+    0x02, // lg1; const 10; add; set 2
+    0x20,
+    0x02, // local.get 2
+    0x0b, // end
+  ];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+
+  const mod = parseWasm(new Uint8Array([...MAGIC, ...[types, funcs, exports, code].flat()]));
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 0 })
+    .addPass(createPass("LocalCSE"))
+    .run();
+  const inst = new WebAssembly.Instance(
+    new WebAssembly.Module(encodeWasm(mod) as BufferSource),
+  );
+  const run = inst.exports.run as (n: number) => number;
+  assertEquals(run(5), 16);
+});
