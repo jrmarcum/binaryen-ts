@@ -28,15 +28,20 @@ import { parseWasm } from "../../src/binary/index.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import {
   BinaryOp,
+  type BlockExpr,
   type CallExpr,
   ExpressionKind,
   makeBinary,
   makeBreak,
   makeI32Const,
+  makeIf,
+  makeNop,
   makeReturn,
   makeSwitch,
 } from "../../src/ir/expressions.ts";
 import { None, Unreachable, ValType } from "../../src/ir/types.ts";
+import { createPass, PassRunner } from "../../src/passes/pass.ts";
+import "../../src/passes/index.ts"; // side-effect: register built-in passes
 
 // ---------------------------------------------------------------------------
 // Minimal wasm section-builder helpers (unsigned LEB128, length-prefixed)
@@ -218,4 +223,100 @@ Deno.test("makeSwitch (br_table) is always unreachable", () => {
     ).type,
     Unreachable,
   );
+});
+
+// ---------------------------------------------------------------------------
+// WT-2c — bugs the behavioral-equivalence harness surfaced
+// ---------------------------------------------------------------------------
+
+Deno.test("makeIf type is the reachable arm's type (LUB), not blindly the then-arm's", () => {
+  // then unreachable (ends in return), else falls through (none) -> if is none.
+  // The old code took ifTrue.type (unreachable), which made DCE delete the live
+  // code after such an `if` (silently breaking loops — `_fib` returned 0).
+  assertEquals(makeIf(makeI32Const(1), makeReturn(makeI32Const(1)), makeNop()).type, None);
+  // then concrete, else unreachable -> take the then (i32).
+  assertEquals(
+    makeIf(makeI32Const(1), makeI32Const(7), makeReturn(makeI32Const(1))).type,
+    ValType.I32,
+  );
+  // both arms concrete & equal -> that type.
+  assertEquals(makeIf(makeI32Const(1), makeI32Const(7), makeI32Const(8)).type, ValType.I32);
+  // no else -> none (the then may be skipped).
+  assertEquals(makeIf(makeI32Const(1), makeReturn(makeI32Const(1))).type, None);
+});
+
+Deno.test("regression: element segments + call_indirect survive round-trip and execute", async () => {
+  // (type $t () -> i32)
+  // (table 1 funcref) (elem (i32.const 0) $target)
+  // (func $target (result i32) (i32.const 42))
+  // (func $run (result i32) (call_indirect $t (i32.const 0)))
+  // The parser previously parsed the element segment then THREW IT AWAY
+  // (`void seg`), so the table was never initialized and call_indirect trapped.
+  const types = section(1, vec([[0x60, 0x00, 0x01, I32]])); // type 0: () -> i32
+  const funcs = section(3, vec([[0x00], [0x00]])); // 2 funcs, both type 0
+  const table = section(4, vec([[0x70, 0x00, 0x01]])); // 1 table: funcref, min 1
+  const exports = section(7, vec([[0x03, 0x72, 0x75, 0x6e, 0x00, 0x01]])); // "run" -> func 1
+  // element segment: flags 0, offset (i32.const 0), funcs [0]
+  const elem = section(9, vec([[0x00, 0x41, 0x00, 0x0b, 0x01, 0x00]]));
+  const code = section(
+    10,
+    vec([
+      [...leb(4), 0x00, 0x41, 0x2a, 0x0b], // func0: i32.const 42; end
+      [...leb(7), 0x00, 0x41, 0x00, 0x11, 0x00, 0x00, 0x0b], // func1: i32.const 0; call_indirect type0 table0; end
+    ]),
+  );
+
+  const mod = parseWasm(
+    new Uint8Array([...MAGIC, ...[types, funcs, table, exports, elem, code].flat()]),
+  );
+  // The parsed module must retain the element segment.
+  assertEquals(mod.elements.length, 1);
+
+  const reencoded = encodeWasm(mod);
+  const compiled = await WebAssembly.compile(reencoded as BufferSource);
+  const inst = new WebAssembly.Instance(compiled);
+  // The indirect call through table[0] must reach $target and return 42.
+  assertEquals((inst.exports.run as () => number)(), 42);
+});
+
+Deno.test("regression: LocalCSE preserves a result-typed block that exits via br", async () => {
+  // (func (param i32) (result i32)
+  //   (block $b (result i32)
+  //     (drop (i32.add (local.get 0) (local.get 0)))   ;; CSE occurrence 1
+  //     (drop (i32.add (local.get 0) (local.get 0)))   ;; CSE occurrence 2 -> candidate
+  //     (br $b (i32.const 5))))                          ;; tail br: block end unreachable
+  // LocalCSE rewrites the repeated add; it used to then recompute the block type
+  // from the last child (the `br`, now `unreachable`), clobbering the declared
+  // `i32` and producing "expected 1 for fallthru, found 0".
+  const types = section(1, vec([[0x60, 0x01, I32, 0x01, I32]])); // (i32) -> (i32)
+  const funcs = section(3, vec([[0x00]]));
+  const addLG = [0x20, 0x00, 0x20, 0x00, 0x6a]; // local.get 0; local.get 0; i32.add
+  const body = [
+    0x02,
+    I32, // block (result i32)
+    ...addLG,
+    0x1a, // drop
+    ...addLG,
+    0x1a, // drop
+    0x41,
+    0x05,
+    0x0c,
+    0x00, // i32.const 5; br 0 (carries the block result)
+    0x0b, // end block
+    0x0b, // end func
+  ];
+  const code = section(10, vec([[...leb(body.length + 1), 0x00, ...body]]));
+
+  const mod = parseWasm(new Uint8Array([...MAGIC, ...[types, funcs, code].flat()]));
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 0 }).addPass(createPass("LocalCSE")).run();
+
+  // The body IS the `(result i32)` block (single-expression body, unwrapped).
+  // Its declared type must survive LocalCSE as i32 — not be clobbered to the
+  // tail `br`'s `unreachable`.
+  const fnBody = mod.functions[0].body as BlockExpr;
+  assert(fnBody.kind === ExpressionKind.Block, "body should be a block");
+  assertEquals(fnBody.type, ValType.I32);
+
+  // And the encoded result must validate (this is what threw before the fix).
+  await WebAssembly.compile(encodeWasm(mod) as BufferSource);
 });

@@ -1512,9 +1512,27 @@ export function makeIf(
   ifTrue: Expression,
   ifFalse: Expression | null = null,
 ): IfExpr {
+  // Type follows upstream `If::finalize`:
+  //  - no `else` → `none` (the `then` may be skipped, so nothing flows out);
+  //  - with `else` → the result type of the REACHABLE arm. When one arm is
+  //    `unreachable` the type is the other arm's type; only when BOTH arms are
+  //    unreachable is the `if` itself unreachable.
+  // Blindly taking `ifTrue.type` mistyped an `if` as `unreachable` whenever its
+  // `then` arm ended in a control transfer (`br`/`return`, correctly typed
+  // `unreachable`) even though the `else` arm fell through — which made DCE
+  // treat everything after the `if` as dead and delete live code (e.g. a loop
+  // back-edge `br`, silently breaking the loop so it ran once and returned 0).
+  let type: Type;
+  if (!ifFalse) {
+    type = None;
+  } else if (ifTrue.type === Unreachable) {
+    type = ifFalse.type;
+  } else {
+    type = ifTrue.type;
+  }
   return {
     kind: ExpressionKind.If,
-    type: ifFalse ? ifTrue.type : None,
+    type,
     condition,
     ifTrue,
     ifFalse,

@@ -806,8 +806,7 @@ class WasmParser {
         }
         const tname = this.tableNames[0] ?? "$table0";
         const seg: ElementSegment = { name: `$elem${i}`, table: tname, offset, data: funcs };
-        // ModuleBuilder has no addElement yet -- store via direct access pattern below
-        void seg; // suppress unused warning; element segments not yet in builder API
+        this.builder.addElement(seg);
       } else {
         // Skip unknown element segment kinds
         this.r.seek(end);

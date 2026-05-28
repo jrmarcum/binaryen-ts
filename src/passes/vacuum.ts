@@ -108,6 +108,10 @@ function _simplifyBlock(
   // No change
   if (filtered.length === block.children.length) return block;
 
-  const lastType = filtered[filtered.length - 1].type;
-  return { ...block, type: lastType, children: filtered };
+  // Preserve the block's declared result type. Removing nops never changes the
+  // value the block yields at its tail, so recomputing the type from the last
+  // child is wrong when that child is `unreachable` (a `br`/`return` tail):
+  // overwriting a declared `i32` with `unreachable` makes the encoder emit a
+  // void blocktype and trips "expected N for fallthru, found 0" upstream.
+  return { ...block, children: filtered };
 }

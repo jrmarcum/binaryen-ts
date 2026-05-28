@@ -126,8 +126,15 @@ function _cseBlock(
 
   if (!changed) return block;
 
-  const lastType = newChildren[newChildren.length - 1].type;
-  return { ...block, type: lastType, children: newChildren };
+  // Preserve the block's declared result type. CSE rewriting only ever wraps a
+  // value in `local.tee` or replaces it with `local.get` — both keep the
+  // expression's type — so the block's result type is unchanged. Recomputing it
+  // from the last child is wrong when the block exits via `br`/`return`: the
+  // last child is then typed `unreachable`, and overwriting the declared type
+  // (e.g. `i32`) with that makes the encoder emit a void blocktype, tripping
+  // "expected N elements for fallthru, found 0" in any enclosing result-typed
+  // construct. (Same trap the binary parser's block handler guards against.)
+  return { ...block, children: newChildren };
 }
 
 // ---------------------------------------------------------------------------

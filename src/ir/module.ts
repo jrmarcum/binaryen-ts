@@ -370,6 +370,17 @@ export class ModuleBuilder {
     return this;
   }
 
+  /**
+   * Adds an element segment that initializes a table with function references.
+   *
+   * @param segment - The element segment (target table, offset expression, and
+   *   the ordered function names it writes into the table).
+   */
+  addElement(segment: ElementSegment): this {
+    this._elements.push(segment);
+    return this;
+  }
+
   // -------------------------------------------------------------------------
   // Imports
   // -------------------------------------------------------------------------

@@ -88,6 +88,10 @@ function _simplifyBlock(
 
   if (result.length === children.length) return block;
 
-  const lastType = result[result.length - 1].type;
-  return { ...block, type: lastType, children: result };
+  // Preserve the block's declared result type. Merging `set+get → tee` keeps
+  // the same value flowing out of the block, so recomputing the type from the
+  // last child is wrong when that child is `unreachable` (a `br`/`return`
+  // tail) — overwriting a declared `i32` with `unreachable` makes the encoder
+  // emit a void blocktype and trips "expected N for fallthru, found 0".
+  return { ...block, children: result };
 }
