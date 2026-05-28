@@ -1081,6 +1081,16 @@ class WasmEncoder {
           w.writeU32(this.globalIndex.get(exp.value) ?? 0);
           break;
         }
+        case "tag": {
+          // EH proposal: export kind 0x04 = tag, payload is tag index.
+          // Without this case the switch fell through, writing the export
+          // name then NO kind/index bytes — corrupting every subsequent
+          // export. (The matching `case 0x04` was also missing in the
+          // parser, so tag exports never survived a round-trip.)
+          w.writeU8(0x04);
+          w.writeU32(this.tagIndex.get(exp.value) ?? 0);
+          break;
+        }
       }
     }
   }
@@ -1116,7 +1126,20 @@ class WasmEncoder {
     w.writeU32(this.mod.tags.length);
     for (const tag of this.mod.tags) {
       w.writeU8(0); // reserved attribute byte
-      w.writeU32(this.getTypeIndex(tag.params, []));
+      // When `mod.heapTypes` is non-empty the emitted type section iterates
+      // `mod.heapTypes` directly (see `encodeTypeSection`), so an index into
+      // it is the only correct reference. `getTypeIndex` looks up against
+      // the deduped `this.types` collection, whose ordering does NOT match
+      // `mod.heapTypes` when the input had extra (unused) type entries —
+      // pointing the tag at the wrong type slot. Imports and the function
+      // section already switch via this same condition; the tag section was
+      // the one site that didn't. (Surfaced by the wasmtk team's bug report
+      // as "tag's type-index re-pointed to a different entry in the type
+      // section after `RemoveUnusedModuleElements`".)
+      const idx = this.mod.heapTypes.length > 0
+        ? this.gcFuncTypeIndex(tag.params, [])
+        : this.getTypeIndex(tag.params, []);
+      w.writeU32(idx);
     }
   }
 

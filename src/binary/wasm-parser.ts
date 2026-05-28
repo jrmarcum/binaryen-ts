@@ -785,6 +785,18 @@ class WasmParser {
           this.builder.addExport(name, `$global${index}`, "global");
           break;
         }
+        case 0x04: { // tag (EH proposal)
+          // Tags are named `$tag${n}` consistently with `readTagSection`. Note
+          // that the export section is parsed BEFORE the tag section in normal
+          // wasm modules, so the actual `tagInfos[index]` may not yet exist;
+          // we use the canonical name regardless, matching what the tag-section
+          // reader will assign. Without this case, every `(export ... (tag ...))`
+          // was silently dropped, which broke wasic-emitted modules that
+          // export `__exn_tag` (and reproduced as "tag export stripped" in the
+          // wasmtk team's bug report against v1.2.2).
+          this.builder.addExport(name, `$tag${index}`, "tag");
+          break;
+        }
         default:
           break;
       }
@@ -1085,9 +1097,21 @@ class WasmParser {
           const resultType: Type = rts.length === 0 ? None : rts.length === 1 ? rts[0] : rts;
           if (frame.kind === "if" || frame.kind === "else") {
             const cond = frame.ifCondition!;
-            const thenBlock = frame.thenExprs ?? [];
-            const elseExprs = frame.exprs;
-            const thenExpr = thenBlock.length === 1 ? thenBlock[0] : makeBlock(thenBlock, null);
+            // Pivot on whether the `else` opcode (0x05) was seen for this frame:
+            //   * `"if"`   — no else; `frame.exprs` IS the then-arm body, and
+            //                there is no else arm.
+            //   * `"else"` — else seen; `frame.thenExprs` was snapshotted by
+            //                the else handler, and `frame.exprs` is the else-arm.
+            // The previous unified `thenBlock = frame.thenExprs ?? []` path
+            // silently put a single-arm `if`'s body in the ELSE arm (because
+            // `frame.thenExprs` only ever got assigned in the else handler), so
+            // a round-tripped `(if cond (then BODY))` ran BODY when cond was
+            // FALSE — the wasmtk team reported four real test failures driven
+            // by this on wasic-emitted single-arm ifs (break conditions, bounds
+            // checks, null guards).
+            const thenExprs = frame.kind === "if" ? frame.exprs : (frame.thenExprs ?? []);
+            const elseExprs = frame.kind === "if" ? [] : frame.exprs;
+            const thenExpr = thenExprs.length === 1 ? thenExprs[0] : makeBlock(thenExprs, null);
             const elseExpr = elseExprs.length > 0
               ? (elseExprs.length === 1 ? elseExprs[0] : makeBlock(elseExprs, null))
               : null;

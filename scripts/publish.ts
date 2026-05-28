@@ -43,6 +43,66 @@ async function run(cmd: string[]): Promise<void> {
   }
 }
 
+/**
+ * Refuse to publish when the working tree has uncommitted changes to any
+ * tracked file OTHER than `deno.json`.
+ *
+ * Why: the rest of this script only stages and commits `deno.json` (the
+ * version bump). Anything else dirty in the working tree gets silently left
+ * behind — the tag commit JSR ends up building from contains nothing but the
+ * version bump, so the "release" ships none of the actual code changes the
+ * user thought they were publishing. This is exactly how v1.2.3 went out
+ * with two full sessions of fixes still uncommitted; the wasmtk team then
+ * tested it and reported "the bugs you said you fixed are still there" —
+ * because they were, the published artifact was effectively v1.2.2 with a
+ * different version string.
+ *
+ * Untracked files (status `??`) do NOT block — new diagnostic scripts,
+ * scratch experiments, and in-progress files that aren't being released
+ * anyway should not stop a publish.
+ */
+async function guardCleanWorkingTree(): Promise<void> {
+  const result = await new Deno.Command("git", {
+    args: ["status", "--porcelain"],
+    stdout: "piped",
+    stderr: "inherit",
+  }).output();
+  if (result.code !== 0) {
+    console.error("git status --porcelain failed; refusing to publish.");
+    Deno.exit(1);
+  }
+  const text = new TextDecoder().decode(result.stdout);
+  const dirty: string[] = [];
+  for (const line of text.split("\n")) {
+    if (line.length === 0) continue;
+    const status = line.slice(0, 2);
+    const path = line.slice(3);
+    if (status === "??") continue; // untracked — fine, won't be in the release anyway
+    if (path === "deno.json") continue; // the one file we expect bump+publish to touch
+    dirty.push(`  ${status} ${path}`);
+  }
+  if (dirty.length > 0) {
+    console.error("✗ Refusing to publish: working tree has uncommitted changes");
+    console.error("  to tracked files other than deno.json.");
+    console.error("");
+    for (const d of dirty) console.error(d);
+    console.error("");
+    console.error("This script stages and commits ONLY deno.json. Those changes would be");
+    console.error("silently left behind — the tag commit JSR builds from would contain");
+    console.error("nothing but the version bump.");
+    console.error("");
+    console.error("Recovery:");
+    console.error("  git add -A             # stage everything (or selectively)");
+    console.error("  git commit -m '...'    # commit the real changes");
+    console.error("  deno task bump         # roll deno.json to the next version");
+    console.error("  deno task publish      # now safe");
+    console.error("");
+    Deno.exit(1);
+  }
+}
+
+await guardCleanWorkingTree();
+
 const version = await readCurrentVersion();
 const tag = `v${version}`;
 

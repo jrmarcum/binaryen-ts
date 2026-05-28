@@ -101,7 +101,7 @@ export interface WasmExport {
   /** The internal name of the exported entity. */
   value: string;
   /** Which kind of entity is being exported. */
-  kind: "function" | "global" | "table" | "memory";
+  kind: "function" | "global" | "table" | "memory" | "tag";
 }
 
 /**

@@ -423,3 +423,158 @@ Deno.test("regression: LocalCSE invalidates cache after a child that writes the 
   const run = inst.exports.run as (n: number) => number;
   assertEquals(run(5), 16);
 });
+
+Deno.test("regression: single-arm (if cond (then BODY)) round-trips without inverting the test", () => {
+  // (func (export "f") (param i32) (result i32)
+  //   (if (local.get 0)
+  //     (then (i32.store (i32.const 0) (i32.const 0xAA))))
+  //   (i32.load (i32.const 0)))
+  // Expected: f(0) = 0 (store skipped), f(1) = 0xAA (store fired).
+  //
+  // Before the fix, a single-arm `if` (no else opcode 0x05 seen) left
+  // `frame.kind === "if"` and `frame.thenExprs === []`; the end-of-frame
+  // handler then unified the two cases with `thenBlock = frame.thenExprs ?? []`
+  // — which put the BODY (accumulated in `frame.exprs`) in the ELSE arm. The
+  // round-tripped module evaluated the store when cond was FALSE — inverting
+  // every wasic-emitted break condition, bounds check, and null guard.
+  // (Reported by the wasmtk team as the root cause of 4 phase-11/12/13 test
+  // failures.)
+  const types = section(1, vec([[0x60, 0x01, I32, 0x01, I32]])); // (i32)->(i32)
+  const funcs = section(3, vec([[0x00]]));
+  const mems = section(5, vec([[0x00, 0x01]])); // 1 memory, no max, initial 1 page
+  const exportsSec = section(
+    7,
+    vec([
+      [0x06, 0x6d, 0x65, 0x6d, 0x6f, 0x72, 0x79, 0x02, 0x00], // "memory" -> mem 0
+      [0x01, 0x66, 0x00, 0x00], // "f" -> func 0
+    ]),
+  );
+  const body = [
+    0x00, // 0 local groups
+    0x20,
+    0x00, // local.get 0
+    0x04,
+    0x40, // if, blocktype void
+    0x41,
+    0x00, // i32.const 0   (store address)
+    0x41,
+    0xaa,
+    0x01, // i32.const 0xAA (170, signed LEB128)
+    0x36,
+    0x02,
+    0x00, // i32.store align=2 offset=0
+    0x0b, // end if (no else opcode — single-arm if)
+    0x41,
+    0x00, // i32.const 0
+    0x28,
+    0x02,
+    0x00, // i32.load align=2 offset=0
+    0x0b, // end func
+  ];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+
+  const orig = new Uint8Array([
+    ...MAGIC,
+    ...[types, funcs, mems, exportsSec, code].flat(),
+  ]);
+
+  // The round-tripped output must validate AND behave identically to the
+  // original on both cond=0 and cond=1.
+  const reEncoded = encodeWasm(parseWasm(orig));
+
+  const origInst = new WebAssembly.Instance(new WebAssembly.Module(orig as BufferSource));
+  const rtInst = new WebAssembly.Instance(new WebAssembly.Module(reEncoded as BufferSource));
+  const origF = origInst.exports.f as (cond: number) => number;
+  const rtF = rtInst.exports.f as (cond: number) => number;
+
+  // Sanity-check the original behaves as the spec says.
+  assertEquals(origF(0), 0, "original: cond=0 should skip the store");
+  assertEquals(origF(1), 0xaa, "original: cond=1 should fire the store");
+
+  // The round-tripped module must agree on BOTH branches.
+  assertEquals(rtF(0), 0, "round-trip: cond=0 must skip the store (not invert)");
+  assertEquals(rtF(1), 0xaa, "round-trip: cond=1 must fire the store");
+});
+
+Deno.test("regression: tag exports + signature survive parse→encode and RemoveUnusedModuleElements", () => {
+  // Mirrors the wasmtk team's bug report: an EH tag exported by name, alongside
+  // multiple type-section entries of varying arity, must round-trip with its
+  // export AND its `(param ...)` signature intact.
+  //
+  //   (module
+  //     (type $a (func (param i32) (result i32)))   ;; unused
+  //     (type $b (func (param f32) (result f64)))   ;; unused
+  //     (type $c (func (param i32 i32)))             ;; tag signature
+  //     (type $d (func))                              ;; "thrower" signature
+  //     (tag $exn (export "exn") (param i32 i32))
+  //     (func (export "thrower")
+  //       (i32.const 1) (i32.const 2) (throw $exn)))
+  //
+  // Before the fix:
+  //   * `readExportSection` had no `case 0x04` (tag) — the `(export "exn"
+  //     (tag $exn))` was silently dropped at parse time.
+  //   * `encodeExportSection` had no `case "tag"` — a programmatically-added
+  //     tag export would fall through the switch and corrupt the export
+  //     section bytestream.
+  const types = section(
+    1,
+    vec([
+      [0x60, 0x01, I32, 0x01, I32], // type 0 = $a: (i32) -> (i32)
+      [0x60, 0x01, 0x7d, 0x01, 0x7c], // type 1 = $b: (f32) -> (f64)
+      [0x60, 0x02, I32, I32, 0x00], // type 2 = $c: (i32 i32) -> ()
+      [0x60, 0x00, 0x00], // type 3 = $d: () -> ()
+    ]),
+  );
+  const funcs = section(3, vec([[0x03]])); // 1 func, type 3
+  const exportsSec = section(
+    7,
+    vec([
+      [0x03, 0x65, 0x78, 0x6e, 0x04, 0x00], // "exn" -> tag 0  (kind 0x04)
+      [0x07, 0x74, 0x68, 0x72, 0x6f, 0x77, 0x65, 0x72, 0x00, 0x00], // "thrower" -> func 0
+    ]),
+  );
+  const tagSec = section(13, vec([[0x00, 0x02]])); // 1 tag, attr=0, typeIdx=2
+  const body = [
+    0x00, // 0 local groups
+    0x41,
+    0x01, // i32.const 1
+    0x41,
+    0x02, // i32.const 2
+    0x08,
+    0x00, // throw $exn (tag 0)
+    0x0b, // end func
+  ];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+
+  const bytes = new Uint8Array([
+    ...MAGIC,
+    ...[types, funcs, exportsSec, tagSec, code].flat(),
+  ]);
+
+  // After parse, both the tag with its signature AND the tag export must
+  // survive — the tag must still hold `(param i32 i32)`.
+  const mod = parseWasm(bytes);
+  assertEquals(mod.tags.length, 1);
+  assertEquals(mod.tags[0].params, [ValType.I32, ValType.I32]);
+  const tagExport = mod.exports.find((e) => e.kind === "tag");
+  assert(tagExport, "tag export must survive parse");
+  assertEquals(tagExport!.name, "exn");
+
+  // RemoveUnusedModuleElements must not damage the tag.
+  new PassRunner(mod, { optimizeLevel: 0, shrinkLevel: 1 })
+    .addPass(createPass("RemoveUnusedModuleElements"))
+    .run();
+  assertEquals(mod.tags.length, 1);
+  assertEquals(mod.tags[0].params, [ValType.I32, ValType.I32]);
+  const tagExport2 = mod.exports.find((e) => e.kind === "tag");
+  assert(tagExport2, "tag export must survive RemoveUnusedModuleElements");
+
+  // Encode → reparse must preserve everything.
+  const reEncoded = encodeWasm(mod);
+  const mod2 = parseWasm(reEncoded);
+  assertEquals(mod2.tags.length, 1);
+  assertEquals(mod2.tags[0].params, [ValType.I32, ValType.I32]);
+  const tagExport3 = mod2.exports.find((e) => e.kind === "tag");
+  assert(tagExport3, "tag export must survive encode→reparse");
+  assertEquals(tagExport3!.name, "exn");
+});
