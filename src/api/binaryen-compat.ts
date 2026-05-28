@@ -276,6 +276,7 @@ const _KIND_TO_ID: Record<WasmExport["kind"], number> = {
   table: ExternalTable,
   memory: ExternalMemory,
   global: ExternalGlobal,
+  tag: ExternalTag,
 };
 
 // ---------------------------------------------------------------------------

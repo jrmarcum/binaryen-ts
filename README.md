@@ -466,11 +466,23 @@ Local dry-run (verifies the manifest without publishing):
 deno task publish:dry
 ```
 
-> **Heads-up**: `deno task publish` is **not** for local use. It runs a guard that refuses to
-> execute unless `GITHUB_ACTIONS=true` is set, because a local `deno publish` would upload to JSR
-> without provenance and permanently flag that version. The refusal message prints the actual
-> current and next version from `deno.json`, so the suggested `git commit`/`git tag`/`git push`
-> commands are copy-pasteable.
+> **`deno task publish` is the local release driver** — it commits `deno.json`, tags `vX.Y.Z`, and
+> pushes commit + tag in a single atomic `git push origin main vX.Y.Z`. The tag push fires
+> `publish.yml`, which is the only place `deno publish` itself ever runs (the workflow's OIDC token
+> is what stamps the JSR provenance). The script will NEVER run `deno publish` from your machine.
+>
+> **Working-tree guard**: the script refuses to run if you have uncommitted changes to any tracked
+> file outside `deno.json`. Without this guard, the bump commit would silently ship to JSR
+> containing only the version bump — your actual source changes would be left behind in the working
+> tree. Untracked files (new diagnostic scripts, scratch work) don't block; only modified tracked
+> files do. Recovery is in the guard's error message: `git add -A && git commit -m '...'` first,
+> then `deno task bump` → `deno task publish`.
+>
+> **Watch the workflow after the tag push** — `publish.yml` runs `deno task check` and
+> `deno task test` before publishing. CI starts with no Deno type-check cache; locally those steps
+> can pass while a type change in file A leaves file B's cached PASS result reused even though B's
+> types now resolve differently. If you see a tag on the repo but no JSR version and no GitHub
+> Release, check the Actions tab first — the workflow may have died on type-check.
 
 ## External references
 
