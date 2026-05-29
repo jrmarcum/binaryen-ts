@@ -19,7 +19,7 @@ const rel = Deno.args[0];
 const orig = new Uint8Array(await fs.readFile(ROOT + rel));
 const re = encodeWasm(parseWasm(orig));
 try {
-  await WebAssembly.compile(re);
+  await WebAssembly.compile(re as BufferSource);
   console.log("OK compiles");
 } catch (e) {
   console.log("COMPILE ERR:", (e as Error).message);

@@ -66,7 +66,7 @@ function fibOf(bytes: Uint8Array, n: number): string {
           ? "f64"
           : "i32";
         imports[imp.module][imp.base] = new WebAssembly.Global({
-          value: t as "i32",
+          value: t as WebAssembly.ValueType,
           mutable: !!imp.mutable,
         }, t === "i64" ? 0n : 0);
       } else if (imp.kind === "table") {
@@ -78,7 +78,10 @@ function fibOf(bytes: Uint8Array, n: number): string {
       } else imports[imp.module][imp.base] = () => 0;
     }
     void stubImports;
-    const inst = new WebAssembly.Instance(new WebAssembly.Module(bytes as BufferSource), imports);
+    const inst = new WebAssembly.Instance(
+      new WebAssembly.Module(bytes as BufferSource),
+      imports as WebAssembly.Imports,
+    );
     const f = inst.exports["_fib"] as (n: number) => number;
     return String(f(n));
   } catch (e) {

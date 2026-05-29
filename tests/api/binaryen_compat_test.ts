@@ -11,6 +11,7 @@
 
 import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
 import * as binaryen from "../../src/api/binaryen-compat.ts";
+import { ValType } from "../../src/ir/types.ts";
 
 // ---------------------------------------------------------------------------
 // Fixture: same ADD_MODULE used by encoder tests — a tiny module with one
@@ -293,7 +294,7 @@ Deno.test("local.get with non-i32 type respects the type ID", () => {
   const mod = new binaryen.Module();
   const lg = mod.local.get(0, binaryen.f64);
   assertEquals(lg.kind, "local.get");
-  assertEquals(lg.type, "f64");
+  assertEquals(lg.type, ValType.F64);
 });
 
 Deno.test("control flow factories return well-formed nodes", () => {
