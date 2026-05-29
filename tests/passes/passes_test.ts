@@ -16,12 +16,15 @@ import {
   makeBinary,
   makeBlock,
   makeBreak,
+  makeCallIndirect,
   makeDrop,
   makeI32Const,
   makeI64Const,
   makeIf,
+  makeLoad,
   makeLocalGet,
   makeLocalSet,
+  makeLocalTee,
   makeLoop,
   makeNop,
   makeReturn,
@@ -35,6 +38,7 @@ import {
 import { ModuleBuilder, type WasmFunction, type WasmModule } from "../../src/ir/module.ts";
 import { None, ValType } from "../../src/ir/types.ts";
 import { listPasses, PassRunner } from "../../src/passes/index.ts";
+import { encodeWasm } from "../../src/encoder/index.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -947,6 +951,74 @@ Deno.test("DCE: recurses into Try body — dead tail after throw is trimmed", ()
   const tOut = outer.children[0] as { body: BlockExpr };
   assertEquals(tOut.body.children.length, 1);
   assertEquals(tOut.body.children[0].kind, ExpressionKind.Throw);
+});
+
+// ---------------------------------------------------------------------------
+// CoalesceLocals — call_indirect operand/index evaluation-order regression
+// ---------------------------------------------------------------------------
+
+Deno.test("CoalesceLocals: a local.tee in a call_indirect operand feeding the index is preserved", async () => {
+  // wasm evaluates call_indirect operands BEFORE the table index. The CFG used
+  // to visit the index (`target`) first, so a `local.tee $t` in an operand —
+  // whose written value is consumed only by the index expression of the SAME
+  // call — looked dead and got eliminated. The index then read a stale slot,
+  // dispatching to the wrong (wrong-signature) function: at runtime V8 throws
+  // "function signature mismatch". (Reported by the wasmtk team against
+  // binaryen-ts 1.2.7; surfaced on a wasic closure/struct-method dispatch.)
+  //
+  //   (func $dispatch (param $obj i32) (result i32) (local $t i32)
+  //     (call_indirect (type $sig)
+  //       (local.tee $t (local.get $obj))   ;; operand: $t = obj, arg = obj
+  //       (i32.load (local.get $t))))         ;; index  = mem[$t]
+  //
+  // If the tee's write is dropped, $t stays 0 and the index is always mem[0].
+  const SIG_P = [ValType.I32];
+  const SIG_R = [ValType.I32];
+  const b = new ModuleBuilder();
+  b.addMemory("mem0", 1);
+  // mem[0] = 1 (→ index 1 → $f1), mem[4] = 0 (→ index 0 → $f0)
+  b.addDataSegment("d", makeI32Const(0), new Uint8Array([1, 0, 0, 0, 0, 0, 0, 0]));
+  b.addFunction(
+    "$f0",
+    SIG_P,
+    SIG_R,
+    makeReturn(makeBinary(BinaryOp.AddI32, makeLocalGet(0, ValType.I32), makeI32Const(100))),
+  );
+  b.addFunction(
+    "$f1",
+    SIG_P,
+    SIG_R,
+    makeReturn(makeBinary(BinaryOp.MulI32, makeLocalGet(0, ValType.I32), makeI32Const(2))),
+  );
+  b.addTable("$t0", ValType.FuncRef, 2, 2);
+  b.addElement({ name: "$e", table: "$t0", offset: makeI32Const(0), data: ["$f0", "$f1"] });
+  // $dispatch: local 0 = param $obj, local 1 = $t
+  b.addFunction(
+    "$dispatch",
+    [ValType.I32],
+    [ValType.I32],
+    makeCallIndirect(
+      "$t0",
+      makeLoad(4, false, 0, 2, makeLocalGet(1, ValType.I32), ValType.I32), // index = mem[$t]
+      [makeLocalTee(1, makeLocalGet(0, ValType.I32), ValType.I32)], // arg = ($t := obj)
+      SIG_P,
+      SIG_R,
+    ),
+    [{ type: ValType.I32 }],
+  );
+  b.addExport("dispatch", "$dispatch", "function");
+  const mod = b.build();
+
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 2 }).add("CoalesceLocals").run();
+
+  const inst = new WebAssembly.Instance(
+    await WebAssembly.compile(encodeWasm(mod) as BufferSource),
+  );
+  const dispatch = inst.exports.dispatch as (obj: number) => number;
+  // obj=0 → $t=0 → index mem[0]=1 → $f1(0)=0
+  assertEquals(dispatch(0), 0);
+  // obj=4 → $t=4 → index mem[4]=0 → $f0(4)=104  (with the bug: $t=0 → $f1(4)=8)
+  assertEquals(dispatch(4), 104);
 });
 
 Deno.test("DCE: recurses into Try catchBodies — dead tail after throw is trimmed", () => {

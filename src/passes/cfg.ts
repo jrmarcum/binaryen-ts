@@ -323,6 +323,22 @@ class _CFGBuilder {
       }
 
       // -------------------------------------------------------------------
+      // call_indirect — wasm evaluation order is operands FIRST, then the
+      // table index (`target`) LAST. The generic `visitChildren` helper visits
+      // `target` before `operands` (fine for a pre-order walk, wrong for
+      // liveness): it would record the index's `local.get`s before the
+      // operands' `local.set`/`local.tee`s, so a `local.tee` in an operand
+      // whose value is consumed ONLY by the index expression looks dead. The
+      // dead-set elimination in CoalesceLocals then drops that write, and the
+      // index reads a stale slot → `call_indirect` dispatches to the wrong
+      // (wrong-signature) function at runtime. Visit in true execution order.
+      case ExpressionKind.CallIndirect: {
+        for (const op of e.operands) this.visit(op);
+        this.visit(e.target);
+        return;
+      }
+
+      // -------------------------------------------------------------------
       // Everything else — straight-line evaluation, walk children in order.
       // -------------------------------------------------------------------
       default:

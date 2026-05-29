@@ -6,10 +6,13 @@
  * @license MIT
  */
 
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 import { parseWat } from "../../src/parser/wat-parser.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
 import { ValType } from "../../src/ir/types.ts";
+import { encodeWasm } from "../../src/encoder/index.ts";
+import { PassRunner } from "../../src/passes/index.ts";
+import "../../src/passes/index.ts";
 
 Deno.test("parseWat — empty module", () => {
   const mod = parseWat("(module)");
@@ -121,6 +124,42 @@ Deno.test("parseWat — export", () => {
   assertEquals(mod.exports.length, 1);
   assertEquals(mod.exports[0].name, "add");
   assertEquals(mod.exports[0].value, "$add");
+  // The standalone export descriptor keyword is `func`, but the IR kind must be
+  // the canonical `function` (matching the binary parser / encoder / passes).
+  // Regression: it used to pass `"func"` straight through.
+  assertEquals(mod.exports[0].kind, "function");
+});
+
+Deno.test("parseWat — standalone (export ... (func)) encodes + survives Inlining", async () => {
+  // A standalone `(export "x" (func $f))` previously produced kind `"func"`,
+  // which (a) the encoder's export-section switch did not match — corrupting
+  // the export section — and (b) the inliner's `usedGlobally` check did not
+  // match, so it deleted the (apparently unreferenced) exported function.
+  // Reported indirectly via the wasmtk team's Inlining bug report (1.2.7).
+  const mod = parseWat(`(module
+    (func $add (param i32 i32) (result i32)
+      (i32.add (local.get 0) (local.get 1)))
+    (func $caller (param i32) (result i32)
+      (call $add (local.get 0) (i32.const 5)))
+    (export "caller" (func $caller)))`);
+
+  // (1) Encodes to a binary V8 accepts, and the export is callable.
+  const inst0 = new WebAssembly.Instance(
+    await WebAssembly.compile(encodeWasm(mod) as BufferSource),
+  );
+  assertEquals((inst0.exports.caller as (x: number) => number)(10), 15);
+
+  // (2) The exported function survives the Inlining pass (was wrongly removed
+  //     because its export kind didn't match the `usedGlobally` check).
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 2 }).add("Inlining").run();
+  assert(
+    mod.functions.some((f) => f.name === "$caller"),
+    "exported $caller must survive Inlining",
+  );
+  const inst1 = new WebAssembly.Instance(
+    await WebAssembly.compile(encodeWasm(mod) as BufferSource),
+  );
+  assertEquals((inst1.exports.caller as (x: number) => number)(10), 15);
 });
 
 Deno.test("parseWat — inline export", () => {

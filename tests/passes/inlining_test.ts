@@ -22,11 +22,12 @@ import {
   makeReturn,
   makeUnreachable,
 } from "../../src/ir/expressions.ts";
-import type { WasmFunction, WasmModule } from "../../src/ir/module.ts";
+import { ModuleBuilder, type WasmFunction, type WasmModule } from "../../src/ir/module.ts";
 import { None, ValType } from "../../src/ir/types.ts";
 import { listPasses, PassRunner } from "../../src/passes/index.ts";
 import { deepCopy, measureSize } from "../../src/passes/inlining.ts";
 import { walkExpression } from "../../src/ir/walk.ts";
+import { encodeWasm } from "../../src/encoder/index.ts";
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -1015,4 +1016,51 @@ Deno.test("split-inlining: Pattern B — multiple ifs become outlined helpers", 
     mod.functions.some((f) => f.name === "byn-split-outlined-B$two_branches$1"),
     "outlined-B$1 should exist",
   );
+});
+
+// ---------------------------------------------------------------------------
+// Regression: wrapper-block fallthru validity
+// ---------------------------------------------------------------------------
+
+Deno.test("Inlining: callee that returns via a block-wrapped `return` yields a valid wrapper fallthru", async () => {
+  // The callee delivers its result with an explicit `return` nested inside a
+  // block, so the callee body block is typed `unreachable` (it ends in an
+  // unconditional control transfer). Before the fix, inlining produced
+  //   (block (result i32)  ;; wrapper, expects i32
+  //     ...param sets...
+  //     (block             ;; callee body — encoded with a VOID blocktype
+  //       ... (br $wrapper <i32>)))   ;; only exit carries the value
+  // The encoder emits the `unreachable`-typed inner block with a void
+  // blocktype (`0x40`), so the wrapper's structural fallthrough is reachable
+  // with an empty stack — V8 rejects it with "expected 1 element on the stack
+  // for fallthru, found 0". The inliner now appends an explicit `unreachable`
+  // to the wrapper whenever the body does not fall through with the result
+  // value. (Reported by the wasmtk team against binaryen-ts 1.2.7.)
+  const b = new ModuleBuilder();
+  // body: (block (return (i32.add (local.get 0) (local.get 1))))  → typed unreachable
+  const calleeBody = makeBlock([
+    makeReturn(
+      makeBinary(BinaryOp.AddI32, makeLocalGet(0, ValType.I32), makeLocalGet(1, ValType.I32)),
+    ),
+  ]);
+  b.addFunction("$callee", [ValType.I32, ValType.I32], [ValType.I32], calleeBody, []);
+  b.addFunction(
+    "$caller",
+    [ValType.I32],
+    [ValType.I32],
+    makeCall("$callee", [makeLocalGet(0, ValType.I32), makeI32Const(5)], ValType.I32),
+    [],
+  );
+  b.addExport("caller", "$caller", "function");
+  const mod = b.build();
+
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 2 }).add("Inlining").run();
+
+  const caller = mod.functions.find((f) => f.name === "$caller")!;
+  assert(!hasCall(caller.body, "$callee"), "the call should have been inlined");
+
+  // Must validate AND compute correctly.
+  const compiled = await WebAssembly.compile(encodeWasm(mod) as BufferSource);
+  const inst = new WebAssembly.Instance(compiled);
+  assertEquals((inst.exports.caller as (x: number) => number)(10), 15);
 });

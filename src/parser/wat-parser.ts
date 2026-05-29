@@ -1572,11 +1572,20 @@ class WatModuleParser {
       this.err("export: expected name string", list.pos);
     if (children[1]?.kind !== "list") this.err("export: expected descriptor list", list.pos);
     const desc = children[1] as SList;
-    const head = listHead(desc) as WasmExport["kind"] | null;
+    const head = listHead(desc);
     const internalRef = atomText(desc.children[1]) ??
       this.err("export: expected internal name", list.pos);
     if (!head) this.err("export: missing kind", list.pos);
-    this.builder.addExport(exportName, internalRef, head);
+    // The WAT descriptor keyword is `func`, but the IR (and binary parser /
+    // encoder) use `function`. The other kinds (`memory` / `global` / `table` /
+    // `tag`) are spelled identically in both. Without this mapping a standalone
+    // `(export "x" (func $f))` produced kind `"func"`, which the encoder's
+    // export-section switch and the inliner's `usedGlobally` check both fail to
+    // match — corrupting the export section on encode and letting Inlining
+    // delete the (apparently unreferenced) exported function. The inline
+    // `(func (export "x") ...)` form was unaffected (it hard-codes "function").
+    const kind = (head === "func" ? "function" : head) as WasmExport["kind"];
+    this.builder.addExport(exportName, internalRef, kind);
   }
 
   // -------------------------------------------------------------------------

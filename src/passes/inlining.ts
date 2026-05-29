@@ -644,9 +644,13 @@ function substituteBody(
 
       case ExpressionKind.Return: {
         if (!rewriteReturns) return e;
+        // An unconditional `br` always transfers control, so its type is
+        // `unreachable` (mirrors `makeBreak` / upstream `Break::finalize`). The
+        // old code stamped it with the value's type (e.g. `i32`), which mistypes
+        // any block that infers its type from this `br` as its last child.
         const br: BreakExpr = {
           kind: ExpressionKind.Break,
-          type: e.value ? e.value.type : None,
+          type: Unreachable,
           name: returnLabel,
           condition: null,
           value: e.value ?? null,
@@ -724,6 +728,27 @@ function inlineCallSite(
 
   // 4. Result type of the wrapper block.
   const retType = callee.results.length > 0 ? callee.results[0] : None;
+
+  // 4a. Guarantee a valid wrapper fallthrough.
+  //
+  // When the callee delivers its result solely through `return` (rewritten to
+  // `br $label`) rather than by falling off the end, the wrapper's structural
+  // fallthrough produces no value — yet the wrapper is typed `retType` to
+  // receive the value the `br` carries. The validator does NOT treat the
+  // wrapper's end as unreachable just because the body's last expression is a
+  // block that exits via `br` to the wrapper: a block exiting to an *outer*
+  // label still leaves the outer block's fallthrough reachable. So it would
+  // reject the wrapper with "expected 1 element on the stack for fallthru,
+  // found 0". Append an explicit `unreachable` to mark that fallthrough dead.
+  //
+  // Safe because the only live exits from the wrapper are the `br $label`s the
+  // returns became — the post-body position is dynamically never reached. We
+  // append whenever the body does not fall through with `retType` (i.e. its
+  // type is `none` or `unreachable`); for a body that already ends unreachable
+  // the extra `unreachable` is redundant but harmless (Vacuum drops it).
+  if (retType !== None && substituted.type !== retType) {
+    children.push(makeUnreachable());
+  }
 
   // 5. If the original call was unreachable (an operand was unreachable),
   //    propagate unreachability: wrap in sequence ending with unreachable.
