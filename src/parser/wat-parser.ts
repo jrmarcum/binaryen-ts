@@ -63,7 +63,10 @@ import {
   makeI31Get,
   makeRefCast,
   makeRefEq,
+  makeRefFunc,
   makeRefI31,
+  makeRefIsNull,
+  makeRefNull,
   makeRefTest,
   makeRethrow,
   makeSIMDExtract,
@@ -774,6 +777,23 @@ class WatModuleParser {
       const left = this.parseExpr(args[0], ctx);
       const right = this.parseExpr(args[1], ctx);
       return makeRefEq(left, right);
+    }
+    if (head === "ref.null") {
+      // `(ref.null func)` / `(ref.null extern)` / `(ref.null $type)`. The MVP
+      // reference-types abbreviations map to the corresponding null ref type;
+      // a user heap-type reference is treated as a typed null (approximated to
+      // the abstract funcref family, matching the binary parser's coarse model).
+      const ht = atomText(args[0]) ?? "func";
+      const vt = ht === "extern" ? ValType.ExternRef : ValType.FuncRef;
+      return makeRefNull(vt);
+    }
+    if (head === "ref.func") {
+      const fnRef = atomText(args[0]) ?? this.err("ref.func: missing function", list.pos);
+      const fnName = fnRef.startsWith("$") ? fnRef : `$func${fnRef}`;
+      return makeRefFunc(fnName);
+    }
+    if (head === "ref.is_null") {
+      return makeRefIsNull(this.parseExpr(args[0], ctx));
     }
     if (head === "ref.i31") {
       const value = this.parseExpr(args[0], ctx);

@@ -423,3 +423,29 @@ function findSwitch(e: unknown): unknown {
   }
   return null;
 }
+
+Deno.test("parseWat — ref.null / ref.func / ref.is_null are parsed (not nop)", () => {
+  // Previously these fell through to the `nop` fallback, silently corrupting
+  // any reference-types instruction in the WAT front door. Regression guard.
+  const mod = parseWat(`(module
+    (table $t 1 funcref)
+    (func $g)
+    (func $f (result i32)
+      (table.set $t (i32.const 0) (ref.func $g))
+      (ref.is_null (ref.null func))))`);
+  const fn = mod.functions.find((f) => f.name === "$f")!;
+  const body = fn.body as { kind: ExpressionKind; children?: { kind: ExpressionKind }[] };
+  const children = body.children ?? [body as { kind: ExpressionKind }];
+
+  const tableSet = children[0] as {
+    kind: ExpressionKind;
+    value: { kind: ExpressionKind; func?: string };
+  };
+  assertEquals(tableSet.kind, ExpressionKind.TableSet);
+  assertEquals(tableSet.value.kind, ExpressionKind.RefFunc);
+  assertEquals(tableSet.value.func, "$g");
+
+  const isNull = children[1] as { kind: ExpressionKind; value: { kind: ExpressionKind } };
+  assertEquals(isNull.kind, ExpressionKind.RefIsNull);
+  assertEquals(isNull.value.kind, ExpressionKind.RefNull);
+});

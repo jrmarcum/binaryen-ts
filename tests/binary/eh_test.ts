@@ -19,6 +19,8 @@ import { encodeWasm } from "../../src/encoder/index.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
 import type { ThrowExpr, ThrowRefExpr, TryTableExpr } from "../../src/ir/expressions.ts";
 import { ValType } from "../../src/ir/types.ts";
+import { PassRunner } from "../../src/passes/pass.ts";
+import "../../src/passes/index.ts"; // side-effect: register all built-in passes
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -529,4 +531,109 @@ Deno.test("EH encoder: multi-instruction catch handler is not wrapped in a spuri
   // No `$exn` is ever thrown here (a wasm div-by-zero traps, it doesn't throw
   // the tag), so the happy path is all that executes: f(10, 2) = 5.
   assertEquals((inst.exports.f as (a: number, b: number) => number)(10, 2), 5);
+});
+
+// ---------------------------------------------------------------------------
+// Regression: a catch handler that BINDS the tag's params and then never uses
+// them must stay stack-valid after the full -Oz pipeline.
+// ---------------------------------------------------------------------------
+//
+// Equivalent to (the wasic-emitted shape, `nop; nop; local.set N` per param):
+//   (module (tag $exn (param i32 i32))
+//     (func (export "f")
+//       (local $a i32) (local $b i32)
+//       (try (do (throw $exn (i32.const 1) (i32.const 2)))
+//            (catch $exn (local.set $b) (local.set $a)))))   ;; both dead
+//
+// The binary parser used to seed the catch body with a single `Pop` and let
+// the binding `local.set`s consume the wasic `nop` placeholders instead, giving
+// `local.set(nop)`. CoalesceLocals then rewrote the dead binds to `drop(nop)`
+// and the second Vacuum deleted them — silently dropping the consumption of the
+// two values the `catch` pushed, so the function tail had 2 dangling stack
+// values and V8 rejected the optimized binary with "expected 0 elements on the
+// stack for fallthru, found 2". The parser now seeds one typed `Pop` per tag
+// param and pops the topmost *value* (skipping `none` statements), so each bind
+// carries a real `Pop` that survives optimization as `drop(pop)`. (Reported by
+// the wasmtk team against binaryen-ts 1.2.9 via tests/wasm_wasi/15_recover.)
+const CATCH_DEAD_BINDS_MODULE = new Uint8Array([
+  0,
+  97,
+  115,
+  109,
+  1,
+  0,
+  0,
+  0,
+  1,
+  9,
+  2,
+  96,
+  2,
+  127,
+  127,
+  0,
+  96,
+  0,
+  0,
+  3,
+  2,
+  1,
+  1,
+  13,
+  3,
+  1,
+  0,
+  0,
+  7,
+  5,
+  1,
+  1,
+  102,
+  0,
+  0,
+  10,
+  25,
+  1,
+  23,
+  1,
+  2,
+  127,
+  6,
+  64,
+  65,
+  1,
+  65,
+  2,
+  8,
+  0,
+  7,
+  0,
+  1,
+  1,
+  33,
+  1,
+  1,
+  1,
+  33,
+  0,
+  11,
+  11,
+]);
+
+Deno.test("EH optimize: catch binding dead tag params stays valid after full -Oz", async () => {
+  // The raw input is valid.
+  await WebAssembly.compile(CATCH_DEAD_BINDS_MODULE as BufferSource);
+
+  // Bare round-trip is valid.
+  await WebAssembly.compile(
+    encodeWasm(parseWasm(CATCH_DEAD_BINDS_MODULE)) as BufferSource,
+  );
+
+  // The full -Oz pipeline (CoalesceLocals makes the binds dead, Vacuum runs
+  // twice) must NOT strip the consumption of the catch's two pushed params.
+  const mod = parseWasm(CATCH_DEAD_BINDS_MODULE);
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 2 })
+    .addDefaultOptimizationPasses()
+    .run();
+  await WebAssembly.compile(encodeWasm(mod) as BufferSource);
 });

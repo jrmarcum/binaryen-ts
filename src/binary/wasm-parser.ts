@@ -1032,8 +1032,26 @@ class WasmParser {
     };
 
     const pop = (): Expression => {
-      const top = frames[frames.length - 1];
-      return top.exprs.pop() ?? makeNop();
+      const exprs = frames[frames.length - 1].exprs;
+      // The operand stack and the statement list share one array. A value
+      // consumer must pop the topmost *value-producing* expression — not a
+      // `none`-typed statement (nop / local.set / store / void call) that the
+      // producer happens to sit beneath. wasic emits exactly this shape in
+      // catch handlers: `catch $tag; nop; nop; local.set N` binds a tag param,
+      // where the `nop`s carry no stack value and the real value is the catch's
+      // `Pop`. Grabbing the `nop` as the operand produces `local.set(nop)`,
+      // which CoalesceLocals rewrites to `drop(nop)` and Vacuum then deletes —
+      // silently dropping the consumption of a real stack value and leaving the
+      // catch's pushed params dangling at the function tail. Skipping `none`
+      // statements (leaving them in place so their side effects are preserved)
+      // lets the consumer reach the real `Pop`. In well-formed straight-line
+      // code values are always on top, so this is a no-op there.
+      for (let i = exprs.length - 1; i >= 0; i--) {
+        if (exprs[i].type !== None) {
+          return exprs.splice(i, 1)[0];
+        }
+      }
+      return makeNop();
     };
 
     const popN = (n: number): Expression[] => {
@@ -1101,6 +1119,7 @@ class WasmParser {
         case 0x07: { // catch $tag (old EH)
           const tagIdx = r.readU32();
           const tagName = ctx.tagInfos[tagIdx]?.name ?? `$tag${tagIdx}`;
+          const tagParams = ctx.tagInfos[tagIdx]?.params ?? [];
           const frame = frames[frames.length - 1];
           if (frame.kind === "try" || frame.kind === "catch") {
             // save current body
@@ -1109,7 +1128,13 @@ class WasmParser {
             } else {
               frame.catchBodies!.push(frame.exprs);
             }
-            frame.exprs = [makePop(ValType.I32)]; // Pop pseudo-instruction as placeholder
+            // `catch $tag` pushes the tag's params onto the catch region's
+            // operand stack. Seed the new body with one `Pop` per param (in
+            // param order, so the last param is on top and consumed first) —
+            // one I32 Pop is wrong for multi-param or non-I32 tags, and the
+            // body's binding instructions (`local.set`, `drop`, ...) must each
+            // consume a real `Pop` so the consumption survives optimization.
+            frame.exprs = tagParams.map((p) => makePop(p));
             frame.catchTags!.push(tagName);
             frame.kind = "catch" as ControlFrameKind;
           }
