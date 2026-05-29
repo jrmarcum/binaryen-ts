@@ -375,3 +375,158 @@ Deno.test("EH encoder: throw_ref module round-trips through encode+parse", () =>
   assertEquals(trExpr !== undefined, true, "throw_ref not found after round-trip");
   assertEquals(trExpr!.exnref.kind, ExpressionKind.LocalGet);
 });
+
+// ---------------------------------------------------------------------------
+// Regression: a multi-instruction `(try ... (catch $tag ...))` handler must
+// NOT be re-emitted wrapped in a spurious `block`.
+// ---------------------------------------------------------------------------
+
+// `wabt` (reference-types + exceptions) output for:
+//   (module (memory 1) (tag $exn (param i32 i32))
+//     (func (export "f") (param $a i32) (param $b i32) (result i32)
+//       (local $result i32) (local $e_ptr i32) (local $e_len i32)
+//       (local.set $result (i32.const -1))
+//       (try (do (local.set $result (i32.div_s (local.get $a) (local.get $b))))
+//         (catch $exn (local.set $e_len) (local.set $e_ptr)
+//                     (i32.store (i32.const 0) (local.get $e_ptr))))
+//       (return (local.get $result))))
+//
+// The binary parser packs the multi-instruction catch handler into an
+// anonymous `Block` container. The encoder used to emit that via the normal
+// expression path, wrapping it in `block ... end` — but the `catch` opcode
+// pushes the tag's params onto the *catch region* stack, not the inner block's,
+// so the handler's `local.set`s ran on an empty stack and V8 rejected the
+// re-encoded binary with "not enough arguments on the stack for local.set".
+// The encoder now unpacks an anonymous-Block catch handler. (Reported by the
+// wasmtk team against binaryen-ts 1.2.8; surfaced on every wasic try/catch.)
+const TRY_CATCH_MODULE = new Uint8Array([
+  0x00,
+  0x61,
+  0x73,
+  0x6d,
+  0x01,
+  0x00,
+  0x00,
+  0x00,
+  0x01,
+  0x8c,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x02,
+  0x60,
+  0x02,
+  0x7f,
+  0x7f,
+  0x01,
+  0x7f,
+  0x60,
+  0x02,
+  0x7f,
+  0x7f,
+  0x00,
+  0x03,
+  0x82,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x01,
+  0x00,
+  0x05,
+  0x83,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x0d,
+  0x83,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x01,
+  0x00,
+  0x01,
+  0x07,
+  0x85,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x01,
+  0x01,
+  0x66,
+  0x00,
+  0x00,
+  0x0a,
+  0xae,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x01,
+  0xa8,
+  0x80,
+  0x80,
+  0x80,
+  0x00,
+  0x03,
+  0x01,
+  0x7f,
+  0x01,
+  0x7f,
+  0x01,
+  0x7f,
+  0x41,
+  0x7f,
+  0x21,
+  0x02,
+  0x06,
+  0x40,
+  0x20,
+  0x00,
+  0x20,
+  0x01,
+  0x6d,
+  0x21,
+  0x02,
+  0x07,
+  0x00,
+  0x01,
+  0x21,
+  0x04,
+  0x01,
+  0x21,
+  0x03,
+  0x41,
+  0x00,
+  0x20,
+  0x03,
+  0x36,
+  0x02,
+  0x00,
+  0x0b,
+  0x20,
+  0x02,
+  0x0f,
+  0x0b,
+]);
+
+Deno.test("EH encoder: multi-instruction catch handler is not wrapped in a spurious block", async () => {
+  // Sanity: the input itself is valid.
+  await WebAssembly.compile(TRY_CATCH_MODULE as BufferSource);
+
+  // The bare round-trip (no passes) must stay valid — the catch handler's
+  // tag-param consumers must remain in the catch frame, not a nested block.
+  const reencoded = encodeWasm(parseWasm(TRY_CATCH_MODULE));
+  const compiled = await WebAssembly.compile(reencoded as BufferSource);
+  const inst = new WebAssembly.Instance(compiled);
+  // No `$exn` is ever thrown here (a wasm div-by-zero traps, it doesn't throw
+  // the tag), so the happy path is all that executes: f(10, 2) = 5.
+  assertEquals((inst.exports.f as (a: number, b: number) => number)(10, 2), 5);
+});

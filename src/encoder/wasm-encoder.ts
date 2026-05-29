@@ -1202,6 +1202,28 @@ class WasmEncoder {
     w.writeU8(0x0b); // end
   }
 
+  /**
+   * Emits a `try`/`catch` handler body. The catch opcode pushes the tag's
+   * parameter values onto the operand stack of the *catch region*, where the
+   * handler's instructions consume them directly. The binary parser packs a
+   * multi-instruction handler into an anonymous (`name === null`) `Block`
+   * container — exactly like the function-body frame — so it must be UNPACKED
+   * here: emitting it via the normal `encodeExpr` path would wrap it in a
+   * `block ... end` whose (void) blocktype does not inherit the catch-pushed
+   * values, leaving the handler's `local.set` / `store` running on an empty
+   * stack ("not enough arguments on the stack"). A named block, or a
+   * single-expression handler, is emitted as-is.
+   */
+  private encodeCatchBody(w: BinaryWriter, body: Expression, labels: string[]): void {
+    if (body.kind === ExpressionKind.Block && (body as BlockExpr).name === null) {
+      for (const child of (body as BlockExpr).children) {
+        this.encodeExpr(w, child, labels);
+      }
+    } else {
+      this.encodeExpr(w, body, labels);
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Expression encoder (recursive, stack-machine order)
   // ---------------------------------------------------------------------------
@@ -1703,7 +1725,7 @@ class WasmEncoder {
               w.writeU8(0x07); // catch
               w.writeU32(this.tagIndex.get(e.catchTags[i]) ?? 0);
             }
-            this.encodeExpr(w, e.catchBodies[i], labels);
+            this.encodeCatchBody(w, e.catchBodies[i], labels);
           }
           labels.pop();
           w.writeU8(0x0b);
