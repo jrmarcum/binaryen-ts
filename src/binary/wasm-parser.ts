@@ -807,24 +807,69 @@ class WasmParser {
     const count = this.r.readU32();
     for (let i = 0; i < count; i++) {
       if (this.r.position >= end) break;
-      const segKind = this.r.readU32();
-      // Simplified: only handle kind=0 (active, funcref, implicit table 0)
-      if (segKind === 0) {
-        const offset = this.readInitExpr(ValType.I32);
-        const numElems = this.r.readU32();
-        const funcs: string[] = [];
-        for (let j = 0; j < numElems; j++) {
-          funcs.push(`$func${this.r.readU32()}`);
-        }
-        const tname = this.tableNames[0] ?? "$table0";
+      // Element-segment flags bitfield (reference-types proposal):
+      //   bit 0 — passive/declarative (clear ⇒ active)
+      //   bit 1 — when active: explicit table index; when bit 0 set: declarative
+      //   bit 2 — element list is a vec(expr) of reftype, not vec(funcidx)
+      // The eight resulting forms (0..7) differ in which fields are present:
+      //   tableidx?  offset(expr)?  elemkind/reftype-byte?  then the vector.
+      // The legacy active form (flag 0) and the active funcref-expr form
+      // (flag 4) are the only two with NO kind/reftype byte. wabt with
+      // reference-types enabled emits flag 4 for `(elem (offset) func $a $b)`,
+      // which the old `segKind === 0`-only reader silently dropped — leaving
+      // the table unpopulated so every `call_indirect` trapped.
+      const flags = this.r.readU32();
+      const passiveOrDeclarative = (flags & 1) !== 0;
+      const hasTableIndex = !passiveOrDeclarative && (flags & 2) !== 0;
+      const useExpressions = (flags & 4) !== 0;
+
+      let tableIdx = 0;
+      if (hasTableIndex) tableIdx = this.r.readU32();
+
+      let offset: Expression | null = null;
+      if (!passiveOrDeclarative) offset = this.readInitExpr(ValType.I32);
+
+      // A 1-byte elemkind (non-expr forms) or reftype (expr forms) precedes the
+      // vector for every flag except 0 and 4. We only support funcref tables,
+      // so the byte is read and discarded.
+      if (flags !== 0 && flags !== 4) this.r.readU8();
+
+      const numElems = this.r.readU32();
+      const funcs: string[] = [];
+      for (let j = 0; j < numElems; j++) {
+        const name = useExpressions ? this.readElemExprFuncName() : `$func${this.r.readU32()}`;
+        if (name !== null) funcs.push(name);
+      }
+
+      // Only active segments initialize a table in our IR/encoder model, which
+      // re-emits them in the flag-0 form. Passive/declarative segments are
+      // parsed to stay byte-aligned but not materialized (table.init / the
+      // declarative ref.func forward-declaration path are not yet supported).
+      if (!passiveOrDeclarative) {
+        const tname = this.tableNames[tableIdx] ?? this.tableNames[0] ?? "$table0";
         const seg: ElementSegment = { name: `$elem${i}`, table: tname, offset, data: funcs };
         this.builder.addElement(seg);
-      } else {
-        // Skip unknown element segment kinds
-        this.r.seek(end);
-        break;
       }
     }
+  }
+
+  /**
+   * Read one element-list expression (flag-4/5/6/7 forms) and return the
+   * referenced function name, or `null` for `ref.null` (which our `string[]`
+   * element model cannot represent and so omits).
+   */
+  private readElemExprFuncName(): string | null {
+    const opcode = this.r.readU8();
+    let name: string | null = null;
+    if (opcode === 0xd2) {
+      // ref.func <funcidx>
+      name = `$func${this.r.readU32()}`;
+    } else if (opcode === 0xd0) {
+      // ref.null <heaptype>
+      this.r.readU8();
+    }
+    this.r.readU8(); // 0x0b end
+    return name;
   }
 
   private readCodeSection(): void {
