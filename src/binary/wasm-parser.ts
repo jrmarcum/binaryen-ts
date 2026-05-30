@@ -1060,6 +1060,24 @@ class WasmParser {
       return result;
     };
 
+    // Push a call that may return multiple (tuple) results. The binary pushes
+    // N values onto the operand stack, but the IR models the call as a single
+    // node — so for N > 1 results each of the OTHER N-1 values needs its own
+    // value-typed representative or the consumers that pop them (a `local.set`
+    // per result, in the wasic spill pattern) grab a `nop`/void statement
+    // instead. That mirrors the catch-param defect (WT-2h): `local.set(nop)`
+    // becomes `drop(nop)` under CoalesceLocals and Vacuum then deletes the
+    // consumption, dangling the value at the function tail. Seed N-1 typed
+    // `Pop`s BELOW the call node (so the call — which carries the operands and
+    // must encode first — is consumed first, emitting the actual `call`
+    // opcode; each later consumer then pops a `Pop`, which encodes to nothing
+    // and survives optimization as `drop(pop)`). `results[i]` types the Pop
+    // for the value the i-th later consumer pops.
+    const pushMultiValueCall = (call: Expression, results: ValType[]): void => {
+      for (let i = 0; i < results.length - 1; i++) push(makePop(results[i]));
+      push(call);
+    };
+
     decode: while (!r.eof) {
       const op = r.readU8();
       switch (op) {
@@ -1285,7 +1303,7 @@ class WasmParser {
             : cft.results.length === 1
             ? cft.results[0]
             : cft.results;
-          push(makeCall(`$func${fidx}`, operands, resultType));
+          pushMultiValueCall(makeCall(`$func${fidx}`, operands, resultType), cft.results);
           break;
         }
         case 0x11: { // call_indirect
@@ -1295,7 +1313,10 @@ class WasmParser {
           const target = pop();
           const operands = popN(cft.params.length);
           const tableName = ctx.tableNames[0] ?? "$table0";
-          push(makeCallIndirect(tableName, target, operands, cft.params, cft.results));
+          pushMultiValueCall(
+            makeCallIndirect(tableName, target, operands, cft.params, cft.results),
+            cft.results,
+          );
           break;
         }
         case 0x12: { // return_call (tail-call proposal)

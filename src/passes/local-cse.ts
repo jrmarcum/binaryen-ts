@@ -41,7 +41,7 @@ import {
 import type { Local, WasmFunction, WasmModule } from "../ir/module.ts";
 import { ValType } from "../ir/types.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
-import { mapExpression } from "../ir/walk.ts";
+import { mapExpression, walkExpression } from "../ir/walk.ts";
 
 const _VAL_TYPES = new Set<string>(Object.values(ValType) as string[]);
 
@@ -70,7 +70,10 @@ registerPass(LocalCSEPass);
 // ---------------------------------------------------------------------------
 
 function _cseFunction(fn: WasmFunction): Expression {
-  // We may need to add fresh locals; track the next available index
+  // We may need to add fresh locals; track the next available index.
+  // `fn.locals` is the full local vector INCLUDING params (the encoder slices
+  // `fn.locals.slice(fn.params.length)` to recover the declared-locals tail),
+  // so `fn.locals.length` is already the next free absolute index.
   const state: CSEState = {
     nextLocal: fn.locals.length,
     newLocals: [],
@@ -234,28 +237,37 @@ function _countKeys(expr: Expression, counts: Map<string, number>): void {
 // ---------------------------------------------------------------------------
 
 function _invalidate(expr: Expression, cache: Map<string, number>): void {
-  // Check if this expression writes locals or globals, or calls functions
-  switch (expr.kind) {
-    case ExpressionKind.LocalSet:
-    case ExpressionKind.LocalTee:
-      // Evict all entries that depend on this local
-      for (const key of [...cache.keys()]) {
-        if (key.includes(`lg:${expr.index}`)) cache.delete(key);
-      }
-      break;
-    case ExpressionKind.GlobalSet:
-    case ExpressionKind.Call:
-    case ExpressionKind.CallIndirect:
-    case ExpressionKind.Store:
-    case ExpressionKind.MemoryGrow:
-    case ExpressionKind.MemoryCopy:
-    case ExpressionKind.MemoryFill:
-      // Conservative: evict everything
-      cache.clear();
-      break;
-    default:
-      break;
-  }
+  // Walk the WHOLE child subtree, not just its top-level node: a block child
+  // such as `(if cond (then (local.set 1 ...)))` writes local 1 from inside a
+  // nested control node, and that write must still evict any cached
+  // `local.get 1` entry — otherwise a later sibling `local.set 3 (local.get 1)`
+  // is wrongly rewritten to read the entry's stale (pre-write) tee. (This is
+  // what mis-formatted negative integers in wasic's itoa: the `-` sign's buffer
+  // advance happened inside an `if`, so the post-`if` pointer read was
+  // substituted with the entry-time pointer and the sign was overwritten.)
+  walkExpression(expr, (e) => {
+    switch (e.kind) {
+      case ExpressionKind.LocalSet:
+      case ExpressionKind.LocalTee:
+        // Evict all entries that depend on this local.
+        for (const key of [...cache.keys()]) {
+          if (key.includes(`lg:${e.index}`)) cache.delete(key);
+        }
+        break;
+      case ExpressionKind.GlobalSet:
+      case ExpressionKind.Call:
+      case ExpressionKind.CallIndirect:
+      case ExpressionKind.Store:
+      case ExpressionKind.MemoryGrow:
+      case ExpressionKind.MemoryCopy:
+      case ExpressionKind.MemoryFill:
+        // Conservative: evict everything.
+        cache.clear();
+        break;
+      default:
+        break;
+    }
+  });
 }
 
 // ---------------------------------------------------------------------------

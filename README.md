@@ -416,7 +416,26 @@ latent WAT-parser gap: `(ref.null …)` / `(ref.func …)` / `(ref.is_null …)`
 silently became `nop`; added the three handlers
 ([src/parser/wat-parser.ts](src/parser/wat-parser.ts)). 2 new regression tests
 (catch-binds-dead-params through full `-Oz`, verified to fail without the fix; `ref.*`
-parse-not-nop); 302/302 passing. |
+parse-not-nop); 302/302 passing. | | — | ✅ Done | Round-6 wasmtk integration bug fixes — the
+Round-5 fix was incomplete (two more fixtures hit the same dangling-stack fallthru), and chasing it
+uncovered a second, behavioral miscompile. **Bug 1 — multi-value (tuple) call returns**
+([src/binary/wasm-parser.ts](src/binary/wasm-parser.ts)): a `call` whose function type returns more
+than one result is a single IR node, but the binary consumes the N stack values with N separate
+instructions (wasic spills tuple results as `call; local.set; local.set`). The decoder modelled only
+the first consumer; the rest popped a `nop`, which `CoalesceLocals` turned into `drop(nop)` and the
+second `Vacuum` deleted — dangling the extra results at the function tail ("expected 0 elements for
+fallthru, found N"). Same mechanism as Round-5, different source. Fixed by seeding N-1 typed `Pop`s
+alongside the call node so each result has a value-typed representative that survives optimization
+as `drop(pop)`. **Bug 2 — `LocalCSE` substituted a `local.get` across a write nested in an `if`**, a
+behavioral miscompile (valid wasm, wrong result) that was present before but unobservable because
+the pipeline previously produced invalid output. `_invalidate` inspected only each block child's
+top-level kind, so a `local.set` inside an `if` branch did not evict the cached `local.get` entry,
+and a later sibling read was rewritten to the stale entry-time value. In wasic's itoa this dropped
+the `-` sign of negative integers (`-1` printed as `1`); it is caught only by a differential
+behavioral-equivalence check, not by `WebAssembly.compile` validity. Fixed by walking the whole
+child subtree in `_invalidate`. 2 new tests (a real wasic module through full `-Oz` asserting
+validity + WASI behavioral equality; a focused `local.get`-not-substituted-across-`if`-write test),
+each verified to fail without its fix. 302 → 304 passing. |
 
 ## Contributing
 
