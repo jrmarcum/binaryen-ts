@@ -476,6 +476,16 @@ deno task ci
 `deno fmt` and `deno lint` are configured to skip the `upstream/` reference clone (formerly a git
 submodule, now gitignored) so local runs see the same file set CI does.
 
+The optimizer has a seeded **differential fuzzer** (`tests/passes/optimize_fuzz_test.ts`) that
+generates random `i32` functions, runs each through the full `-Oz` pipeline, and asserts the
+optimized output is both valid and behaviorally identical to the unoptimized build — bisecting to
+the first offending pass on any divergence. It runs as part of `deno task test` (deterministic,
+CI-safe) and can be cranked up for deep fuzzing:
+
+```sh
+FUZZ_ITERS=30000 deno test --allow-read --allow-env tests/passes/optimize_fuzz_test.ts
+```
+
 ## Publishing
 
 The package is published to [JSR](https://jsr.io/@jrmarcum/binaryen-ts) with
