@@ -304,12 +304,21 @@ function _rewriteExpr(
 
   // Not a CSE candidate at the top level; recurse into sub-expressions
   switch (expr.kind) {
-    case ExpressionKind.Binary:
-      return {
-        ...expr,
-        left: _rewriteExpr(expr.left, candidates, cache, state),
-        right: _rewriteExpr(expr.right, candidates, cache, state),
-      };
+    case ExpressionKind.Binary: {
+      // A binary evaluates `left` then `right`. If `left` writes a local
+      // (e.g. a nested `local.tee K`), any cached `local.get K` entry is stale
+      // for `right` — invalidate between the operands so a `local.get K` in
+      // `right` is NOT rewritten to read the entry-time value. `_invalidate`
+      // walks the ORIGINAL `left` (which still carries the real writes; the
+      // CSE-introduced tee only writes a fresh local). This is the
+      // within-expression analogue of the cross-sibling write the block-level
+      // invalidation already handles — without it, `monthFromDays`/`dayFromDays`
+      // in a `wasmmerge`-spliced module read a pre-mutation `era`/`yoe` value.
+      const left = _rewriteExpr(expr.left, candidates, cache, state);
+      _invalidate(expr.left, cache);
+      const right = _rewriteExpr(expr.right, candidates, cache, state);
+      return { ...expr, left, right };
+    }
     case ExpressionKind.Unary:
     case ExpressionKind.Drop:
     case ExpressionKind.LocalSet:

@@ -435,7 +435,21 @@ the `-` sign of negative integers (`-1` printed as `1`); it is caught only by a 
 behavioral-equivalence check, not by `WebAssembly.compile` validity. Fixed by walking the whole
 child subtree in `_invalidate`. 2 new tests (a real wasic module through full `-Oz` asserting
 validity + WASI behavioral equality; a focused `local.get`-not-substituted-across-`if`-write test),
-each verified to fail without its fix. 302 → 304 passing. |
+each verified to fail without its fix. 302 → 304 passing. | | — | ✅ Done | Round-7 — a third
+`LocalCSE` invalidation bug, root-caused from a downstream `wasmmerge` workaround. wasmtk had been
+shipping wabt's raw binary (skipping `-Oz`) on the bundle/merge path because the optimizer
+miscompiled the doubly-merged module — already-optimized library code spliced back into the driver —
+making a Date library's `monthFromDays`/`dayFromDays` return garbage. Reproduced from the merged
+WAT: assembled with wabt, run through `optimize()`, the result is valid wasm but prints nothing
+where the raw build prints the full date report; bisected to `LocalCSE` and the exact two functions
+named in the workaround. Round-6 made the block-level invalidation recurse, which catches a write in
+a prior sibling statement — but `_rewriteExpr` walks a single expression tree and substituted cached
+`local.get`s without invalidating mid-tree, so for `add(LEFT, RIGHT)` where `LEFT` mutates a local
+(a nested `local.tee`) that `RIGHT` re-reads, the read was rewritten to the pre-mutation value.
+Fixed by invalidating the cache on `LEFT` before rewriting `RIGHT` in the binary case. 1 new focused
+IR test (`f(x) = (x + (local0:=99)) + local0`, `f(5)===203`, verified to return `109` without the
+fix). Unblocks wasmtk dropping its `skipBinaryenOpt` workaround so merged modules can be `-Oz`'d
+again. 304 → 305 passing. |
 
 ## Contributing
 

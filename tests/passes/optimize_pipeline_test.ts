@@ -44,6 +44,7 @@ import {
   makeIf,
   makeLocalGet,
   makeLocalSet,
+  makeLocalTee,
   makeReturn,
 } from "../../src/ir/expressions.ts";
 import { ModuleBuilder } from "../../src/ir/module.ts";
@@ -163,4 +164,44 @@ Deno.test("LocalCSE: a local.get is not substituted across a write nested in an 
   const f = instance.exports.f as (cond: number, x: number) => number;
   assertEquals(f(1, 5), 105, "post-if read of local 1 must see the modified value");
   assertEquals(f(0, 5), 5, "when the if does not run, local 1 is unchanged");
+});
+
+Deno.test("LocalCSE: a local.get is not substituted across a write nested earlier in the SAME expression", async () => {
+  // f(x) = (x + (local0 := 99)) + local0
+  //   left operand of the outer add:  (x) + (tee0 99)   -> evaluates x, then sets local0=99
+  //   right operand:                  local0            -> must read the MODIFIED local0 (99)
+  // `local.get 0` appears twice, so LocalCSE tees the first occurrence. The
+  // `local.tee 0` that mutates local0 is nested in the outer add's LEFT operand
+  // (evaluated first); the RIGHT operand's `local.get 0` must NOT be rewritten
+  // to the entry-time tee. Correct: (5+99)+99 = 203. Buggy: (5+99)+5 = 109.
+  // This is the within-expression analogue of the cross-`if` bug above — it
+  // miscompiled `monthFromDays`/`dayFromDays` in wasmmerge-spliced modules.
+  const mod = new ModuleBuilder()
+    .addFunction(
+      "f",
+      [ValType.I32],
+      [ValType.I32],
+      makeBlock([
+        makeReturn(
+          makeBinary(
+            BinaryOp.AddI32,
+            makeBinary(
+              BinaryOp.AddI32,
+              makeLocalGet(0, ValType.I32),
+              makeLocalTee(0, makeI32Const(99), ValType.I32),
+            ),
+            makeLocalGet(0, ValType.I32),
+          ),
+        ),
+      ], null),
+      [],
+    )
+    .addExport("f", "f")
+    .build();
+
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 2 }).add("LocalCSE").run();
+
+  const { instance } = await WebAssembly.instantiate(encodeWasm(mod) as BufferSource);
+  const f = instance.exports.f as (x: number) => number;
+  assertEquals(f(5), 203, "the second local.get 0 must read the value written by the nested tee");
 });
