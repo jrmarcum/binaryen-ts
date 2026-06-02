@@ -2024,6 +2024,14 @@ function inferBinaryType(op: BinaryOp): ValType {
     op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
     op.startsWith("v128.")
   ) return ValType.V128;
+  // Scalar RELATIONAL ops (eq/ne/lt/gt/le/ge, with optional _s/_u) always yield i32
+  // regardless of operand width — `f64.le`, `i64.eq`, `f32.gt`, etc. all return i32.
+  // Without this, the operand-prefix fallthrough below mistyped them as the operand
+  // type (e.g. `f64.le` → f64). That wrong type then propagated through `makeIf`
+  // (which infers an `if`'s result type from its `then` arm), so a round-tripped
+  // `(if (result i32) (f64.cmp …) (then (f64.cmp …)) (else (i32.const 0)))` was
+  // re-emitted with block type `f64` and the module failed validation.
+  if (/\.(eq|ne|lt|gt|le|ge)(_[su])?$/.test(op)) return ValType.I32;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;
@@ -2041,6 +2049,9 @@ function inferUnaryType(op: UnaryOp): ValType {
     op.startsWith("i64x2.") || op.startsWith("f32x4.") || op.startsWith("f64x2.") ||
     op.startsWith("v128.")
   ) return ValType.V128;
+  // `eqz` is a relational unary — both `i32.eqz` and `i64.eqz` return i32, so the
+  // operand-prefix fallthrough below would mistype `i64.eqz` as i64.
+  if (op.endsWith(".eqz")) return ValType.I32;
   if (op.startsWith("i32")) return ValType.I32;
   if (op.startsWith("i64")) return ValType.I64;
   if (op.startsWith("f32")) return ValType.F32;

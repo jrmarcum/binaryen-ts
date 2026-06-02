@@ -578,3 +578,58 @@ Deno.test("regression: tag exports + signature survive parse→encode and Remove
   assert(tagExport3, "tag export must survive encode→reparse");
   assertEquals(tagExport3!.name, "exn");
 });
+
+// ---------------------------------------------------------------------------
+// Bug 4 — scalar relational ops (f64.le, i64.eq, …) must be typed i32
+// ---------------------------------------------------------------------------
+//
+// `inferBinaryType`/`inferUnaryType` typed ops by their operand-prefix, so the
+// relational ops `f64.le`/`f64.ge`/…, every `i64`/`f32` comparison, and
+// `i64.eqz` were mistyped as the operand type instead of their true result
+// type, i32. That wrong type propagated through `makeIf` (which infers an
+// `if`'s result type from its reachable arm), so a round-tripped
+// `(if (result i32) (f64.cmp …) (then (f64.cmp …)) (else (i32.const 0)))` was
+// re-emitted with block type `f64` and failed `WebAssembly.compile`. Reported
+// by wasmtk after it began emitting short-circuit `&&`/`||` as `(if (result i32))`
+// whose condition/arms are f64 comparisons.
+
+Deno.test("regression: scalar relational binary ops are typed i32, not operand type", () => {
+  const relational = [
+    BinaryOp.LeF64, BinaryOp.GeF64, BinaryOp.LtF64, BinaryOp.GtF64,
+    BinaryOp.EqF64, BinaryOp.NeF64,
+    BinaryOp.EqI64, BinaryOp.NeI64, BinaryOp.LtSI64, BinaryOp.GtSI64,
+  ];
+  for (const op of relational) {
+    const e = makeBinary(op, makeI32Const(0), makeI32Const(0));
+    assertEquals(e.type, ValType.I32, `${op} must yield i32`);
+  }
+  // An `if` whose then-arm is an f64 comparison must itself be typed i32.
+  const ifExpr = makeIf(
+    makeBinary(BinaryOp.GeF64, makeI32Const(0), makeI32Const(0)),
+    makeBinary(BinaryOp.LeF64, makeI32Const(0), makeI32Const(0)),
+    makeI32Const(0),
+  );
+  assertEquals(ifExpr.type, ValType.I32, "if with f64-comparison then-arm must be i32");
+});
+
+Deno.test("regression: (if (result i32)) with f64-comparison condition+arms round-trips valid", async () => {
+  const F64 = 0x7c;
+  // type 0: (func (param f64 f64 f64) (result i32))
+  const types = section(1, vec([[0x60, 0x03, F64, F64, F64, 0x01, I32]]));
+  const funcs = section(3, vec([[0x00]])); // one func of type 0
+  // body: return (if (result i32) (f64.ge l0 l1) (then (f64.le l0 l2)) (else (i32.const 0)))
+  const body = [
+    0x00, // 0 local groups
+    0x20, 0x00, 0x20, 0x01, 0x66, // local.get 0; local.get 1; f64.ge
+    0x04, I32, //                    if (result i32)
+    0x20, 0x00, 0x20, 0x02, 0x65, //   local.get 0; local.get 2; f64.le
+    0x05, //                         else
+    0x41, 0x00, //                     i32.const 0
+    0x0b, //                         end (if)
+    0x0f, //                         return
+    0x0b, //                         end (func)
+  ];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+  // Parse → encode → compile must succeed; the if must stay i32-typed.
+  await assembleAndValidate([types, funcs, code]);
+});
