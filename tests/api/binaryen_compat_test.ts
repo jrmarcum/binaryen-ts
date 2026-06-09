@@ -174,6 +174,26 @@ Deno.test("expandType accepts both packed and array inputs", () => {
   );
 });
 
+Deno.test("expandType(none) is an empty list (arity 0), not [none]", () => {
+  // Upstream `expandType` is arity-driven, so a void function's results expand
+  // to []. The previous `[typeId]` fallback returned [none], rendering one
+  // spurious result.
+  assertEquals(binaryen.expandType(binaryen.none), []);
+});
+
+Deno.test('getFunctionInfo reports module/base as "" for a defined function and includes type', () => {
+  const mod = binaryen.readBinary(ADD_MODULE);
+  const exp = binaryen.getExportInfo(mod.getExportByIndex(0));
+  const func = mod.getFunction(exp.value);
+  if (!func) throw new Error(`function ${exp.value} not found`);
+  const info = binaryen.getFunctionInfo(func);
+  // Upstream uses "" (UTF8ToString of an empty C string), not null.
+  assertEquals(info.module, "");
+  assertEquals(info.base, "");
+  // `type` is present (the packed result type — single i32 here), not undefined.
+  assertEquals(info.type, binaryen.i32);
+});
+
 // ---------------------------------------------------------------------------
 // setFeatures (informational)
 // ---------------------------------------------------------------------------

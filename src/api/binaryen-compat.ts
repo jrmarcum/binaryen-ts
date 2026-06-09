@@ -1437,10 +1437,23 @@ export function getExportInfo(exp: WasmExport): ExportInfo {
 export interface FunctionInfo {
   /** Internal function name. */
   name: string;
-  /** Import module name, or `null` for locally-defined functions. */
-  module: string | null;
-  /** Import base name, or `null` for locally-defined functions. */
-  base: string | null;
+  /**
+   * Import module name. Empty string `""` for locally-defined functions
+   * (matches upstream, which returns `UTF8ToString` of an empty C string — not
+   * `null`).
+   */
+  module: string;
+  /** Import base name. Empty string `""` for locally-defined functions. */
+  base: string;
+  /**
+   * Function "type". Upstream returns the signature heap-type ID from a native
+   * type interner; the facade has no such interner, so this is the packed
+   * RESULT type ({@link createType} of the results) as the closest
+   * facade-representable value. wasmtk uses {@link expandType} on `params` /
+   * `results` rather than this field. Do not rely on its exact numeric value
+   * matching upstream's.
+   */
+  type: number | number[];
   /** Parameter type IDs. Pass to {@link expandType} to flatten (identity here). */
   params: number[];
   /** Result type IDs. Pass to {@link expandType} to flatten. */
@@ -1452,17 +1465,24 @@ export interface FunctionInfo {
 }
 
 /**
- * Returns inspection info for a function handle. Upstream returns `params`
- * and `results` as packed tuple IDs; binaryen-ts returns them as arrays
- * already, which {@link expandType} handles transparently.
+ * Returns inspection info for a locally-defined function handle. Upstream
+ * returns `params` and `results` as packed tuple IDs; binaryen-ts returns them
+ * as arrays already, which {@link expandType} handles transparently.
+ *
+ * Note: this surfaces locally-DEFINED functions only (the handle from
+ * {@link Module.getFunction}). Imported functions live in a separate list and
+ * carry no `WasmFunction` handle, so their `module`/`base` are not reported
+ * here; `module`/`base` are therefore always `""` for any handle this accepts.
  */
 export function getFunctionInfo(func: WasmFunction): FunctionInfo {
+  const results = func.results.map(_valTypeToId);
   return {
     name: func.name,
-    module: null,
-    base: null,
+    module: "",
+    base: "",
+    type: createType(results),
     params: func.params.map(_valTypeToId),
-    results: func.results.map(_valTypeToId),
+    results,
     vars: func.locals.slice(func.params.length).map((l) => _valTypeToId(l.type)),
     body: func.body,
   };
@@ -1475,5 +1495,10 @@ export function getFunctionInfo(func: WasmFunction): FunctionInfo {
  * written against `npm:binaryen` work unchanged.
  */
 export function expandType(typeId: number | number[]): number[] {
-  return Array.isArray(typeId) ? typeId : [typeId];
+  if (Array.isArray(typeId)) return typeId;
+  // Upstream `expandType` is arity-driven: `none` has arity 0, so it expands to
+  // an EMPTY list (not `[none]`). This matters for `expandType(info.results)` on
+  // a void function — it must yield no result entries, not one bogus `none`.
+  if (typeId === none) return [];
+  return [typeId];
 }
