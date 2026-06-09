@@ -8,12 +8,18 @@
  * @license MIT
  */
 
-import { assertEquals, assertInstanceOf } from "@std/assert";
+import { assertEquals, assertInstanceOf, assertThrows } from "@std/assert";
 import { parseWasm } from "../../src/binary/index.ts";
-import { encodeWasm } from "../../src/encoder/index.ts";
+import { encodeWasm, WasmEncodeError } from "../../src/encoder/index.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
-import { ValType } from "../../src/ir/types.ts";
-import { BinaryOp, makeBinary, makeI32Const, makeLocalGet } from "../../src/ir/expressions.ts";
+import { None, ValType } from "../../src/ir/types.ts";
+import {
+  BinaryOp,
+  makeBinary,
+  makeCall,
+  makeI32Const,
+  makeLocalGet,
+} from "../../src/ir/expressions.ts";
 import { ModuleBuilder } from "../../src/ir/module.ts";
 
 // ---------------------------------------------------------------------------
@@ -266,6 +272,17 @@ Deno.test("encodeWasm: ModuleBuilder add function round-trips", () => {
   assertEquals(mod2.functions[0].params, [ValType.I32, ValType.I32]);
   assertEquals(mod2.functions[0].results, [ValType.I32]);
   assertEquals(mod2.exports[0].name, "add");
+});
+
+Deno.test("encodeWasm: unresolved call target throws instead of silently encoding index 0", () => {
+  // A name→index miss used to fall back to `?? 0`, encoding a dangling
+  // reference as `call 0` — a valid-but-wrong binary that passes
+  // WebAssembly.compile (this exact shape once made every imported-function
+  // call encode as index 0). The encoder now fails loudly on the miss.
+  const mod = new ModuleBuilder()
+    .addFunction("caller", [], [], makeCall("does_not_exist", [], None))
+    .build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "unresolved call target");
 });
 
 Deno.test("encodeWasm: memory section round-trips", () => {

@@ -9,7 +9,7 @@
 import { assert, assertEquals } from "@std/assert";
 import { parseWat } from "../../src/parser/wat-parser.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
-import { ValType } from "../../src/ir/types.ts";
+import { Unreachable, ValType } from "../../src/ir/types.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { PassRunner } from "../../src/passes/index.ts";
 import "../../src/passes/index.ts";
@@ -448,4 +448,49 @@ Deno.test("parseWat — ref.null / ref.func / ref.is_null are parsed (not nop)",
   const isNull = children[1] as { kind: ExpressionKind; value: { kind: ExpressionKind } };
   assertEquals(isNull.kind, ExpressionKind.RefIsNull);
   assertEquals(isNull.value.kind, ExpressionKind.RefNull);
+});
+
+// ---------------------------------------------------------------------------
+// Expression-typing regressions: the WAT parser used to hand-build `return`
+// and `if` literals instead of routing through the `makeReturn` / `makeIf`
+// factories, re-introducing two mistypings the factories were fixed for.
+// ---------------------------------------------------------------------------
+
+Deno.test("parseWat — folded (return x) is typed unreachable, not the value's type", () => {
+  // A `return` is a control transfer; its node type must be `unreachable` so a
+  // block ending in `(return x)` is not mistyped as `x`'s type. The parser
+  // previously set `type: value.type` here.
+  const mod = parseWat(`(module (func $f (result i32) (return (i32.const 5))))`);
+  const body = mod.functions[0].body as { kind: ExpressionKind; type: unknown };
+  assertEquals(body.kind, ExpressionKind.Return);
+  assertEquals(body.type, Unreachable);
+});
+
+Deno.test("parseWat — bare (return) atom is typed unreachable", () => {
+  const mod = parseWat(`(module (func $f (return)))`);
+  const body = mod.functions[0].body as { kind: ExpressionKind; type: unknown };
+  assertEquals(body.kind, ExpressionKind.Return);
+  assertEquals(body.type, Unreachable);
+});
+
+Deno.test("parseWat — if whose then-arm returns but else falls through survives -Oz (LUB typing)", async () => {
+  // The `then` arm ends in `(return ...)` (now correctly typed unreachable),
+  // but the `else` arm falls through, so the `if` itself is NOT unreachable and
+  // the `(i32.const 42)` after it is live. The old parser typed the `if` as
+  // `ifTrue.type` (unreachable) → DCE deleted the trailing constant and broke
+  // the function. Verified behaviorally through the full -Oz pipeline.
+  const mod = parseWat(`(module
+    (func $f (export "f") (param i32) (result i32)
+      (if (local.get 0)
+        (then (return (i32.const 1)))
+        (else (nop)))
+      (i32.const 42)))`);
+  new PassRunner(mod, { optimizeLevel: 2, shrinkLevel: 2 })
+    .addDefaultOptimizationPasses()
+    .run();
+  const bytes = encodeWasm(mod);
+  const instance = new WebAssembly.Instance(await WebAssembly.compile(bytes as BufferSource));
+  const f = instance.exports.f as (x: number) => number;
+  assertEquals(f(0), 42); // else taken, then fall through to 42
+  assertEquals(f(1), 1); // then returns early
 });

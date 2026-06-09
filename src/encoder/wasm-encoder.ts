@@ -756,6 +756,26 @@ class WasmEncoder {
     this.mod = mod;
   }
 
+  /**
+   * Resolves an entity name to its encoded index, throwing on a miss.
+   *
+   * A `map.get(name) ?? 0` fallback silently encodes index `0` when a reference
+   * cannot be resolved — exactly the failure mode that once made every
+   * imported-function call encode as `call 0` (a valid-but-wrong binary that
+   * still passes `WebAssembly.compile`). A dangling reference (a pass dropped
+   * the target but left the reference, a stripped tag is still exported, a
+   * global/table name never made it into the index map) is an IR bug; emitting
+   * index 0 hides it behind a miscompile. Fail loudly with the offending name
+   * instead.
+   */
+  private resolveRef(map: Map<string, number>, name: string, kind: string): number {
+    const idx = map.get(name);
+    if (idx === undefined) {
+      throw new WasmEncodeError(`unresolved ${kind} reference: "${name}"`);
+    }
+    return idx;
+  }
+
   encode(): Uint8Array {
     this.buildIndices();
     this.collectTypes();
@@ -1063,12 +1083,12 @@ class WasmEncoder {
       switch (exp.kind) {
         case "function": {
           w.writeU8(0x00);
-          w.writeU32(this.funcIndex.get(exp.value) ?? 0);
+          w.writeU32(this.resolveRef(this.funcIndex, exp.value, "exported function"));
           break;
         }
         case "table": {
           w.writeU8(0x01);
-          w.writeU32(this.tableIndex.get(exp.value) ?? 0);
+          w.writeU32(this.resolveRef(this.tableIndex, exp.value, "exported table"));
           break;
         }
         case "memory": {
@@ -1078,7 +1098,7 @@ class WasmEncoder {
         }
         case "global": {
           w.writeU8(0x03);
-          w.writeU32(this.globalIndex.get(exp.value) ?? 0);
+          w.writeU32(this.resolveRef(this.globalIndex, exp.value, "exported global"));
           break;
         }
         case "tag": {
@@ -1088,7 +1108,7 @@ class WasmEncoder {
           // export. (The matching `case 0x04` was also missing in the
           // parser, so tag exports never survived a round-trip.)
           w.writeU8(0x04);
-          w.writeU32(this.tagIndex.get(exp.value) ?? 0);
+          w.writeU32(this.resolveRef(this.tagIndex, exp.value, "exported tag"));
           break;
         }
       }
@@ -1107,7 +1127,7 @@ class WasmEncoder {
       }
       w.writeU32(seg.data.length);
       for (const fname of seg.data) {
-        w.writeU32(this.funcIndex.get(fname) ?? 0);
+        w.writeU32(this.resolveRef(this.funcIndex, fname, "element-segment function"));
       }
     }
   }
@@ -1362,14 +1382,14 @@ class WasmEncoder {
       case ExpressionKind.GlobalGet: {
         const e = expr as GlobalGetExpr;
         w.writeU8(0x23);
-        w.writeU32(this.globalIndex.get(e.name) ?? 0);
+        w.writeU32(this.resolveRef(this.globalIndex, e.name, "global.get"));
         break;
       }
       case ExpressionKind.GlobalSet: {
         const e = expr as GlobalSetExpr;
         this.encodeExpr(w, e.value, labels);
         w.writeU8(0x24);
-        w.writeU32(this.globalIndex.get(e.name) ?? 0);
+        w.writeU32(this.resolveRef(this.globalIndex, e.name, "global.set"));
         break;
       }
 
@@ -1377,7 +1397,7 @@ class WasmEncoder {
         const e = expr as TableGetExpr;
         this.encodeExpr(w, e.index, labels);
         w.writeU8(0x25);
-        w.writeU32(this.tableIndex.get(e.table) ?? 0);
+        w.writeU32(this.resolveRef(this.tableIndex, e.table, "table.get"));
         break;
       }
       case ExpressionKind.TableSet: {
@@ -1385,7 +1405,7 @@ class WasmEncoder {
         this.encodeExpr(w, e.index, labels);
         this.encodeExpr(w, e.value, labels);
         w.writeU8(0x26);
-        w.writeU32(this.tableIndex.get(e.table) ?? 0);
+        w.writeU32(this.resolveRef(this.tableIndex, e.table, "table.set"));
         break;
       }
 
@@ -1494,7 +1514,7 @@ class WasmEncoder {
         for (const op of e.operands) this.encodeExpr(w, op, labels);
         // 0x10 = call, 0x12 = return_call (tail-call proposal).
         w.writeU8(e.isReturn ? 0x12 : 0x10);
-        w.writeU32(this.funcIndex.get(e.target) ?? 0);
+        w.writeU32(this.resolveRef(this.funcIndex, e.target, "call target"));
         break;
       }
 
@@ -1508,7 +1528,7 @@ class WasmEncoder {
           ? this.gcFuncTypeIndex(e.params, e.results)
           : this.getTypeIndex(e.params, e.results);
         w.writeU32(ciIdx);
-        w.writeU32(this.tableIndex.get(e.table) ?? 0);
+        w.writeU32(this.resolveRef(this.tableIndex, e.table, "call_indirect table"));
         break;
       }
 
@@ -1527,7 +1547,7 @@ class WasmEncoder {
       case ExpressionKind.RefFunc: {
         const e = expr as RefFuncExpr;
         w.writeU8(0xd2);
-        w.writeU32(this.funcIndex.get(e.func) ?? 0);
+        w.writeU32(this.resolveRef(this.funcIndex, e.func, "ref.func"));
         break;
       }
 
@@ -1690,7 +1710,7 @@ class WasmEncoder {
         for (const c of e.catches) {
           if (c.tag !== null) {
             w.writeU8(c.isRef ? 0x01 : 0x00); // catch / catch_ref
-            w.writeU32(this.tagIndex.get(c.tag) ?? 0);
+            w.writeU32(this.resolveRef(this.tagIndex, c.tag, "try_table catch tag"));
           } else {
             w.writeU8(c.isRef ? 0x03 : 0x02); // catch_all / catch_all_ref
           }
@@ -1723,7 +1743,7 @@ class WasmEncoder {
               w.writeU8(0x19); // catch_all
             } else {
               w.writeU8(0x07); // catch
-              w.writeU32(this.tagIndex.get(e.catchTags[i]) ?? 0);
+              w.writeU32(this.resolveRef(this.tagIndex, e.catchTags[i], "catch tag"));
             }
             this.encodeCatchBody(w, e.catchBodies[i], labels);
           }
@@ -1737,7 +1757,7 @@ class WasmEncoder {
         const e = expr as ThrowExpr;
         for (const op of e.operands) this.encodeExpr(w, op, labels);
         w.writeU8(0x08);
-        w.writeU32(this.tagIndex.get(e.tag) ?? 0);
+        w.writeU32(this.resolveRef(this.tagIndex, e.tag, "throw tag"));
         break;
       }
 

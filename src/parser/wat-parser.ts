@@ -61,6 +61,7 @@ import {
   makeArrayNewFixed,
   makeArraySet,
   makeI31Get,
+  makeIf,
   makeRefCast,
   makeRefEq,
   makeRefFunc,
@@ -69,6 +70,7 @@ import {
   makeRefNull,
   makeRefTest,
   makeRethrow,
+  makeReturn,
   makeSIMDExtract,
   makeSIMDLoad,
   makeSIMDLoadStoreLane,
@@ -91,7 +93,6 @@ import {
   type MemoryGrowExpr,
   type MemorySizeExpr,
   type NopExpr,
-  type ReturnExpr,
   type SelectExpr,
   type SIMDExtractExpr,
   SIMDExtractOp,
@@ -546,7 +547,11 @@ class WatModuleParser {
       case "unreachable":
         return { kind: ExpressionKind.Unreachable, type: Unreachable } as UnreachableExpr;
       case "return":
-        return { kind: ExpressionKind.Return, type: None, value: null } as ReturnExpr;
+        // Route through makeReturn so `return` is typed `unreachable` (a control
+        // transfer never yields a value to its enclosing block). Building the
+        // literal with `type: None` here re-introduced the exact mistyping the
+        // factory was fixed for.
+        return makeReturn();
       case "memory.size":
         return { kind: ExpressionKind.MemorySize, type: ValType.I32 } as MemorySizeExpr;
     }
@@ -645,8 +650,9 @@ class WatModuleParser {
     }
     if (head === "return") {
       const value = args[0] ? this.parseExpr(args[0], ctx) : null;
-      const type: Type = value ? value.type : None;
-      return { kind: ExpressionKind.Return, type, value } as ReturnExpr;
+      // makeReturn types the node `unreachable` (not the value's type); see the
+      // bare-atom `return` case above for why this matters to block typing.
+      return makeReturn(value);
     }
     if (head === "drop") {
       const value = this.parseExpr(args[0], ctx);
@@ -1005,13 +1011,18 @@ class WatModuleParser {
       } as BlockExpr;
     }
 
-    return {
-      kind: ExpressionKind.If,
-      type: results[0] ?? (ifFalse ? ifTrue.type : None),
-      condition: condition!,
-      ifTrue,
-      ifFalse,
-    };
+    // Route through makeIf so the result type is the LUB of the reachable
+    // arm(s), matching upstream `If::finalize`: with an `else`, the type is the
+    // type of whichever arm is reachable (unreachable only when BOTH arms are).
+    // The old `ifFalse ? ifTrue.type : None` blindly took `ifTrue.type`, so an
+    // `if` whose `then` ends in `return`/`br` (now correctly typed `unreachable`)
+    // but whose `else` falls through was mistyped `unreachable`, making DCE
+    // delete live code after the `if`. An explicit `(result ...)` annotation,
+    // when present, is honored for the value-typed case; for valid wasm it
+    // equals the inferred LUB whenever neither arm is unreachable.
+    const node = makeIf(condition!, ifTrue, ifFalse);
+    if (results[0] !== undefined && node.type !== Unreachable) node.type = results[0];
+    return node;
   }
 
   private parseBr(args: SExpr[], conditional: boolean, ctx: FuncContext, pos: TextPos): BreakExpr {
@@ -1210,8 +1221,14 @@ class WatModuleParser {
     isReturn: boolean,
   ): CallIndirectExpr {
     let idx = 0;
-    // Optional table name
-    let table = "$0";
+    // Optional table name. With no explicit table, `call_indirect` references
+    // the module's default table (index 0) — so default to the first declared
+    // table's NAME (matching `_takeOptionalTableRef`), not a bare `"$0"`
+    // sentinel. The sentinel never matched a real table in the encoder's index
+    // map and only "worked" because the encoder fell back to index 0 on the
+    // miss; now that the encoder throws on an unresolved table ref, the default
+    // must resolve to the actual table.
+    let table = this.tableNames.keys().next().value ?? "$0";
     if (args[idx]?.kind === "atom" && !(args[idx] as Atom).token.raw.startsWith("(")) {
       const t = atomText(args[idx]);
       if (t) {
