@@ -282,6 +282,41 @@ Deno.test("Inlining: recursive call is not inlined", () => {
 // Exported callee is inlined but NOT removed
 // ---------------------------------------------------------------------------
 
+Deno.test("Inlining: single-caller callee with a $-prefixed name is removed (regression)", () => {
+  // Real parsers name functions `$funcN` (binary) / `$add` (WAT) — i.e. with a
+  // leading `$`. The dead-callee counter recovered the callee name from the
+  // `__inlined_func$<callee>` wrapper via `name.split("$")[1]`, which for a
+  // `$`-prefixed callee was the empty string, so the callee was never counted
+  // as inlined and never removed. The existing "...inlined and removed" test
+  // used a `$`-less name ("add") and so missed this. Here the names carry the
+  // leading `$` that production modules actually use.
+  const callee: WasmFunction = {
+    name: "$add",
+    params: [ValType.I32, ValType.I32],
+    results: [ValType.I32],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }],
+    body: makeBinary(BinaryOp.AddI32, makeLocalGet(0, ValType.I32), makeLocalGet(1, ValType.I32)),
+  };
+  const caller: WasmFunction = {
+    name: "$main",
+    params: [],
+    results: [ValType.I32],
+    locals: [],
+    body: makeReturn(makeCall("$add", [makeI32Const(3), makeI32Const(4)], ValType.I32)),
+  };
+
+  const mod = emptyModule();
+  mod.functions.push(caller, callee);
+  mod.exports.push({ name: "main", value: "$main", kind: "function" });
+
+  new PassRunner(mod).add("Inlining").run();
+
+  assertEquals(hasCall(caller.body, "$add"), false);
+  const names = mod.functions.map((f) => f.name);
+  assertEquals(names.includes("$add"), false); // removed (was retained before the fix)
+  assertEquals(names.includes("$main"), true);
+});
+
 Deno.test("Inlining: exported callee stays in module even after inlining", () => {
   const callee: WasmFunction = {
     name: "helper",

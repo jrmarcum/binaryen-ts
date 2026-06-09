@@ -1010,6 +1010,35 @@ Deno.test("PassRunner: DCE + Vacuum chain removes unreachable code", () => {
   assertEquals(body.kind, ExpressionKind.Unreachable);
 });
 
+Deno.test("Vacuum: single-child unnamed block keeps its declared type on a concrete-type mismatch", () => {
+  // A result-typed (i32) unnamed block whose only non-nop child is void-typed
+  // (a `local.set`). Collapsing to that child would present `none` where `i32`
+  // was declared, silently changing the type the block's parent relies on.
+  // Vacuum must keep the wrapper to preserve `block.type`. (Collapsing IS still
+  // done when the child matches the block type or is `unreachable` — see the
+  // DCE+Vacuum test above.)
+  const mod = emptyModule();
+  const block = {
+    kind: ExpressionKind.Block,
+    type: ValType.I32,
+    name: null,
+    children: [makeNop(), makeLocalSet(0, makeI32Const(0))],
+  } as unknown as Expression;
+  mod.functions.push({
+    name: "f",
+    params: [],
+    results: [ValType.I32],
+    locals: [{ type: ValType.I32 }],
+    body: block,
+  });
+
+  new PassRunner(mod).add("Vacuum").run();
+
+  // Old (unguarded) collapse returned the void `local.set`, making the body
+  // `none`; the guard keeps the i32 type.
+  assertEquals(mod.functions[0].body.type, ValType.I32);
+});
+
 // ---------------------------------------------------------------------------
 // Phase 8.1b — DCE recurses into Try / TryTable
 // ---------------------------------------------------------------------------

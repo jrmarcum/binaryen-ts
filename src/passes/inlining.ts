@@ -943,16 +943,31 @@ export class InliningPass implements Pass {
         }
       });
 
-      // Mark each callee that was inlined (so we skip inlining INTO them).
+      // Mark each callee that was inlined — both so dead-callee removal can tell
+      // when ALL of a callee's references were consumed, and so we skip inlining
+      // INTO a function that was itself inlined this iteration. The wrapper label
+      // is `__inlined_func$<callee.name>` with an optional `$<hint>` suffix. The
+      // old `name.split("$")[1]` mis-recovered the callee: `callee.name` itself
+      // starts with `$` (e.g. `$func5`), so `split("$")` was
+      // `["__inlined_func", "", "func5"]` and `[1]` was the empty string — so
+      // nothing was ever counted and fully-inlined functions were never removed.
+      // Recover the callee by matching the known inlineable names (which may
+      // themselves contain `$`, e.g. the `byn-split-*` helpers), preferring the
+      // longest match to disambiguate a name that is a prefix of another.
       const bodyBefore = fn.body;
       walkExpression(bodyBefore, (e) => {
         if (e.kind === ExpressionKind.Block && e.name?.startsWith("__inlined_func$")) {
-          // Extract callee name from label.
-          const parts = e.name.split("$");
-          if (parts.length >= 2) {
-            const calleeName = parts[1];
-            const prev = inlinedUses.get(calleeName) ?? 0;
-            inlinedUses.set(calleeName, prev + 1);
+          const rest = e.name.slice("__inlined_func$".length);
+          let calleeName: string | undefined;
+          for (const name of inlineable.keys()) {
+            if (rest === name || rest.startsWith(name + "$")) {
+              if (calleeName === undefined || name.length > calleeName.length) {
+                calleeName = name;
+              }
+            }
+          }
+          if (calleeName !== undefined) {
+            inlinedUses.set(calleeName, (inlinedUses.get(calleeName) ?? 0) + 1);
           }
         }
       });

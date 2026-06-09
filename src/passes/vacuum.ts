@@ -102,8 +102,21 @@ function _simplifyBlock(
   if (filtered.length === 0) return makeNop();
 
   // Unnamed single-child block → collapse (the name is only needed for
-  // branch targets; without a name there are no branches targeting it)
-  if (filtered.length === 1 && block.name === null) return filtered[0];
+  // branch targets; without a name there are no branches targeting it). Safe
+  // when the surviving child carries the block's declared result type, OR when
+  // it is `unreachable` (the bottom type — valid in any type position, and the
+  // block never falls through, so a bare `unreachable` stands in for it). The
+  // ONE unsafe case is a child of a *different concrete* type than the block's
+  // declared result (e.g. a result-typed block whose sole child is a void
+  // statement): collapsing would silently change the type the block presents to
+  // its parent. In that case fall through and keep the wrapper so `block.type`
+  // is preserved (as the multi-child path does below).
+  if (
+    filtered.length === 1 && block.name === null &&
+    (filtered[0].type === block.type || filtered[0].type === Unreachable)
+  ) {
+    return filtered[0];
+  }
 
   // No change
   if (filtered.length === block.children.length) return block;
