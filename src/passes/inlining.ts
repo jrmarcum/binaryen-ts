@@ -931,18 +931,6 @@ export class InliningPass implements Pass {
         fn.body = mapExpression(fn.body, optimizeNode);
       }
 
-      // Count how many uses of each callee were consumed.
-      walkExpression(fn.body, (e) => {
-        if (e.kind === ExpressionKind.Call) {
-          const prev = inlinedUses.get(e.target) ?? 0;
-          // We only increment for calls that are NOT inlineable (the inlined
-          // ones have already been replaced). Check the inlineable set.
-          if (!inlineable.has(e.target)) {
-            inlinedUses.set(e.target, prev);
-          }
-        }
-      });
-
       // Mark each callee that was inlined — both so dead-callee removal can tell
       // when ALL of a callee's references were consumed, and so we skip inlining
       // INTO a function that was itself inlined this iteration. The wrapper label

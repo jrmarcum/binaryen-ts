@@ -79,14 +79,6 @@ export class BinaryReader {
     return this.bytes[this.pos++];
   }
 
-  /** Read two bytes as a little-endian unsigned 16-bit integer. */
-  readU16(): number {
-    this.checkBounds(2);
-    const v = this.bytes[this.pos] | (this.bytes[this.pos + 1] << 8);
-    this.pos += 2;
-    return v >>> 0;
-  }
-
   /** Read four bytes as a little-endian fixed-width unsigned 32-bit integer. */
   readU32Fixed(): number {
     this.checkBounds(4);

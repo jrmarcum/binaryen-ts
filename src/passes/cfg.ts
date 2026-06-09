@@ -424,7 +424,7 @@ class _CFGBuilder {
  * @param extraLiveIn - Locals to seed as live-in to every block (rare —
  *   used for params under specific edge cases). Default empty.
  */
-export function computeLiveness(cfg: CFG, extraLiveIn: ReadonlySet<number> = new Set()): void {
+export function computeLiveness(cfg: CFG): void {
   // Initial: scan each block once with end = empty to get a starting `start`.
   // We then re-flow until convergence. A block's end is the union of its
   // successors' starts.
@@ -439,41 +439,29 @@ export function computeLiveness(cfg: CFG, extraLiveIn: ReadonlySet<number> = new
     const b = queue.shift()!;
     queued.delete(b.id);
 
-    // new_end = ⋃ successors' starts (plus extraLiveIn for entry block)
+    // new_end = ⋃ successors' starts
     const newEnd = new Set<number>();
     for (const s of b.out) {
       for (const x of s.start) newEnd.add(x);
-    }
-    if (b.out.length === 0) {
-      // Terminal block — extraLiveIn doesn't apply here (it's about params
-      // at function entry, not exits).
     }
 
     // new_start = scan actions backward
     const newStart = scanBackward(b.actions, newEnd);
 
-    // Apply extraLiveIn at the entry block
-    if (b === cfg.entry) {
-      for (const x of extraLiveIn) newStart.add(x);
-    }
-
     const startChanged = !setsEqual(newStart, b.start);
-    const endChanged = !setsEqual(newEnd, b.end);
 
     b.start = newStart;
     b.end = newEnd;
 
     if (startChanged) {
-      // Predecessors depend on our start; re-flow them.
+      // Predecessors depend on our start; re-flow them. (An `end` change that
+      // doesn't move `start` can't affect any predecessor, so no wake-up.)
       for (const p of b.in) {
         if (!queued.has(p.id)) {
           queue.push(p);
           queued.add(p.id);
         }
       }
-    } else if (endChanged) {
-      // end shifted but start didn't — no need to wake predecessors, but
-      // our own block needs no re-flow either.
     }
   }
 }
@@ -483,7 +471,7 @@ export function computeLiveness(cfg: CFG, extraLiveIn: ReadonlySet<number> = new
  * Scans actions from end to start, updating `live`: each `get` adds the index,
  * each `set` removes it. The input set is not mutated.
  */
-export function scanBackward(
+function scanBackward(
   actions: LivenessAction[],
   liveAtEnd: ReadonlySet<number>,
 ): Set<number> {

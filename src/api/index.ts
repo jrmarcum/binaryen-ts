@@ -169,11 +169,21 @@ export class Module {
       const wat = this.toWat();
       return BinaryenInterop.optimizeViaSubprocess(wat, [flags]);
     }
-    const runner = new PassRunner(this._inner, {
-      optimizeLevel: 2,
-      shrinkLevel: flags.includes("z") ? 2 : flags.includes("s") ? 1 : 0,
-    });
-    runner.addDefaultOptimizationPasses().run();
+    // Parse the optimization level out of `flags` (`-O0`..`-O4`, `-Os`, `-Oz`),
+    // matching `wasm-opt`'s convention. Previously `optimizeLevel` was hardcoded
+    // to 2, so `optimize("-O0")` / `"-O1"` / `"-O3"` all ran the level-2 pipeline.
+    const tok = /-O([0-4sz])/.exec(flags)?.[1];
+    const optimizeLevel: 0 | 1 | 2 | 3 | 4 = tok === "z" || tok === "s"
+      ? 2
+      : tok !== undefined
+      ? (Number(tok) as 0 | 1 | 2 | 3 | 4)
+      : 2;
+    const shrinkLevel: 0 | 1 | 2 = tok === "z" ? 2 : tok === "s" ? 1 : 0;
+    const runner = new PassRunner(this._inner, { optimizeLevel, shrinkLevel });
+    if (optimizeLevel > 0 || shrinkLevel > 0) {
+      runner.addDefaultOptimizationPasses();
+    }
+    runner.run();
     return Promise.resolve(this.toBinary());
   }
 

@@ -73,6 +73,9 @@ import { main as wasmOptMain } from "./src/tools/wasm-opt.ts";
 // CLI dispatch
 // ---------------------------------------------------------------------------
 
+/** Package version. Keep in sync with `deno.json` `version` (bumped on release). */
+const VERSION = "1.3.4";
+
 const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   "wasm-opt": wasmOptMain,
 };
@@ -86,7 +89,7 @@ async function main(): Promise<void> {
   }
 
   if (command === "--version" || command === "-v") {
-    console.log("binaryen-ts 0.1.0");
+    console.log(`binaryen-ts ${VERSION}`);
     return;
   }
 
@@ -101,7 +104,7 @@ async function main(): Promise<void> {
 }
 
 function printHelp(): void {
-  console.log(`binaryen-ts 0.1.0 — TypeScript port of Binaryen WebAssembly toolchain
+  console.log(`binaryen-ts ${VERSION} — TypeScript port of Binaryen WebAssembly toolchain
 
 USAGE:
   deno run -A jsr:@jrmarcum/binaryen-ts <command> [options]

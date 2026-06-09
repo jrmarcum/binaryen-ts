@@ -72,7 +72,7 @@ import {
   type UnaryExpr,
   UnaryOp,
 } from "../ir/expressions.ts";
-import type { DataSegment, WasmFunction, WasmModule, WasmTag } from "../ir/module.ts";
+import type { WasmFunction, WasmModule } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 import {
   AbstractHeapType,
@@ -1881,8 +1881,9 @@ class WasmEncoder {
         const e = expr as SIMDExtractExpr;
         this.encodeExpr(w, e.vec, labels);
         const sub = SIMD_EXTRACT_SUBOP[e.op];
+        if (sub === undefined) throw new WasmEncodeError(`unknown SIMD extract opcode: ${e.op}`);
         w.writeU8(0xfd);
-        w.writeU32(sub ?? 0x15);
+        w.writeU32(sub);
         w.writeU8(e.lane);
         break;
       }
@@ -1892,8 +1893,9 @@ class WasmEncoder {
         this.encodeExpr(w, e.vec, labels);
         this.encodeExpr(w, e.value, labels);
         const sub = SIMD_REPLACE_SUBOP[e.op];
+        if (sub === undefined) throw new WasmEncodeError(`unknown SIMD replace opcode: ${e.op}`);
         w.writeU8(0xfd);
-        w.writeU32(sub ?? 0x17);
+        w.writeU32(sub);
         w.writeU8(e.lane);
         break;
       }
@@ -1924,8 +1926,9 @@ class WasmEncoder {
         this.encodeExpr(w, e.vec, labels);
         this.encodeExpr(w, e.shift, labels);
         const sub = SIMD_SHIFT_SUBOP[e.op];
+        if (sub === undefined) throw new WasmEncodeError(`unknown SIMD shift opcode: ${e.op}`);
         w.writeU8(0xfd);
-        w.writeU32(sub ?? 0x6b);
+        w.writeU32(sub);
         break;
       }
 
@@ -1933,8 +1936,9 @@ class WasmEncoder {
         const e = expr as SIMDLoadExpr;
         this.encodeExpr(w, e.ptr, labels);
         const sub = SIMD_LOAD_SUBOP[e.op];
+        if (sub === undefined) throw new WasmEncodeError(`unknown SIMD load opcode: ${e.op}`);
         w.writeU8(0xfd);
-        w.writeU32(sub ?? 0x01);
+        w.writeU32(sub);
         w.writeU32(e.align);
         w.writeU32(e.offset);
         break;
@@ -1945,8 +1949,11 @@ class WasmEncoder {
         this.encodeExpr(w, e.ptr, labels);
         this.encodeExpr(w, e.vec, labels);
         const sub = SIMD_LANE_SUBOP[e.op];
+        if (sub === undefined) {
+          throw new WasmEncodeError(`unknown SIMD load/store-lane opcode: ${e.op}`);
+        }
         w.writeU8(0xfd);
-        w.writeU32(sub ?? 0x54);
+        w.writeU32(sub);
         w.writeU32(e.align);
         w.writeU32(e.offset);
         w.writeU8(e.lane);
@@ -2247,8 +2254,3 @@ export class WasmEncodeError extends Error {
 export function encodeWasm(mod: WasmModule): Uint8Array {
   return new WasmEncoder(mod).encode();
 }
-
-// Suppress unused-import lint for type-only imports used in module type
-type _DS = DataSegment;
-type _WT = WasmTag;
-void (undefined as unknown as _DS);
