@@ -504,3 +504,12 @@ Deno.test("parseWat — unrecognized instruction fails loudly instead of becomin
     "unsupported instruction: bogus.instruction",
   );
 });
+
+Deno.test("parseWat — hex float literal parses to its value, not NaN", () => {
+  // 0x1.8p+1 = (1 + 8/16) × 2^1 = 1.5 × 2 = 3. The old `Number("0x1.8p+1")`
+  // fallback returned NaN for every hex float.
+  const mod = parseWat(`(module (func $f (result f64) (f64.const 0x1.8p+1)))`);
+  const body = mod.functions[0].body as { kind: ExpressionKind; value: { f64: number } };
+  assertEquals(body.kind, ExpressionKind.Const);
+  assertEquals(body.value.f64, 3);
+});

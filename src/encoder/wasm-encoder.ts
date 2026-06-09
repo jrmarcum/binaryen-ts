@@ -1540,7 +1540,15 @@ class WasmEncoder {
       case ExpressionKind.Load: {
         const e = expr as LoadExpr;
         this.encodeExpr(w, e.ptr, labels);
-        w.writeU8(loadOpcode(e));
+        if ((e.type as ValType) === ValType.V128) {
+          // Plain `v128.load` is the two-byte SIMD form `0xFD 0x00`, not a
+          // single-byte scalar load opcode. The decoder models it as a generic
+          // 16-byte Load, so the encoder must re-emit the SIMD prefix.
+          w.writeU8(0xfd);
+          w.writeU32(0x00);
+        } else {
+          w.writeU8(loadOpcode(e));
+        }
         w.writeU32(e.align);
         w.writeU32(e.offset);
         break;
@@ -1550,7 +1558,13 @@ class WasmEncoder {
         const e = expr as StoreExpr;
         this.encodeExpr(w, e.ptr, labels);
         this.encodeExpr(w, e.value, labels);
-        w.writeU8(storeOpcode(e));
+        if ((e.value.type as ValType) === ValType.V128) {
+          // Plain `v128.store` is the two-byte SIMD form `0xFD 0x0b`.
+          w.writeU8(0xfd);
+          w.writeU32(0x0b);
+        } else {
+          w.writeU8(storeOpcode(e));
+        }
         w.writeU32(e.align);
         w.writeU32(e.offset);
         break;
@@ -1773,11 +1787,13 @@ class WasmEncoder {
         } else {
           w.writeU8(0xfb);
           w.writeU32(e.op === BrOnOp.Cast ? 0x18 : 0x19);
-          w.writeU8(e.castNullable ? 0x02 : 0x00);
+          // flags: bit 0 = source nullable, bit 1 = cast-target nullable.
+          w.writeU8((e.srcNullable ? 0x01 : 0x00) | (e.castNullable ? 0x02 : 0x00));
           w.writeU32(depth);
-          const ht = e.castType ?? AbstractHeapType.Any;
-          writeHeapType(w, ht);
-          writeHeapType(w, ht);
+          // Two distinct heap-type immediates: source ($T1) then target ($T2).
+          // Emitting the target twice corrupted the source immediate.
+          writeHeapType(w, e.srcType ?? AbstractHeapType.Any);
+          writeHeapType(w, e.castType ?? AbstractHeapType.Any);
         }
         break;
       }

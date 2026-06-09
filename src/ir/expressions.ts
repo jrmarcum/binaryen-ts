@@ -1150,10 +1150,14 @@ export interface BrOnExpr extends ExprBase {
   label: string;
   /** ref — see the {@link make} factory for semantics. */
   ref: Expression;
-  /** Target reference type for the cast. */
+  /** Target reference type for the cast (`br_on_cast`/`br_on_cast_fail`). */
   castType?: HeapType;
-  /** castNullable — see the {@link make} factory for semantics. */
+  /** Whether the cast TARGET type is nullable (flags bit 1). */
   castNullable?: boolean;
+  /** Source reference heap type (`br_on_cast`/`br_on_cast_fail` first immediate). */
+  srcType?: HeapType;
+  /** Whether the SOURCE type is nullable (flags bit 0). */
+  srcNullable?: boolean;
 }
 
 // ---------------------------------------------------------------------------
@@ -1885,8 +1889,20 @@ export function makeBrOn(
   resultType: Type,
   castType?: HeapType,
   castNullable?: boolean,
+  srcType?: HeapType,
+  srcNullable?: boolean,
 ): BrOnExpr {
-  return { kind: ExpressionKind.BrOn, type: resultType, op, label, ref, castType, castNullable };
+  return {
+    kind: ExpressionKind.BrOn,
+    type: resultType,
+    op,
+    label,
+    ref,
+    castType,
+    castNullable,
+    srcType,
+    srcNullable,
+  };
 }
 
 /** Creates a `try_table` expression. */

@@ -131,7 +131,21 @@ export async function wasmOpt(
   if (opts.hybridMode) {
     return await _hybridOptimize(inputBytes, isWat, opts);
   }
-  return _nativeOptimize(inputBytes, isWat, opts);
+  const out = _nativeOptimize(inputBytes, isWat, opts);
+  // `validate` (default true) runs the engine's structural validator over the
+  // optimized binary. Previously this option was parsed but never enforced — a
+  // documented behavior that didn't exist. WebAssembly.compile IS a validator,
+  // so it gives the option real meaning and a safety net against encoder bugs.
+  if (opts.validate) {
+    try {
+      await WebAssembly.compile(out as BufferSource);
+    } catch (e) {
+      throw new Error(
+        `optimized module failed validation: ${e instanceof Error ? e.message : String(e)}`,
+      );
+    }
+  }
+  return out;
 }
 
 // ---------------------------------------------------------------------------
@@ -355,7 +369,13 @@ export function parseArgs(args: string[]): ParsedArgs {
   for (let i = 0; i < args.length; i++) {
     const a = args[i];
     if (a === "-o" || a === "--output") {
-      result.options.output = args[++i];
+      const v = args[++i];
+      if (v === undefined || v.startsWith("-")) {
+        // Without this guard a trailing `-o` (or `-o -O2`) silently fell back
+        // to the default `output.wasm` instead of reporting the missing path.
+        throw new Error(`${a} requires an output path argument`);
+      }
+      result.options.output = v;
     } else if (a === "-O0") {
       result.options.optimizeLevel = 0;
     } else if (a === "-O1") {

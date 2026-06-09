@@ -364,6 +364,15 @@ function exprToWat(expr: Expression, _indent: number): string {
       return `(call $${expr.target}${args ? " " + args : ""})`;
     }
     default:
-      return `(;; TODO: ${expr.kind} ;)`;
+      // This serializer only covers a subset of expression kinds. Emitting a
+      // `(;; TODO ;)` comment placeholder silently produced WAT that is invalid
+      // or describes a DIFFERENT program — and `Module.optimize(..., hybridMode)`
+      // feeds this WAT straight to the `wasm-opt` subprocess, so the placeholder
+      // would silently miscompile. Fail loudly; use `Module.emitBinary()` /
+      // `encodeWasm` (the native path) for full-fidelity output.
+      throw new Error(
+        `serializeToWat: unsupported expression kind "${expr.kind}" ` +
+          `(the WAT serializer is partial; use the binary encoder for full output)`,
+      );
   }
 }

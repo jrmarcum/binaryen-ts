@@ -97,3 +97,22 @@ Deno.test("readU32 — 6 bytes is overflow", () => {
   const r = new BinaryReader(new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0x01]));
   assertThrows(() => r.readU32(), WasmBinaryError, "LEB128 u32 overflow");
 });
+
+// ---------------------------------------------------------------------------
+// Final-byte overflow bits (the orthogonal half of the >=35 / >=70 boundary):
+// the last LEB128 byte must not set value bits beyond the type width.
+// ---------------------------------------------------------------------------
+
+Deno.test("readU32 — 5th byte with bits beyond 32 is rejected (not masked by >>>0)", () => {
+  // 4 continuation bytes reach shift 28; the 5th byte 0x10 sets result bit 32.
+  const r = new BinaryReader(new Uint8Array([0xff, 0xff, 0xff, 0xff, 0x10]));
+  assertThrows(() => r.readU32(), WasmBinaryError, "overflow");
+});
+
+Deno.test("readU64 — 10th byte with bits beyond 64 is rejected", () => {
+  // 9 continuation bytes reach shift 63; the 10th byte 0x7f sets bits 64..69.
+  const r = new BinaryReader(
+    new Uint8Array([0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0xff, 0x7f]),
+  );
+  assertThrows(() => r.readU64(), WasmBinaryError, "overflow");
+});

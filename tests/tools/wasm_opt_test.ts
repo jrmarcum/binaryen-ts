@@ -12,7 +12,7 @@
  * @license MIT
  */
 
-import { assert, assertEquals, assertInstanceOf } from "@std/assert";
+import { assert, assertEquals, assertInstanceOf, assertThrows } from "@std/assert";
 
 import {
   BinaryOp,
@@ -366,4 +366,8 @@ Deno.test("wasmOpt: -O2 with RemoveUnusedNames strips block names", async () => 
     ExpressionKind.Const,
     "dead_label block should have been stripped by RemoveUnusedNames; body simplifies to i32.const",
   );
+});
+
+Deno.test("parseArgs: trailing -o with no value throws instead of defaulting to output.wasm", () => {
+  assertThrows(() => parseArgs(["in.wasm", "-o"]), Error, "requires an output path");
 });

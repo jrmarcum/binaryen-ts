@@ -483,3 +483,44 @@ Deno.test("SIMD round-trip: v128.load8x8_s", () => {
 Deno.test("SIMD round-trip: v128.load8_lane", () => {
   assertEquals(bytesEqual(roundTrip(SIMD_LANE_MODULE), SIMD_LANE_MODULE), true);
 });
+
+// ---------------------------------------------------------------------------
+// Plain v128.load (0xFD 0x00) and v128.store (0xFD 0x0b) round-trip.
+// These decode to GENERIC Load/Store nodes (type v128); the encoder must
+// re-emit the two-byte SIMD form. Once loadOpcode/storeOpcode started failing
+// loudly on v128, `encodeWasm` THREW here — these guard the fix.
+// ---------------------------------------------------------------------------
+
+const V128_LOAD_MODULE = module(
+  section(0x01, 0x01, 0x60, 0x01, 0x7f, 0x01, 0x7b), // (i32) -> v128
+  section(0x03, 0x01, 0x00),
+  section(0x05, 0x01, 0x00, 0x01), // memory(1)
+  section(0x0a, 0x01, 8, 0x00, 0x20, 0x00, 0xfd, 0x00, 0x04, 0x00, 0x0b),
+);
+
+Deno.test("SIMD: plain v128.load re-encodes to 0xFD 0x00 and round-trips/validates", async () => {
+  const mod = parseWasm(V128_LOAD_MODULE);
+  assertEquals(mod.functions[0].body.kind, ExpressionKind.Load);
+  assertEquals(mod.functions[0].body.type, ValType.V128);
+  const out = encodeWasm(mod); // previously threw "cannot encode load ... v128"
+  await WebAssembly.compile(out as BufferSource);
+  const reparsed = parseWasm(out);
+  assertEquals(reparsed.functions[0].body.kind, ExpressionKind.Load);
+  assertEquals(reparsed.functions[0].body.type, ValType.V128);
+});
+
+const V128_STORE_MODULE = module(
+  section(0x01, 0x01, 0x60, 0x02, 0x7f, 0x7b, 0x00), // (i32, v128) -> ()
+  section(0x03, 0x01, 0x00),
+  section(0x05, 0x01, 0x00, 0x01),
+  section(0x0a, 0x01, 10, 0x00, 0x20, 0x00, 0x20, 0x01, 0xfd, 0x0b, 0x04, 0x00, 0x0b),
+);
+
+Deno.test("SIMD: plain v128.store re-encodes to 0xFD 0x0b and round-trips/validates", async () => {
+  const mod = parseWasm(V128_STORE_MODULE);
+  assertEquals(mod.functions[0].body.kind, ExpressionKind.Store);
+  const out = encodeWasm(mod);
+  await WebAssembly.compile(out as BufferSource);
+  const reparsed = parseWasm(out);
+  assertEquals(reparsed.functions[0].body.kind, ExpressionKind.Store);
+});

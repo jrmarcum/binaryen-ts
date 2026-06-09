@@ -242,6 +242,7 @@ class Tokenizer {
   // -------------------------------------------------------------------------
 
   private readString(pos: TextPos): Token {
+    const start = this.pos; // absolute index of the opening `"`
     this.advance(); // consume opening `"`
     let text = "";
     while (this.pos < this.src.length && this.src[this.pos] !== '"') {
@@ -260,7 +261,10 @@ class Tokenizer {
       this.err("unterminated string literal");
     }
     this.advance(); // consume closing `"`
-    const raw = this.src.slice(pos.col - 1, this.pos); // approximate raw
+    // Slice from the absolute start index. `pos.col` is a 1-based column WITHIN
+    // the current line, not an index into `src`, so it only coincided with the
+    // real offset on line 1 — strings on later lines got a corrupted `raw`.
+    const raw = this.src.slice(start, this.pos);
     return { kind: TokenKind.String, raw, text, pos };
   }
 
@@ -523,23 +527,33 @@ function isIdChar(c: string): boolean {
 }
 
 /**
- * Parse a WAT hex float literal like `0x1.8p+1` or `-0x7fc00000p0`.
- * Falls back to `NaN` for unparseable forms.
+ * Parse a WAT hex float literal like `0x1.8p+1`, `0x1p4`, or `-0xa.bp-2`.
+ * Returns `NaN` for unparseable forms.
+ *
+ * JavaScript's `Number()` cannot parse hex floats (`Number("0x1.8p+1") === NaN`),
+ * so the mantissa (integer + fractional hex digits) and the binary `p` exponent
+ * are decoded by hand: value = sign · mantissa · 2^exponent.
  *
  * @internal
  */
 function parseHexFloat(raw: string): number {
-  // Strip underscores and try eval-style conversion
   const cleaned = raw.replace(/_/g, "");
-  // Check for nan bit patterns embedded as hex integers
-  const nanMatch = cleaned.match(/^[+-]?0x([0-9a-fA-F]+)$/);
-  if (nanMatch) {
-    const bits = parseInt(nanMatch[1], 16);
-    const buf = new ArrayBuffer(4);
-    new DataView(buf).setUint32(0, bits, false);
-    return new DataView(buf).getFloat32(0, false);
+  // [sign] 0x <int-hex> [ . <frac-hex> ] [ (p|P) [sign] <dec-exp> ]
+  const m = cleaned.match(
+    /^([+-]?)0x([0-9a-fA-F]*)(?:\.([0-9a-fA-F]*))?(?:[pP]([+-]?\d+))?$/,
+  );
+  if (!m) return NaN;
+  const [, signStr, intHex, fracHex = "", expStr] = m;
+  if (intHex === "" && fracHex === "") return NaN; // must have at least one digit
+  const sign = signStr === "-" ? -1 : 1;
+  const exp = expStr ? parseInt(expStr, 10) : 0;
+
+  let mantissa = 0;
+  for (const c of intHex) mantissa = mantissa * 16 + parseInt(c, 16);
+  let scale = 1;
+  for (const c of fracHex) {
+    scale /= 16;
+    mantissa += parseInt(c, 16) * scale;
   }
-  // Standard hex float — convert via string parsing
-  const result = Number(cleaned);
-  return isNaN(result) ? NaN : result;
+  return sign * mantissa * Math.pow(2, exp);
 }

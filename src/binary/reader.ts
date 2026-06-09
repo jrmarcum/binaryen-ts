@@ -140,6 +140,13 @@ export class BinaryReader {
     let shift = 0;
     while (true) {
       const byte = this.readU8();
+      // On the 5th byte (shift 28) only the low 4 value bits (result bits
+      // 28..31) are valid; bits 4..6 (0x70) would set result bits 32..34 and
+      // overflow u32. The `shift >= 35` guard below only catches a 6th byte, so
+      // a single junk 5th byte previously slipped through and `>>> 0` masked it.
+      if (shift === 28 && (byte & 0x70) !== 0) {
+        this.error("LEB128 u32 overflow (final byte sets bits beyond 32)");
+      }
       result |= (byte & 0x7f) << shift;
       if ((byte & 0x80) === 0) break;
       shift += 7;
@@ -154,6 +161,11 @@ export class BinaryReader {
     let shift = 0n;
     while (true) {
       const byte = BigInt(this.readU8());
+      // On the 10th byte (shift 63) only bit 0 (result bit 63) is valid; bits
+      // 1..6 (0x7e) would set result bits 64..69 and overflow u64.
+      if (shift === 63n && (byte & 0x7en) !== 0n) {
+        this.error("LEB128 u64 overflow (final byte sets bits beyond 64)");
+      }
       result |= (byte & 0x7fn) << shift;
       if ((byte & 0x80n) === 0n) break;
       shift += 7n;

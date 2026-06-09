@@ -1876,21 +1876,37 @@ function decodeGcPrefix(
     case 0x18: { // br_on_cast flags label $T1 $T2
       const flags = r.readU8();
       const depth = r.readU32();
-      const _ht1 = readHeapType(r);
-      const ht2 = readHeapType(r);
-      const nullable = (flags & 0x02) !== 0;
+      const ht1 = readHeapType(r); // source heap type
+      const ht2 = readHeapType(r); // target (cast) heap type
       const ref = pop();
-      push(makeBrOn(BrOnOp.Cast, resolveLabel(frames, depth), ref, ref.type, ht2, nullable));
+      push(makeBrOn(
+        BrOnOp.Cast,
+        resolveLabel(frames, depth),
+        ref,
+        ref.type,
+        ht2,
+        (flags & 0x02) !== 0,
+        ht1,
+        (flags & 0x01) !== 0,
+      ));
       break;
     }
     case 0x19: { // br_on_cast_fail flags label $T1 $T2
       const flags = r.readU8();
       const depth = r.readU32();
-      const _ht1 = readHeapType(r);
-      const ht2 = readHeapType(r);
-      const nullable = (flags & 0x02) !== 0;
+      const ht1 = readHeapType(r); // source heap type
+      const ht2 = readHeapType(r); // target (cast) heap type
       const ref = pop();
-      push(makeBrOn(BrOnOp.CastFail, resolveLabel(frames, depth), ref, ref.type, ht2, nullable));
+      push(makeBrOn(
+        BrOnOp.CastFail,
+        resolveLabel(frames, depth),
+        ref,
+        ref.type,
+        ht2,
+        (flags & 0x02) !== 0,
+        ht1,
+        (flags & 0x01) !== 0,
+      ));
       break;
     }
     case 0x1a:
