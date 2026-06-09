@@ -16,6 +16,7 @@ import {
   makeBinary,
   makeBlock,
   makeBreak,
+  makeCall,
   makeCallIndirect,
   makeDrop,
   makeI32Const,
@@ -27,6 +28,7 @@ import {
   makeLocalTee,
   makeLoop,
   makeNop,
+  makeRethrow,
   makeReturn,
   makeThrow,
   makeTry,
@@ -533,6 +535,102 @@ Deno.test("CoalesceLocals: single local with two value lifetimes doesn't blow up
   new PassRunner(mod).add("CoalesceLocals").run();
 
   assertEquals(mod.functions[0].locals.length, 1);
+});
+
+// ---------------------------------------------------------------------------
+// CoalesceLocals — exception-handling liveness (EH-aware CFG)
+// ---------------------------------------------------------------------------
+
+Deno.test("CoalesceLocals: throwing call in try body keeps the pre-try value live", () => {
+  // `let r = -1; try { r = mayThrow() } catch {} return r`
+  // If `mayThrow()` throws, the inner `set $r` never completes, so `r` keeps -1
+  // and the catch falls through to `return r` (= -1). The body's `set $r` must
+  // NOT make the entry `set $r = -1` dead: the exceptional edge branches off the
+  // call BEFORE the set, so the -1 is live on the handler path. A buggy CFG that
+  // ignores the exceptional edge drops `set $r = -1` (→ r reads 0).
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [ValType.I32],
+    locals: [{ type: ValType.I32 }], // $r
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(-1)),
+      makeTry(
+        null,
+        makeLocalSet(0, makeCall("mayThrow", [], ValType.I32)),
+        ["t"],
+        [makeNop()],
+        null,
+        None,
+      ),
+      makeReturn(makeLocalGet(0, ValType.I32)),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // The entry `set $r = -1` must survive (not be turned into a drop).
+  const body = mod.functions[0].body as BlockExpr;
+  assertEquals(body.children[0].kind, ExpressionKind.LocalSet);
+});
+
+Deno.test("CoalesceLocals: nested rethrow keeps an outer local distinct from the inner catch var", () => {
+  // Mirrors 15_LexicalShadowing_Stress:
+  //   e = 100
+  //   try { try { throw t(200) } catch { catchE = 200; rethrow } }
+  //   catch { outerErr = 300; use(e) }   // reads the OUTER e
+  // The inner catch's `rethrow` transfers to the OUTER catch, which reads `e`,
+  // so `e` is live where `catchE` is set → they must NOT share a slot. A buggy
+  // CFG (rethrow has no edge to the outer handler) coalesces them, so the
+  // rethrow path's `catchE = 200` clobbers `e` and `use(e)` reads 200.
+  const mod = emptyModule();
+  const fn: WasmFunction = {
+    name: "f",
+    params: [],
+    results: [],
+    locals: [{ type: ValType.I32 }, { type: ValType.I32 }, { type: ValType.I32 }], // e, catchE, outerErr
+    body: makeBlock([
+      makeLocalSet(0, makeI32Const(100)), // e = 100
+      makeTry(
+        null,
+        makeTry(
+          null,
+          makeThrow("t", [makeI32Const(200)]),
+          ["t"],
+          // inner catch: catchE = 200; use(catchE); rethrow. The use() makes the
+          // set effective (otherwise it's a dead drop and the coalesce question is moot).
+          [makeBlock([
+            makeLocalSet(1, makeI32Const(200)),
+            makeDrop(makeLocalGet(1, ValType.I32)),
+            makeRethrow("0"),
+          ])],
+          null,
+          None,
+        ),
+        ["t"],
+        [makeBlock([makeLocalSet(2, makeI32Const(300)), makeDrop(makeLocalGet(0, ValType.I32))])], // outer catch: outerErr = 300; use(e)
+        null,
+        None,
+      ),
+    ]),
+  };
+  mod.functions.push(fn);
+
+  new PassRunner(mod).add("CoalesceLocals").run();
+
+  // Navigate the rewritten IR: inner-catch `set` index vs outer-catch `get` index.
+  const body = mod.functions[0].body as BlockExpr;
+  const outerTry = body.children[1] as Extract<Expression, { kind: ExpressionKind.Try }>;
+  const innerTry = outerTry.body as Extract<Expression, { kind: ExpressionKind.Try }>;
+  const innerCatch = innerTry.catchBodies[0] as BlockExpr;
+  const outerCatch = outerTry.catchBodies[0] as BlockExpr;
+  const innerSet = innerCatch.children[0] as Extract<Expression, { kind: ExpressionKind.LocalSet }>;
+  const outerGet = (outerCatch.children[1] as Extract<Expression, { kind: ExpressionKind.Drop }>)
+    .value as Extract<Expression, { kind: ExpressionKind.LocalGet }>;
+  // `e` (read in the outer catch) must not occupy the slot written by the inner catch.
+  assertNotEquals(outerGet.index, innerSet.index);
 });
 
 // ---------------------------------------------------------------------------

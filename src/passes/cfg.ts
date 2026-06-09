@@ -22,12 +22,17 @@
  *
  * **Scope notes**:
  * - MVP + tail-call control flow is modelled precisely.
- * - Exception handling: `Try` / `TryTable` link body-entry to each catch
- *   entry (conservative — catch's live-in flows back to the body's entry
- *   block, which then propagates upward via the standard worklist). This
- *   may keep more locals live than strictly necessary, but never strips a
- *   live local incorrectly. `throw` / `throw_ref` / `rethrow` terminate the
- *   current block.
+ * - Exception handling: a `try` pushes its catch entries onto a handler stack
+ *   while its BODY is visited. Throwing instructions inside the body —
+ *   `throw` / `throw_ref` / `rethrow`, and `call` / `call_indirect` — add an
+ *   exceptional edge to those catch entries (all enclosing scopes, conservative)
+ *   so the handler's live-in reaches the exact throw point. A throwing `call`
+ *   also splits the block, so a wrapping `local.set` lands after the exceptional
+ *   edge and its kill of the old value can't strip a local that is live on the
+ *   handler path (e.g. `let r=-1; try { r=mayThrow() } catch {} return r` keeps
+ *   `r`'s `-1`). Catch bodies are visited with their own try's scope popped, so a
+ *   throw inside a catch transfers to the ENCLOSING handler (rethrow semantics).
+ *   `throw` / `throw_ref` / `rethrow` terminate the current block for normal flow.
  * - Calls do not split blocks. They do not appear as `LivenessAction`s
  *   either — their effect on locals is captured by the surrounding
  *   `local.get` / `local.set` actions for any value they consume / produce.
@@ -102,6 +107,42 @@ class _CFGBuilder {
   current: BasicBlock | null = null;
   /** Stack of label scopes: label name → destination block. */
   private labelStack: Array<{ name: string; target: BasicBlock }> = [];
+  /**
+   * Stack of active exception-handler scopes. Each entry is the list of
+   * catch-entry blocks for an enclosing `try` whose BODY we are currently
+   * inside. A throwing instruction (explicit `throw`/`rethrow`, or a `call` /
+   * `call_indirect` that may throw) links to these so the handler's live-in is
+   * correctly propagated to the throw point. Catch bodies are visited with
+   * their own try's scope POPPED, so a throw inside a catch transfers to the
+   * ENCLOSING handler (matching wasm's rethrow semantics).
+   */
+  private handlerStack: BasicBlock[][] = [];
+
+  /** Link `current` to every active handler catch-entry (all enclosing scopes —
+   *  a conservative over-approximation that never strips a live local: if the
+   *  innermost catch doesn't match the thrown tag, an outer one might). */
+  private linkToHandlers(): void {
+    if (this.current === null) return;
+    for (const scope of this.handlerStack) {
+      for (const h of scope) this.link(this.current, h);
+    }
+  }
+
+  /**
+   * Model a `call`/`call_indirect` inside a try body: it may throw (→ handlers,
+   * with the live state BEFORE any wrapping `local.set`) or return normally.
+   * The exceptional edge is added from the current block, then a fresh block is
+   * started for the normal continuation — so a wrapping `local.set` lands AFTER
+   * the exceptional edge and its kill of the old value can't strip a local that
+   * is live on the exceptional (handler) path. No-op outside a try body.
+   */
+  private throwingCallContinuation(): void {
+    if (this.handlerStack.length === 0 || this.current === null) return;
+    this.linkToHandlers();
+    const cont = this.newBlock();
+    this.link(this.current, cont);
+    this.current = cont;
+  }
 
   newBlock(): BasicBlock {
     const b: BasicBlock = {
@@ -266,17 +307,20 @@ class _CFGBuilder {
       // -------------------------------------------------------------------
       case ExpressionKind.Throw: {
         for (const op of e.operands) this.visit(op);
+        this.linkToHandlers(); // exceptional transfer to enclosing catch handler(s)
         this.current = null;
         return;
       }
 
       case ExpressionKind.ThrowRef: {
         this.visit(e.exnref);
+        this.linkToHandlers();
         this.current = null;
         return;
       }
 
       case ExpressionKind.Rethrow:
+        this.linkToHandlers();
         this.current = null;
         return;
 
@@ -285,15 +329,23 @@ class _CFGBuilder {
         const bodyEntry = this.newBlock();
         this.link(this.current, bodyEntry);
 
-        // Conservative: from body-entry, control could transfer to any
-        // catch entry (we don't model the exact may-throw points).
+        // Conservative entry edge: even the first action in the body could throw.
         const catchEntries = e.catchBodies.map(() => this.newBlock());
         for (const ce of catchEntries) this.link(bodyEntry, ce);
 
+        // While inside the body, throwing instructions (throw/rethrow, call/
+        // call_indirect) transfer to THESE catch entries — pushed so the live
+        // state at each throw point reaches the handler (see linkToHandlers /
+        // throwingCallContinuation).
         this.current = bodyEntry;
+        this.handlerStack.push(catchEntries);
         this.visit(e.body);
+        this.handlerStack.pop();
         this.link(this.current, merge);
 
+        // Catch bodies run with this try's scope popped — a throw inside a catch
+        // transfers to the ENCLOSING handler (rethrow semantics), not back to
+        // this try's own catch.
         for (let i = 0; i < e.catchBodies.length; i++) {
           this.current = catchEntries[i];
           this.visit(e.catchBodies[i]);
@@ -335,6 +387,17 @@ class _CFGBuilder {
       case ExpressionKind.CallIndirect: {
         for (const op of e.operands) this.visit(op);
         this.visit(e.target);
+        this.throwingCallContinuation(); // may throw → enclosing handler (if in a try)
+        return;
+      }
+
+      // -------------------------------------------------------------------
+      // call — operands in order, then (if inside a try) an exceptional edge
+      // to the enclosing handler plus a normal-continuation split.
+      // -------------------------------------------------------------------
+      case ExpressionKind.Call: {
+        for (const op of e.operands) this.visit(op);
+        this.throwingCallContinuation();
         return;
       }
 
