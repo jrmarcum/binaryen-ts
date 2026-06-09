@@ -819,15 +819,25 @@ class WasmParser {
       // which the old `segKind === 0`-only reader silently dropped — leaving
       // the table unpopulated so every `call_indirect` trapped.
       const flags = this.r.readU32();
-      const passiveOrDeclarative = (flags & 1) !== 0;
-      const hasTableIndex = !passiveOrDeclarative && (flags & 2) !== 0;
+      if ((flags & 1) !== 0) {
+        // Passive (bit 0) / declarative (bit 0+1) element segment. Our IR and
+        // encoder model only ACTIVE table initializers; these forms used to be
+        // parsed-and-discarded, silently losing the segment — a passive segment
+        // a `table.init` would consume, or a declarative `ref.func`
+        // forward-declaration whose loss makes a re-encoded `ref.func` invalid
+        // ("undeclared function reference"). Fail loudly rather than drop data.
+        this.r.error(
+          `unsupported element segment flags 0x${flags.toString(16)}: only active ` +
+            `table-initializer segments are supported`,
+        );
+      }
+      const hasTableIndex = (flags & 2) !== 0;
       const useExpressions = (flags & 4) !== 0;
 
       let tableIdx = 0;
       if (hasTableIndex) tableIdx = this.r.readU32();
 
-      let offset: Expression | null = null;
-      if (!passiveOrDeclarative) offset = this.readInitExpr(ValType.I32);
+      const offset = this.readInitExpr(ValType.I32);
 
       // A 1-byte elemkind (non-expr forms) or reftype (expr forms) precedes the
       // vector for every flag except 0 and 4. We only support funcref tables,
@@ -837,39 +847,40 @@ class WasmParser {
       const numElems = this.r.readU32();
       const funcs: string[] = [];
       for (let j = 0; j < numElems; j++) {
-        const name = useExpressions ? this.readElemExprFuncName() : `$func${this.r.readU32()}`;
-        if (name !== null) funcs.push(name);
+        funcs.push(useExpressions ? this.readElemExprFuncName() : `$func${this.r.readU32()}`);
       }
 
-      // Only active segments initialize a table in our IR/encoder model, which
-      // re-emits them in the flag-0 form. Passive/declarative segments are
-      // parsed to stay byte-aligned but not materialized (table.init / the
-      // declarative ref.func forward-declaration path are not yet supported).
-      if (!passiveOrDeclarative) {
-        const tname = this.tableNames[tableIdx] ?? this.tableNames[0] ?? "$table0";
-        const seg: ElementSegment = { name: `$elem${i}`, table: tname, offset, data: funcs };
-        this.builder.addElement(seg);
-      }
+      const tname = this.tableNames[tableIdx] ?? this.tableNames[0] ?? "$table0";
+      const seg: ElementSegment = { name: `$elem${i}`, table: tname, offset, data: funcs };
+      this.builder.addElement(seg);
     }
   }
 
   /**
    * Read one element-list expression (flag-4/5/6/7 forms) and return the
-   * referenced function name, or `null` for `ref.null` (which our `string[]`
-   * element model cannot represent and so omits).
+   * referenced function name.
    */
-  private readElemExprFuncName(): string | null {
+  private readElemExprFuncName(): string {
     const opcode = this.r.readU8();
-    let name: string | null = null;
     if (opcode === 0xd2) {
       // ref.func <funcidx>
-      name = `$func${this.r.readU32()}`;
-    } else if (opcode === 0xd0) {
-      // ref.null <heaptype>
-      this.r.readU8();
+      const name = `$func${this.r.readU32()}`;
+      this.r.readU8(); // 0x0b end
+      return name;
     }
-    this.r.readU8(); // 0x0b end
-    return name;
+    if (opcode === 0xd0) {
+      // ref.null <heaptype>. Our element model (`data: string[]`) cannot
+      // represent an empty (null) table slot. Silently omitting it shifted
+      // every later entry down one table index, so `call_indirect` reached the
+      // wrong function (or trapped). Fail loudly until null slots are
+      // representable.
+      this.r.error(
+        "unsupported element segment: a ref.null entry cannot be represented in the table model",
+      );
+    }
+    return this.r.error(
+      `unsupported element-segment expression opcode 0x${opcode.toString(16)}`,
+    );
   }
 
   private readCodeSection(): void {

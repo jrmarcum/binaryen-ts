@@ -803,6 +803,7 @@ class WasmEncoder {
   }
 
   encode(): Uint8Array {
+    this.checkSingleMemory();
     this.buildIndices();
     this.collectTypes();
 
@@ -947,6 +948,23 @@ class WasmEncoder {
     return this.mod.memories.length > 0 || this.mod.imports.some((i) => i.kind === "memory");
   }
 
+  /**
+   * Guards against the multi-memory proposal. The encoder hardcodes memory
+   * index 0 for memory exports, data segments, and `memory.*` instructions, and
+   * the parser names every memory `mem0` (so an imported + a defined memory
+   * collide). Rather than silently emit everything against memory 0, fail
+   * loudly when more than one memory is present.
+   */
+  private checkSingleMemory(): void {
+    const importedMemories = this.mod.imports.filter((i) => i.kind === "memory").length;
+    if (importedMemories + this.mod.memories.length > 1) {
+      throw new WasmEncodeError(
+        "multiple memories are not supported: memory exports, data segments, and " +
+          "memory.* instructions are encoded against memory index 0",
+      );
+    }
+  }
+
   // ---------------------------------------------------------------------------
   // Section encoders
   // ---------------------------------------------------------------------------
@@ -999,37 +1017,50 @@ class WasmEncoder {
   }
 
   private gcFuncTypeIndex(params: ValType[], results: ValType[]): number {
+    // NOTE: every `RefType` is collapsed to `AnyRef` before comparison, because
+    // the binary parser's legacy shim stores ref-typed function params/results
+    // as `AnyRef` (it does not yet thread concrete heap types into the function
+    // signature). A consequence is that two func heap types differing ONLY in
+    // their concrete heap types (e.g. `(param (ref $A))` vs `(param (ref $B))`)
+    // are indistinguishable here. The old code silently returned the FIRST such
+    // match — a wrong-type-index miscompile. We now collect ALL matches and:
+    //   - exactly one  → return it (unambiguous),
+    //   - zero         → throw (unresolved),
+    //   - more than one → throw (ambiguous under the ref-collapse shim; the IR
+    //                     cannot tell them apart, so a correct index can't be
+    //                     chosen — proper support needs concrete param heap
+    //                     types in the function-signature model).
+    const matches: number[] = [];
     for (let i = 0; i < this.mod.heapTypes.length; i++) {
       const d = this.mod.heapTypes[i];
       if (d.kind !== "func") continue;
       if (d.params.length !== params.length || d.results.length !== results.length) continue;
       let match = true;
       for (let j = 0; j < d.params.length; j++) {
-        const dp = d.params[j];
-        const p = params[j];
-        const dpKey = isRefType(dp) ? ValType.AnyRef : (dp as string);
-        if (dpKey !== p) {
+        const dpKey = isRefType(d.params[j]) ? ValType.AnyRef : (d.params[j] as string);
+        if (dpKey !== params[j]) {
           match = false;
           break;
         }
       }
       if (!match) continue;
       for (let j = 0; j < d.results.length; j++) {
-        const dr = d.results[j];
-        const r = results[j];
-        const drKey = isRefType(dr) ? ValType.AnyRef : (dr as string);
-        if (drKey !== r) {
+        const drKey = isRefType(d.results[j]) ? ValType.AnyRef : (d.results[j] as string);
+        if (drKey !== results[j]) {
           match = false;
           break;
         }
       }
-      if (match) return i;
+      if (match) matches.push(i);
     }
-    // No matching func heap type. The old `return 0` silently pointed every
-    // unresolved GC function signature at heap type 0 — a wrong-signature
-    // miscompile. Fail loudly instead.
+    const sig = `(${params.join(", ")}) -> (${results.join(", ")})`;
+    if (matches.length === 1) return matches[0];
+    if (matches.length === 0) {
+      throw new WasmEncodeError(`unresolved GC function type: ${sig}`);
+    }
     throw new WasmEncodeError(
-      `unresolved GC function type: (${params.join(", ")}) -> (${results.join(", ")})`,
+      `ambiguous GC function type ${sig}: ${matches.length} heap types match under the ` +
+        `ref-type collapse shim, so a correct type index cannot be chosen`,
     );
   }
 

@@ -346,6 +346,16 @@ Deno.test("encodeWasm: load with a non-numeric result type throws instead of sil
   assertThrows(() => encodeWasm(mod), WasmEncodeError, "cannot encode load");
 });
 
+Deno.test("encodeWasm: multiple memories throw (encoder hardcodes memory index 0)", () => {
+  // Memory exports, data segments, and memory.* ops are all encoded against
+  // index 0; a second memory would be silently misencoded against memory 0.
+  const mod = new ModuleBuilder()
+    .addMemory("a", 1, null)
+    .addMemory("b", 1, null)
+    .build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "multiple memories");
+});
+
 Deno.test("encodeWasm: memory section round-trips", () => {
   const mod = new ModuleBuilder()
     .addMemory("mem0", 1, 4)

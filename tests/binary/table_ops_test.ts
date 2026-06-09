@@ -7,8 +7,8 @@
  * @license MIT
  */
 
-import { assertEquals } from "@std/assert";
-import { parseWasm } from "../../src/binary/index.ts";
+import { assertEquals, assertThrows } from "@std/assert";
+import { parseWasm, WasmBinaryError } from "../../src/binary/index.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import {
   type Expression,
@@ -226,3 +226,27 @@ function unwrap(e: Expression): Expression {
   }
   return e;
 }
+
+// ---------------------------------------------------------------------------
+// Tier B — element-segment forms that the table model cannot represent must
+// fail loudly rather than silently drop data / shift table indices.
+// ---------------------------------------------------------------------------
+
+const MAGIC = [0x00, 0x61, 0x73, 0x6d, 0x01, 0x00, 0x00, 0x00];
+
+Deno.test("element segment: a ref.null entry throws instead of silently shifting table indices", () => {
+  // Element section: 1 segment, flag 4 (active, expr-list), offset i32.const 0,
+  // one entry that is `ref.null func` (0xd0 0x70 0x0b). Omitting it used to
+  // shift every later entry down a table slot; now it fails loudly.
+  const body = [0x01, 0x04, 0x41, 0x00, 0x0b, 0x01, 0xd0, 0x70, 0x0b];
+  const bytes = new Uint8Array([...MAGIC, 0x09, body.length, ...body]);
+  assertThrows(() => parseWasm(bytes), WasmBinaryError, "ref.null");
+});
+
+Deno.test("element segment: a passive segment throws instead of being silently discarded", () => {
+  // Element section: 1 segment, flag 1 (passive). Previously parsed-and-dropped
+  // (so a table.init that consumes it found an empty table); now it fails loud.
+  const body = [0x01, 0x01];
+  const bytes = new Uint8Array([...MAGIC, 0x09, body.length, ...body]);
+  assertThrows(() => parseWasm(bytes), WasmBinaryError, "only active table-initializer");
+});
