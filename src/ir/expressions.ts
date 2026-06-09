@@ -1613,7 +1613,13 @@ export function makeSelect(
   ifFalse: Expression,
   condition: Expression,
 ): SelectExpr {
-  return { kind: ExpressionKind.Select, type: ifTrue.type, ifTrue, ifFalse, condition };
+  // A `select` always has both arms, so its result type is the type of the
+  // reachable arm — `unreachable` only when BOTH arms are unreachable. Taking
+  // `ifTrue.type` blindly mistyped a select whose `ifTrue` is `unreachable`
+  // (e.g. it ends in a trap/branch) even though `ifFalse` yields a real value,
+  // the same hazard `makeIf` was fixed for.
+  const type: Type = ifTrue.type === Unreachable ? ifFalse.type : ifTrue.type;
+  return { kind: ExpressionKind.Select, type, ifTrue, ifFalse, condition };
 }
 
 /** Creates a `call_indirect` expression. */

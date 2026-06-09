@@ -12,7 +12,7 @@ import { assertEquals, assertInstanceOf, assertThrows } from "@std/assert";
 import { parseWasm } from "../../src/binary/index.ts";
 import { encodeWasm, WasmEncodeError } from "../../src/encoder/index.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
-import { None, ValType } from "../../src/ir/types.ts";
+import { None, Unreachable, ValType } from "../../src/ir/types.ts";
 import {
   BinaryOp,
   type Expression,
@@ -20,6 +20,8 @@ import {
   makeCall,
   makeI32Const,
   makeLocalGet,
+  makeSelect,
+  makeUnreachable,
 } from "../../src/ir/expressions.ts";
 import { ModuleBuilder } from "../../src/ir/module.ts";
 
@@ -300,6 +302,48 @@ Deno.test("encodeWasm: unknown unary opcode throws instead of emitting a silent 
     .addFunction("f", [], [ValType.I32], bogus)
     .build();
   assertThrows(() => encodeWasm(mod), WasmEncodeError, "unknown unary opcode");
+});
+
+// ---------------------------------------------------------------------------
+// Tier 3 — correctness gaps: select LUB typing + encoder edge-case hardening
+// ---------------------------------------------------------------------------
+
+Deno.test("makeSelect: result type is the reachable arm when one arm is unreachable", () => {
+  // A `select` always has both arms; its type is the reachable arm's type, not
+  // a blind `ifTrue.type`. With ifTrue unreachable, the type is ifFalse's.
+  const sel = makeSelect(makeUnreachable(), makeI32Const(0), makeI32Const(1));
+  assertEquals(sel.type, ValType.I32);
+});
+
+Deno.test("encodeWasm: multi-value (tuple) block result throws instead of emitting only the first type", () => {
+  // A block typed [i32, i32] must encode as a type-index blocktype; emitting
+  // only t[0] produced a structurally invalid block. Multi-value blocktypes are
+  // deferred, so the encoder now fails loudly rather than corrupt the output.
+  const tupleBlock = {
+    kind: ExpressionKind.Block,
+    type: [ValType.I32, ValType.I32],
+    name: "b",
+    children: [makeI32Const(0), makeI32Const(1)],
+  } as unknown as Expression;
+  const mod = new ModuleBuilder().addFunction("f", [], [], tupleBlock).build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "multi-value block results");
+});
+
+Deno.test("encodeWasm: load with a non-numeric result type throws instead of silently emitting i64", () => {
+  // The opcode resolver treated any non-f32/f64/i32 type as i64. A load whose
+  // result type is unexpectedly `unreachable` used to silently emit an i64
+  // opcode of the wrong width; it now fails loudly.
+  const badLoad = {
+    kind: ExpressionKind.Load,
+    type: Unreachable,
+    bytes: 4,
+    signed: false,
+    offset: 0,
+    align: 2,
+    ptr: makeI32Const(0),
+  } as unknown as Expression;
+  const mod = new ModuleBuilder().addFunction("f", [], [], badLoad).build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "cannot encode load");
 });
 
 Deno.test("encodeWasm: memory section round-trips", () => {

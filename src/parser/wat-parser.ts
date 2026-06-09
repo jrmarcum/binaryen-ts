@@ -71,6 +71,7 @@ import {
   makeRefTest,
   makeRethrow,
   makeReturn,
+  makeSelect,
   makeSIMDExtract,
   makeSIMDLoad,
   makeSIMDLoadStoreLane,
@@ -93,7 +94,6 @@ import {
   type MemoryGrowExpr,
   type MemorySizeExpr,
   type NopExpr,
-  type SelectExpr,
   type SIMDExtractExpr,
   SIMDExtractOp,
   type SIMDLoadExpr,
@@ -662,13 +662,9 @@ class WatModuleParser {
       const ifTrue = this.parseExpr(args[0], ctx);
       const ifFalse = this.parseExpr(args[1], ctx);
       const condition = this.parseExpr(args[2], ctx);
-      return {
-        kind: ExpressionKind.Select,
-        type: ifTrue.type,
-        ifTrue,
-        ifFalse,
-        condition,
-      } as SelectExpr;
+      // Route through makeSelect so the result type is the reachable arm's type
+      // (the LUB), not a blind `ifTrue.type`.
+      return makeSelect(ifTrue, ifFalse, condition);
     }
     if (head === "block") return this.parseBlock(list, ctx);
     if (head === "loop") return this.parseLoop(list, ctx);

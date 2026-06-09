@@ -617,6 +617,17 @@ function writeBlockType(w: BinaryWriter, t: Type): void {
   if (t === None || (Array.isArray(t) && t.length === 0)) {
     w.writeU8(0x40);
   } else if (Array.isArray(t)) {
+    if (t.length > 1) {
+      // Multi-value (tuple) block results must encode as a SLEB128 type-section
+      // index, not an inline valtype. Emitting only `t[0]` produced a
+      // structurally invalid block header (the engine reads one result then
+      // misparses the body). Full multi-value blocktype support is deferred —
+      // the binary parser also discards multi-value blocktypes on read — so
+      // fail loudly rather than emit a corrupt module.
+      throw new WasmEncodeError(
+        `multi-value block results are not supported by the encoder: [${t.join(", ")}]`,
+      );
+    }
     writeValueType(w, t[0] as ValType | RefType);
   } else if (t !== "unreachable") {
     writeValueType(w, t as ValType | RefType);
@@ -647,8 +658,15 @@ function refHeapTypeByte(t: ValType): number {
       return 0x73;
     case ValType.NullExternRef:
       return 0x72;
+    case ValType.ExnRef:
+      return 0x69;
+    case ValType.NullExnRef:
+      return 0x74;
     default:
-      return 0x6e;
+      // Reached only for a non-ref ValType, which is a bug in the IR producing
+      // this RefNull. Previously this silently returned `any` (0x6e),
+      // mis-typing the null; fail loudly instead.
+      throw new WasmEncodeError(`ref.null of non-reference type: ${t}`);
   }
 }
 
@@ -701,11 +719,17 @@ function loadOpcode(expr: LoadExpr): number {
     if (expr.bytes === 2) return expr.signed ? 0x2e : 0x2f;
     return 0x28;
   }
-  // i64
-  if (expr.bytes === 1) return expr.signed ? 0x30 : 0x31;
-  if (expr.bytes === 2) return expr.signed ? 0x32 : 0x33;
-  if (expr.bytes === 4) return expr.signed ? 0x34 : 0x35;
-  return 0x29;
+  if (t === ValType.I64) {
+    if (expr.bytes === 1) return expr.signed ? 0x30 : 0x31;
+    if (expr.bytes === 2) return expr.signed ? 0x32 : 0x33;
+    if (expr.bytes === 4) return expr.signed ? 0x34 : 0x35;
+    return 0x29;
+  }
+  // The previous code treated ANY non-f32/f64/i32 type as i64 — so a load whose
+  // result type was unexpectedly `unreachable` (or anything else) silently
+  // emitted an i64 opcode of the wrong width. A load result must be a numeric
+  // scalar; fail loudly otherwise.
+  throw new WasmEncodeError(`cannot encode load with result type: ${t}`);
 }
 
 function storeOpcode(expr: StoreExpr): number {
@@ -717,11 +741,13 @@ function storeOpcode(expr: StoreExpr): number {
     if (expr.bytes === 2) return 0x3b;
     return 0x36;
   }
-  // i64
-  if (expr.bytes === 1) return 0x3d;
-  if (expr.bytes === 2) return 0x3e;
-  if (expr.bytes === 4) return 0x3c;
-  return 0x37;
+  if (vt === ValType.I64) {
+    if (expr.bytes === 1) return 0x3d;
+    if (expr.bytes === 2) return 0x3e;
+    if (expr.bytes === 4) return 0x3c;
+    return 0x37;
+  }
+  throw new WasmEncodeError(`cannot encode store with value type: ${vt}`);
 }
 
 // ---------------------------------------------------------------------------
