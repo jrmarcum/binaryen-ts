@@ -58,6 +58,14 @@ export interface WasmFunction {
   locals: Local[];
   /** The function body (a single expression, typically a Block). */
   body: Expression;
+  /**
+   * Label of the function's implicit outermost block — the target of a `br`
+   * that exits the whole function (depth = number of enclosing blocks). The
+   * binary parser records the frame's label here; the encoder seeds it at the
+   * bottom of its label stack so such a branch resolves to the correct depth
+   * instead of silently collapsing to the innermost frame. Optional.
+   */
+  bodyFrameLabel?: string;
 }
 
 /**
@@ -280,9 +288,17 @@ export class ModuleBuilder {
     results: ValType[],
     body: Expression,
     locals: Local[] = [],
+    bodyFrameLabel?: string,
   ): this {
     const paramLocals: Local[] = params.map((type) => ({ type }));
-    this._functions.push({ name, params, results, locals: [...paramLocals, ...locals], body });
+    this._functions.push({
+      name,
+      params,
+      results,
+      locals: [...paramLocals, ...locals],
+      body,
+      bodyFrameLabel,
+    });
     return this;
   }
 

@@ -910,6 +910,7 @@ class WasmParser {
         fn.results,
         fn.body,
         fn.locals.slice(fn.params.length),
+        fn.bodyFrameLabel,
       );
       this.r.seek(bodyEnd);
     }
@@ -1214,7 +1215,11 @@ class WasmParser {
             const elseExpr = elseExprs.length > 0
               ? (elseExprs.length === 1 ? elseExprs[0] : makeBlock(elseExprs, null))
               : null;
-            const ifExpr = makeIf(cond, thenExpr, elseExpr);
+            // Pass `frame.label` so a `br` that targets this `if` (resolved to
+            // this label at decode time) round-trips to the correct branch
+            // depth on encode. Without it the encoder pushed an empty label and
+            // the branch silently resolved to the wrong (innermost) frame.
+            const ifExpr = makeIf(cond, thenExpr, elseExpr, frame.label);
             void resultType;
             push(ifExpr);
           } else if (frame.kind === "loop") {
@@ -1688,13 +1693,17 @@ class WasmParser {
       }
     }
 
-    const funcFrame = frames[0] ?? { exprs: [] };
+    const funcFrame = frames[0] ?? { exprs: [], label: undefined };
     const body = funcFrame.exprs.length === 1
       ? funcFrame.exprs[0]
       : makeBlock(funcFrame.exprs, null);
 
     return {
       name: `$func${funcIdx}`,
+      // The function-frame label is the target of a `br` that exits the whole
+      // function. It is dropped from `body` (a null-named container), so record
+      // it here for the encoder to seed; otherwise such a branch mis-resolves.
+      bodyFrameLabel: funcFrame.label,
       params: ft.params,
       results: ft.results,
       locals,

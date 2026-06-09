@@ -1283,8 +1283,13 @@ class WasmEncoder {
       writeValType(w, g.type);
     }
 
-    // Body: unpack a null-named block (the implicit function frame)
-    const labels: string[] = [];
+    // Seed the label stack with the function's implicit-block label so a `br`
+    // that exits the whole function resolves to the correct depth (= number of
+    // enclosing blocks) instead of collapsing to the innermost frame. It is a
+    // phantom — no `block` opcode is emitted for it — and is never resolved for
+    // functions that don't branch to the function frame, so the common case is
+    // unchanged.
+    const labels: string[] = [fn.bodyFrameLabel ?? ""];
     const body = fn.body;
     if (body.kind === ExpressionKind.Block && (body as BlockExpr).name === null) {
       for (const child of (body as BlockExpr).children) {
@@ -1326,7 +1331,12 @@ class WasmEncoder {
     for (let i = labels.length - 1; i >= 0; i--) {
       if (labels[i] === name) return labels.length - 1 - i;
     }
-    return 0;
+    // Every legitimate branch target is on the stack: named blocks/loops, the
+    // `if` label (threaded via IfExpr.name), and the function frame (seeded at
+    // the bottom). A miss therefore means a dangling branch — a pass dropped or
+    // renamed the target's label but left the `br`. The old `return 0` silently
+    // re-pointed it at the innermost frame, corrupting control flow; fail loud.
+    throw new WasmEncodeError(`unresolved branch label: "${name}"`);
   }
 
   private encodeExpr(w: BinaryWriter, expr: Expression, labels: string[]): void {
@@ -1367,7 +1377,7 @@ class WasmEncoder {
         this.encodeExpr(w, e.condition, labels);
         w.writeU8(0x04);
         writeBlockType(w, e.type);
-        labels.push(""); // if block has no label in IR
+        labels.push(e.name ?? ""); // the if's branch-target label (if any)
         this.encodeExpr(w, e.ifTrue, labels);
         if (e.ifFalse) {
           w.writeU8(0x05); // else

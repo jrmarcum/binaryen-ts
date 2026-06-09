@@ -638,6 +638,14 @@ export interface IfExpr extends ExprBase {
   ifTrue: Expression;
   /** Branch taken when the condition is zero (nullable). */
   ifFalse: Expression | null;
+  /**
+   * Branch-target label for the `if` block. Like `block`/`loop`, an `if`
+   * introduces a label a `br`/`br_if` can target (its end). The binary parser
+   * stores the frame's label here so the encoder can reproduce the exact branch
+   * depth; without it a `br` to the `if` from deeper nesting resolves to the
+   * wrong (innermost) target. Optional — most `if`s are not branch targets.
+   */
+  name?: string;
 }
 
 /** {@link LoopExpr} — see {@link makeLoop} for the factory. */
@@ -1510,11 +1518,12 @@ export function makeCall(
   return { kind: ExpressionKind.Call, type: resultType, target, operands, isReturn };
 }
 
-/** Creates an `if` expression. */
+/** Creates an `if` expression. The optional `name` is the `if`'s branch-target label. */
 export function makeIf(
   condition: Expression,
   ifTrue: Expression,
   ifFalse: Expression | null = null,
+  name?: string,
 ): IfExpr {
   // Type follows upstream `If::finalize`:
   //  - no `else` → `none` (the `then` may be skipped, so nothing flows out);
@@ -1540,6 +1549,7 @@ export function makeIf(
     condition,
     ifTrue,
     ifFalse,
+    name,
   };
 }
 

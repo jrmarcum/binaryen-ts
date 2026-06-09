@@ -677,3 +677,86 @@ Deno.test("regression: binary parser rejects an unknown opcode instead of emitti
   const bytes = new Uint8Array([...MAGIC, ...types, ...funcs, ...code]);
   assertThrows(() => parseWasm(bytes), WasmBinaryError, "unknown opcode");
 });
+
+// ---------------------------------------------------------------------------
+// Branch-target label fidelity — a `br` to the FUNCTION frame or to an `if`
+// from inside deeper nesting must round-trip to the correct depth, not silently
+// collapse to the innermost frame (the old `resolveLabel` returned 0 on a miss).
+// ---------------------------------------------------------------------------
+
+Deno.test("regression: br to the function frame from inside a block keeps its depth", async () => {
+  // (func (param i32)
+  //   (block (br_if 1 (local.get 0)))   ;; br_if targets the FUNCTION frame
+  //   (global.set $g (i32.const 5)))    ;; must be SKIPPED when the branch fires
+  // If the branch mis-resolves to the block (depth 0), f(1) falls through and
+  // wrongly sets $g. Correct: f(1) exits the function, leaving $g = 0.
+  const types = section(1, vec([[0x60, 0x01, I32, 0x00]])); // (i32) -> ()
+  const funcs = section(3, vec([[0x00]]));
+  const globals = section(6, vec([[0x7f, 0x01, 0x41, 0x00, 0x0b]])); // i32 mut, init 0
+  const exportSec = section(
+    7,
+    vec([
+      [0x01, 0x66, 0x00, 0x00], // "f" func 0
+      [0x01, 0x67, 0x03, 0x00], // "g" global 0
+    ]),
+  );
+  const body = [0x00, 0x02, 0x40, 0x20, 0x00, 0x0d, 0x01, 0x0b, 0x41, 0x05, 0x24, 0x00, 0x0b];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+  const bytes = new Uint8Array([...MAGIC, ...types, ...funcs, ...globals, ...exportSec, ...code]);
+
+  const reencoded = encodeWasm(parseWasm(bytes));
+  const inst = new WebAssembly.Instance(await WebAssembly.compile(reencoded as BufferSource));
+  const f = inst.exports.f as (x: number) => void;
+  const g = inst.exports.g as WebAssembly.Global;
+  f(1); // branches out of the function — global.set must NOT run
+  assertEquals(g.value, 0);
+  f(0); // falls through — global.set runs
+  assertEquals(g.value, 5);
+});
+
+Deno.test("regression: br to an `if` from inside a nested block keeps its depth", async () => {
+  // (func (param i32)
+  //   (if (local.get 0) (then
+  //     (block (br 1))            ;; br targets the IF (depth 1), exiting it
+  //     (global.set $g (i32.const 5)))))  ;; must be SKIPPED
+  // Mis-resolving to the block (depth 0) would run the global.set anyway.
+  const types = section(1, vec([[0x60, 0x01, I32, 0x00]]));
+  const funcs = section(3, vec([[0x00]]));
+  const globals = section(6, vec([[0x7f, 0x01, 0x41, 0x00, 0x0b]]));
+  const exportSec = section(
+    7,
+    vec([
+      [0x01, 0x66, 0x00, 0x00],
+      [0x01, 0x67, 0x03, 0x00],
+    ]),
+  );
+  // if(local.get 0) then { block { br 1 }; global.set 0 = 5 }
+  const body = [
+    0x00,
+    0x20,
+    0x00, // local.get 0
+    0x04,
+    0x40, // if void
+    0x02,
+    0x40, // block void
+    0x0c,
+    0x01, // br 1 (the if)
+    0x0b, //       end block
+    0x41,
+    0x05, // i32.const 5
+    0x24,
+    0x00, // global.set 0
+    0x0b, //       end if
+    0x0b, //       end func
+  ];
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+  const bytes = new Uint8Array([...MAGIC, ...types, ...funcs, ...globals, ...exportSec, ...code]);
+
+  const inst = new WebAssembly.Instance(
+    await WebAssembly.compile(encodeWasm(parseWasm(bytes)) as BufferSource),
+  );
+  const f = inst.exports.f as (x: number) => void;
+  const g = inst.exports.g as WebAssembly.Global;
+  f(1); // enters the if, branches out of it — global.set must NOT run
+  assertEquals(g.value, 0);
+});

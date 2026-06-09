@@ -200,14 +200,27 @@ function _idToValType(id: number): ValType | null {
  * Flattens a tuple type ID to an array of primitive types for use in
  * `addFunction` etc. Accepts either a single packed ID (the common case) or
  * an already-array tuple (binaryen-ts native shape).
+ *
+ * Throws on an unrecognized type ID. Previously such an ID was silently dropped
+ * (array case) or turned into an empty list (single case), so a bad value
+ * passed to `addFunction`/`createType` would change a function's arity with no
+ * error — a silent-corruption footgun. Every ID the facade itself produces maps
+ * cleanly, so this only fires on genuinely-invalid input.
  */
 function _idToValTypeArray(id: number | number[]): ValType[] {
   if (Array.isArray(id)) {
-    return id.map((x) => _idToValType(x)).filter((x): x is ValType => x !== null);
+    return id.map((x) => {
+      const vt = _idToValType(x);
+      if (vt === null) {
+        throw new TypeError(`unrecognized wasm type id ${x} in tuple type [${id.join(", ")}]`);
+      }
+      return vt;
+    });
   }
   if (id === none) return [];
   const vt = _idToValType(id);
-  return vt === null ? [] : [vt];
+  if (vt === null) throw new TypeError(`unrecognized wasm type id ${id}`);
+  return [vt];
 }
 
 /**

@@ -181,6 +181,25 @@ Deno.test("expandType(none) is an empty list (arity 0), not [none]", () => {
   assertEquals(binaryen.expandType(binaryen.none), []);
 });
 
+Deno.test("an unrecognized type id throws instead of being silently dropped from a signature", () => {
+  // 999 is not a valid wasm type id. It used to be silently filtered out of the
+  // param list, producing a 1-param function instead of erroring — a
+  // signature-corruption footgun.
+  const mod = new binaryen.Module();
+  assertThrows(
+    () =>
+      mod.addFunction(
+        "f",
+        binaryen.createType([binaryen.i32, 999]),
+        binaryen.none,
+        [],
+        mod.i32.const(0),
+      ),
+    TypeError,
+    "unrecognized wasm type id 999",
+  );
+});
+
 Deno.test('getFunctionInfo reports module/base as "" for a defined function and includes type', () => {
   const mod = binaryen.readBinary(ADD_MODULE);
   const exp = binaryen.getExportInfo(mod.getExportByIndex(0));
