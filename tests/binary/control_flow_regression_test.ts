@@ -23,8 +23,8 @@
  * @license MIT
  */
 
-import { assert, assertEquals } from "@std/assert";
-import { parseWasm } from "../../src/binary/index.ts";
+import { assert, assertEquals, assertThrows } from "@std/assert";
+import { parseWasm, WasmBinaryError } from "../../src/binary/index.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import {
   BinaryOp,
@@ -595,9 +595,16 @@ Deno.test("regression: tag exports + signature survive parse→encode and Remove
 
 Deno.test("regression: scalar relational binary ops are typed i32, not operand type", () => {
   const relational = [
-    BinaryOp.LeF64, BinaryOp.GeF64, BinaryOp.LtF64, BinaryOp.GtF64,
-    BinaryOp.EqF64, BinaryOp.NeF64,
-    BinaryOp.EqI64, BinaryOp.NeI64, BinaryOp.LtSI64, BinaryOp.GtSI64,
+    BinaryOp.LeF64,
+    BinaryOp.GeF64,
+    BinaryOp.LtF64,
+    BinaryOp.GtF64,
+    BinaryOp.EqF64,
+    BinaryOp.NeF64,
+    BinaryOp.EqI64,
+    BinaryOp.NeI64,
+    BinaryOp.LtSI64,
+    BinaryOp.GtSI64,
   ];
   for (const op of relational) {
     const e = makeBinary(op, makeI32Const(0), makeI32Const(0));
@@ -620,11 +627,21 @@ Deno.test("regression: (if (result i32)) with f64-comparison condition+arms roun
   // body: return (if (result i32) (f64.ge l0 l1) (then (f64.le l0 l2)) (else (i32.const 0)))
   const body = [
     0x00, // 0 local groups
-    0x20, 0x00, 0x20, 0x01, 0x66, // local.get 0; local.get 1; f64.ge
-    0x04, I32, //                    if (result i32)
-    0x20, 0x00, 0x20, 0x02, 0x65, //   local.get 0; local.get 2; f64.le
+    0x20,
+    0x00,
+    0x20,
+    0x01,
+    0x66, // local.get 0; local.get 1; f64.ge
+    0x04,
+    I32, //                    if (result i32)
+    0x20,
+    0x00,
+    0x20,
+    0x02,
+    0x65, //   local.get 0; local.get 2; f64.le
     0x05, //                         else
-    0x41, 0x00, //                     i32.const 0
+    0x41,
+    0x00, //                     i32.const 0
     0x0b, //                         end (if)
     0x0f, //                         return
     0x0b, //                         end (func)
@@ -632,4 +649,31 @@ Deno.test("regression: (if (result i32)) with f64-comparison condition+arms roun
   const code = section(10, vec([[...leb(body.length), ...body]]));
   // Parse → encode → compile must succeed; the if must stay i32-typed.
   await assembleAndValidate([types, funcs, code]);
+});
+
+// ---------------------------------------------------------------------------
+// Tier 2 — unsupported opcodes must fail loudly, not decode to a silent nop
+// ---------------------------------------------------------------------------
+
+Deno.test("regression: binary parser rejects unsupported memory.init instead of silently dropping it", () => {
+  // 0xFC 0x08 = memory.init. It used to decode to `nop`, silently dropping the
+  // operation AND popping the wrong operand count (2 of 3) — re-encoding then
+  // produced a stack-imbalanced or semantically-wrong module. Now a clear error.
+  const types = section(1, vec([[0x60, 0x00, 0x00]])); // () -> ()
+  const funcs = section(3, vec([[0x00]])); // func 0 : type 0
+  const body = [0x00, 0xfc, 0x08, 0x00, 0x00, 0x0b]; // 0 locals; memory.init 0 0; end
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+  const bytes = new Uint8Array([...MAGIC, ...types, ...funcs, ...code]);
+  assertThrows(() => parseWasm(bytes), WasmBinaryError, "memory.init");
+});
+
+Deno.test("regression: binary parser rejects an unknown opcode instead of emitting a silent nop", () => {
+  // 0xFF is not a valid opcode. The decoder used to push a `nop` "to keep the
+  // stack consistent", silently corrupting it. Now it throws.
+  const types = section(1, vec([[0x60, 0x00, 0x00]]));
+  const funcs = section(3, vec([[0x00]]));
+  const body = [0x00, 0xff, 0x0b]; // 0 locals; 0xFF (unknown); end
+  const code = section(10, vec([[...leb(body.length), ...body]]));
+  const bytes = new Uint8Array([...MAGIC, ...types, ...funcs, ...code]);
+  assertThrows(() => parseWasm(bytes), WasmBinaryError, "unknown opcode");
 });

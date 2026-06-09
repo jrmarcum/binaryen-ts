@@ -1418,8 +1418,13 @@ class WasmEncoder {
           w.writeU32(simdSub);
         } else {
           const opcode = UNARY_TO_OPCODE[e.op];
-          if (opcode !== undefined) w.writeU8(opcode);
-          else w.writeU8(0x01); // nop fallback
+          if (opcode === undefined) {
+            // The operand was already emitted (pushing a value); a bare `nop`
+            // fallback would leave it dangling on the stack → invalid module.
+            // Fail loudly on an unmapped op instead.
+            throw new WasmEncodeError(`unknown unary opcode: ${e.op}`);
+          }
+          w.writeU8(opcode);
         }
         break;
       }
@@ -1434,8 +1439,10 @@ class WasmEncoder {
           w.writeU32(simdSub);
         } else {
           const opcode = BINARY_TO_OPCODE[e.op];
-          if (opcode !== undefined) w.writeU8(opcode);
-          else w.writeU8(0x01);
+          if (opcode === undefined) {
+            throw new WasmEncodeError(`unknown binary opcode: ${e.op}`);
+          }
+          w.writeU8(opcode);
         }
         break;
       }
@@ -1857,9 +1864,12 @@ class WasmEncoder {
       }
 
       default: {
-        // Unknown / unsupported expression kind — emit nop
-        w.writeU8(0x01);
-        break;
+        // Unknown / unsupported expression kind. Emitting a `nop` here silently
+        // dropped the subtree (and any stack values it was meant to consume or
+        // produce), yielding an invalid or wrong module. Fail loudly instead.
+        throw new WasmEncodeError(
+          `cannot encode unsupported expression kind: ${(expr as { kind: string }).kind}`,
+        );
       }
     }
   }

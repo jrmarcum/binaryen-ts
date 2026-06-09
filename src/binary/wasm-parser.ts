@@ -1668,9 +1668,11 @@ class WasmParser {
             push(makeBinary(binary, pop(), rhs));
             break;
           }
-          // Unknown opcode -- push nop to keep stack consistent
-          push(makeNop());
-          break;
+          // Genuinely unknown opcode. Pushing a `nop` "to keep the stack
+          // consistent" actually corrupted it (the unknown op's stack effect is
+          // unknown) and silently dropped the instruction. Fail loudly so an
+          // unsupported module is reported rather than miscompiled.
+          r.error(`unknown opcode 0x${op.toString(16)}`);
         }
       }
     }
@@ -1823,50 +1825,23 @@ function decodeGcPrefix(
       push(makeArrayLen(pop()));
       break;
     }
-    case 0x10: { // array.fill $T
-      const ti = r.readU32();
-      const len = pop();
-      const val = pop();
-      const idx = pop();
-      const ref = pop();
-      void ti;
-      // Emit as: ref[idx..idx+len] = val — modelled as array.set for first element
-      // Full array.fill IR node is available; emit nop for now (complex multi-op)
-      push(makeArraySet(ti, ref, idx, val));
-      void len;
+    // array.fill / array.copy / array.init_data / array.init_elem — bulk array
+    // GC ops. array.fill was modelled as a single-element `array.set` (dropping
+    // the length → it filled one element, not `len`), and the others as `nop`
+    // (dropping the op and mis-popping operands). Both are silent miscompiles.
+    // Fail loudly until there is real bulk-array IR support.
+    case 0x10:
+      r.error("unsupported GC opcode: array.fill (0xFB 0x10)");
       break;
-    }
-    case 0x11: { // array.copy $T1 $T2
-      const _ti1 = r.readU32();
-      const _ti2 = r.readU32();
-      pop();
-      pop();
-      pop();
-      pop();
-      pop();
-      push(makeNop());
+    case 0x11:
+      r.error("unsupported GC opcode: array.copy (0xFB 0x11)");
       break;
-    }
-    case 0x12: { // array.init_data $T $d
-      const _ti = r.readU32();
-      const _di = r.readU32();
-      pop();
-      pop();
-      pop();
-      pop();
-      push(makeNop());
+    case 0x12:
+      r.error("unsupported GC opcode: array.init_data (0xFB 0x12)");
       break;
-    }
-    case 0x13: { // array.init_elem $T $e
-      const _ti = r.readU32();
-      const _ei = r.readU32();
-      pop();
-      pop();
-      pop();
-      pop();
-      push(makeNop());
+    case 0x13:
+      r.error("unsupported GC opcode: array.init_elem (0xFB 0x13)");
       break;
-    }
     case 0x14: { // ref.test $T
       const ht = readHeapType(r);
       push(makeRefTest(pop(), ht, false));
@@ -1925,8 +1900,9 @@ function decodeGcPrefix(
       break;
     }
     default:
-      push(makeNop());
-      break;
+      // Unimplemented GC sub-opcode. A `nop` here silently dropped the op and
+      // its operands; fail loudly instead.
+      r.error(`unsupported GC opcode: 0xFB 0x${sub.toString(16)}`);
   }
 }
 
@@ -1982,62 +1958,41 @@ function decodeMiscPrefix(
       push(makeMemoryFill(dst, val, size));
       break;
     }
-    case 8: {
-      r.readU32();
-      r.readU8();
-      pop();
-      pop();
-      push(makeNop());
-      break;
-    } // memory.init
-    case 9: {
-      r.readU32();
-      push(makeNop());
-      break;
-    } // data.drop
-    case 12: {
-      r.readU32();
-      r.readU32();
-      pop();
-      pop();
-      push(makeNop());
-      break;
-    } // table.init
-    case 13: {
-      r.readU32();
-      push(makeNop());
-      break;
-    } // elem.drop
-    case 14: {
-      r.readU32();
-      r.readU32();
-      pop();
-      pop();
-      pop();
-      push(makeNop());
-      break;
-    } // table.copy
-    case 15: {
-      r.readU32();
-      push(makeNop());
-      break;
-    } // table.grow (stub)
-    case 16: {
-      r.readU32();
-      push(makeNop());
-      break;
-    } // table.size (stub)
-    case 17: {
-      r.readU32();
-      pop();
-      pop();
-      pop();
-      push(makeNop());
-      break;
-    } // table.fill (stub)
+    // memory.init (8) / data.drop (9) / table.init (12) / elem.drop (13) /
+    // table.copy (14) / table.grow (15) / table.size (16) / table.fill (17),
+    // plus any future 0xFC sub-opcode. These were decoded to `nop`, silently
+    // dropping the operation — and several popped the WRONG operand count
+    // (memory.init/table.init pop 2 of 3; table.grow/size pop 0 but produce a
+    // result), so re-encoding produced a valid module that omits the op or an
+    // invalid one with a stack imbalance. Either way a silent miscompile. Until
+    // they have real IR support, fail loudly so a consumer (e.g. wasmtk) can
+    // detect the unsupported module instead of receiving garbage.
     default:
-      push(makeNop());
-      break;
+      r.error(`unsupported bulk-memory/table opcode: ${FC_SUBOP_NAME(sub)}`);
+  }
+}
+
+/** Human-readable name for an unsupported 0xFC bulk-memory / table sub-opcode. */
+function FC_SUBOP_NAME(sub: number): string {
+  switch (sub) {
+    case 8:
+      return "memory.init";
+    case 9:
+      return "data.drop";
+    case 12:
+      return "table.init";
+    case 13:
+      return "elem.drop";
+    case 14:
+      return "table.copy";
+    case 15:
+      return "table.grow";
+    case 16:
+      return "table.size";
+    case 17:
+      return "table.fill";
+    default:
+      return `0xFC 0x${sub.toString(16)}`;
   }
 }
 

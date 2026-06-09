@@ -15,6 +15,7 @@ import { ExpressionKind } from "../../src/ir/expressions.ts";
 import { None, ValType } from "../../src/ir/types.ts";
 import {
   BinaryOp,
+  type Expression,
   makeBinary,
   makeCall,
   makeI32Const,
@@ -283,6 +284,22 @@ Deno.test("encodeWasm: unresolved call target throws instead of silently encodin
     .addFunction("caller", [], [], makeCall("does_not_exist", [], None))
     .build();
   assertThrows(() => encodeWasm(mod), WasmEncodeError, "unresolved call target");
+});
+
+Deno.test("encodeWasm: unknown unary opcode throws instead of emitting a silent nop", () => {
+  // An op missing from the unary opcode table used to fall back to `nop` (0x01)
+  // AFTER its operand was already emitted — leaving a dangling stack value and
+  // an invalid module. It now fails loudly.
+  const bogus = {
+    kind: ExpressionKind.Unary,
+    type: ValType.I32,
+    op: "not.a.real.unary.op",
+    value: makeI32Const(0),
+  } as unknown as Expression;
+  const mod = new ModuleBuilder()
+    .addFunction("f", [], [ValType.I32], bogus)
+    .build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "unknown unary opcode");
 });
 
 Deno.test("encodeWasm: memory section round-trips", () => {

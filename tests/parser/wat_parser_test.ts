@@ -6,8 +6,8 @@
  * @license MIT
  */
 
-import { assert, assertEquals } from "@std/assert";
-import { parseWat } from "../../src/parser/wat-parser.ts";
+import { assert, assertEquals, assertThrows } from "@std/assert";
+import { parseWat, WatParseError } from "../../src/parser/wat-parser.ts";
 import { ExpressionKind } from "../../src/ir/expressions.ts";
 import { Unreachable, ValType } from "../../src/ir/types.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
@@ -493,4 +493,14 @@ Deno.test("parseWat — if whose then-arm returns but else falls through survive
   const f = instance.exports.f as (x: number) => number;
   assertEquals(f(0), 42); // else taken, then fall through to 42
   assertEquals(f(1), 1); // then returns early
+});
+
+Deno.test("parseWat — unrecognized instruction fails loudly instead of becoming a silent nop", () => {
+  // An unhandled instruction keyword used to silently return a `nop`, dropping
+  // its operands and corrupting the stack. It now throws with the keyword.
+  assertThrows(
+    () => parseWat(`(module (func $f (bogus.instruction)))`),
+    WatParseError,
+    "unsupported instruction: bogus.instruction",
+  );
 });

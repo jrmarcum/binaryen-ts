@@ -907,9 +907,12 @@ class WatModuleParser {
       return this.parseTry(list, ctx);
     }
 
-    // Unrecognized — wrap in a nop with a comment for now
-    // TODO: extend as more instructions are added
-    return { kind: ExpressionKind.Nop, type: None } as NopExpr;
+    // Unrecognized instruction. Silently returning a `nop` here dropped the
+    // instruction's operands and corrupted the operand stack — a silent
+    // miscompile (e.g. an unhandled `memory.init`/`table.fill`/atomics op would
+    // vanish). Fail loudly with the offending keyword instead; add a real case
+    // above when the instruction is implemented.
+    return this.err(`unsupported instruction: ${head}`, list.pos);
   }
 
   // -------------------------------------------------------------------------
