@@ -907,7 +907,19 @@ class WasmEncoder {
   }
 
   private getTypeIndex(params: ValType[], results: ValType[]): number {
-    return this.typeKeyToIndex.get(funcTypeKey(params, results)) ?? 0;
+    const idx = this.typeKeyToIndex.get(funcTypeKey(params, results));
+    if (idx === undefined) {
+      // `collectTypes` registers exactly the signatures every call site here
+      // asks for (imported + defined functions, tags, and call_indirect). A
+      // miss therefore means the collection and the encode walked different
+      // sets — a bug that, with the old `?? 0`, silently emitted type index 0
+      // and produced a function-signature mismatch in the output. Fail loudly,
+      // matching `resolveRef` for entity references.
+      throw new WasmEncodeError(
+        `unresolved function type: (${params.join(", ")}) -> (${results.join(", ")})`,
+      );
+    }
+    return idx;
   }
 
   // ---------------------------------------------------------------------------
@@ -1013,7 +1025,12 @@ class WasmEncoder {
       }
       if (match) return i;
     }
-    return 0;
+    // No matching func heap type. The old `return 0` silently pointed every
+    // unresolved GC function signature at heap type 0 — a wrong-signature
+    // miscompile. Fail loudly instead.
+    throw new WasmEncodeError(
+      `unresolved GC function type: (${params.join(", ")}) -> (${results.join(", ")})`,
+    );
   }
 
   private encodeImportSection(w: BinaryWriter): void {

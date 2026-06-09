@@ -924,6 +924,19 @@ const _MEMORY = new MemoryOps();
 // ---------------------------------------------------------------------------
 
 /**
+ * A data segment accepted by {@link Module.setMemory}, mirroring the upstream
+ * `npm:binaryen` segment shape.
+ */
+export interface MemoryDataSegment {
+  /** `true` for a passive segment (applied via `memory.init`, not at instantiation). */
+  passive?: boolean;
+  /** Active-segment offset expression. Defaults to `i32.const 0`. Ignored when passive. */
+  offset?: Expression | null;
+  /** Segment bytes. */
+  data: Uint8Array | number[];
+}
+
+/**
  * Wrapper around a binaryen-ts {@link WasmModule} that exposes the
  * `npm:binaryen` instance API (`optimize`, `emitBinary`, `getNumExports`,
  * builder methods, namespaced expression factories, etc).
@@ -1130,14 +1143,24 @@ export class Module {
    * @param maximum - Maximum pages, or `-1` / `null` for unbounded
    *   (upstream binaryen.js uses `-1` to mean unbounded).
    * @param exportName - When non-null, also exports the memory under this name.
+   * @param segments - Active/passive data segments to install. Each is
+   *   `{ passive?, offset?, data }` — `offset` is the active-segment offset
+   *   expression (defaults to `i32.const 0`); ignored for passive segments.
    * @param shared - Whether the memory is shared (threads proposal).
    * @param is64 - Whether the memory uses 64-bit addressing (memory64 proposal).
    * @param internalName - Internal memory name (default `"0"`).
+   *
+   * The `segments` parameter sits at position 4 to match upstream
+   * `npm:binaryen` (`setMemory(initial, maximum, exportName, segments, shared,
+   * memory64, internalName)`). Omitting it (the previous signature) shifted
+   * `shared`/`is64`/`internalName` for any positional caller and silently
+   * dropped the data segments.
    */
   setMemory(
     initial: number,
     maximum: number | null = null,
     exportName: string | null = null,
+    segments: MemoryDataSegment[] = [],
     shared = false,
     is64 = false,
     internalName = "0",
@@ -1162,6 +1185,16 @@ export class Module {
     if (is64) this._inner.hasMemory64 = true;
     if (exportName !== null) {
       this.addMemoryExport(internalName, exportName);
+    }
+    // Install data segments (upstream applies these as part of setMemory).
+    for (const seg of segments) {
+      const data = seg.data instanceof Uint8Array ? seg.data : new Uint8Array(seg.data);
+      this._inner.dataSegments.push({
+        name: `$data${this._inner.dataSegments.length}`,
+        passive: seg.passive ?? false,
+        offset: seg.passive ? null : (seg.offset ?? makeI32Const(0)),
+        data,
+      });
     }
   }
 
@@ -1265,13 +1298,21 @@ export class Module {
     return makeCall(target, operands, resultType, true);
   }
 
-  /** `call_indirect (type ...)` via the default table `"0"`. */
+  /**
+   * `call_indirect` through `table`.
+   *
+   * The parameter order matches upstream `npm:binaryen`
+   * (`call_indirect(table, target, operands, params, results)`) — `table` is
+   * FIRST. A previous signature put `table` last with a `"0"` default, which
+   * silently shifted every argument for any caller written against upstream
+   * (binding the table string into the `target` slot, etc.).
+   */
   call_indirect(
+    table: string,
     target: Expression,
     operands: Expression[],
     params: number | number[],
     results: number | number[],
-    table = "0",
   ): Expression {
     const paramVts = _idToValTypeArray(params);
     const resultVts = _idToValTypeArray(results);

@@ -12,6 +12,7 @@
 import { assertEquals, assertNotEquals, assertThrows } from "@std/assert";
 import * as binaryen from "../../src/api/binaryen-compat.ts";
 import { ValType } from "../../src/ir/types.ts";
+import { type CallIndirectExpr, ExpressionKind } from "../../src/ir/expressions.ts";
 
 // ---------------------------------------------------------------------------
 // Fixture: same ADD_MODULE used by encoder tests — a tiny module with one
@@ -352,6 +353,40 @@ Deno.test("addGlobal + setMemory + addFunctionImport survive round-trip", () => 
   const reparsed = binaryen.readBinary(bytes);
   // Memory export + function export = 2 exports.
   assertEquals(reparsed.getNumExports(), 2);
+});
+
+// ---------------------------------------------------------------------------
+// Upstream-signature parity: call_indirect (table first) + setMemory segments
+// ---------------------------------------------------------------------------
+
+Deno.test("compat: Module.call_indirect takes table as the FIRST argument (upstream order)", () => {
+  // Upstream is `call_indirect(table, target, operands, params, results)`. The
+  // previous signature put `table` last, so an upstream-style call bound the
+  // table string into the `target` slot and shifted everything else.
+  const mod = new binaryen.Module();
+  const target = mod.i32.const(0);
+  const ci = mod.call_indirect(
+    "0",
+    target,
+    [],
+    binaryen.none,
+    binaryen.none,
+  ) as CallIndirectExpr;
+  assertEquals(ci.table, "0");
+  assertEquals(ci.target.kind, ExpressionKind.Const); // not the bare "0" string
+});
+
+Deno.test("compat: Module.setMemory installs data segments without binding them to `shared`", () => {
+  // `segments` is the 4th positional arg (upstream order). The previous
+  // signature omitted it, so a positional segments array landed on `shared`
+  // (marking the memory shared) and the data was silently dropped.
+  const mod = new binaryen.Module();
+  mod.setMemory(1, 1, null, [
+    { offset: mod.i32.const(0), data: new Uint8Array([1, 2, 3]) },
+  ]);
+  assertEquals(mod._inner.memories[0].shared, false);
+  assertEquals(mod._inner.dataSegments.length, 1);
+  assertEquals(Array.from(mod._inner.dataSegments[0].data), [1, 2, 3]);
 });
 
 // ---------------------------------------------------------------------------

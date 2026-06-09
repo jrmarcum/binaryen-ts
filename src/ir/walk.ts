@@ -353,8 +353,15 @@ function _mapChildren(
       return expr;
 
     default:
-      // Unknown or unhandled kind — pass through unchanged
-      return expr;
+      // Every constructed ExpressionKind is handled above (an explicit case or
+      // a listed leaf). Reaching here means a new/placeholder kind was wired
+      // into the IR without a walk case — silently passing it through would
+      // hide its children from every pass (DCE / CSE / liveness), a miscompile.
+      // Fail loudly at the moment the kind is introduced instead.
+      throw new Error(
+        `mapExpression: unhandled expression kind "${(expr as { kind: string }).kind}" ` +
+          `(add a case to _mapChildren in walk.ts)`,
+      );
   }
 }
 
@@ -546,7 +553,27 @@ function _visitChildren(
       visit(e.vec);
       break;
     }
-    default:
+
+    // Leaf nodes — no children to visit.
+    case ExpressionKind.Nop:
+    case ExpressionKind.Unreachable:
+    case ExpressionKind.Const:
+    case ExpressionKind.LocalGet:
+    case ExpressionKind.GlobalGet:
+    case ExpressionKind.MemorySize:
+    case ExpressionKind.RefNull:
+    case ExpressionKind.RefFunc:
+    case ExpressionKind.Rethrow:
+    case ExpressionKind.Pop:
       break;
+
+    default:
+      // As in _mapChildren: every constructed kind is handled above, so this is
+      // reached only by a new/placeholder kind with no walk case. Failing loudly
+      // prevents a pass from silently skipping the subtree.
+      throw new Error(
+        `walkExpression: unhandled expression kind "${(expr as { kind: string }).kind}" ` +
+          `(add a case to _visitChildren in walk.ts)`,
+      );
   }
 }
