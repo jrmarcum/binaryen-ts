@@ -451,6 +451,32 @@ IR test (`f(x) = (x + (local0:=99)) + local0`, `f(5)===203`, verified to return 
 fix). Unblocks wasmtk dropping its `skipBinaryenOpt` workaround so merged modules can be `-Oz`'d
 again. 304 → 305 passing. |
 
+## Robustness & error handling
+
+binaryen-ts follows a strict **fail-loud contract**: every name, type, index, opcode, and branch
+label the pipeline resolves either resolves correctly or throws a typed error (`WasmEncodeError`,
+`WasmBinaryError`, `WatParseError`, or `TypeError`). **No code path silently substitutes a default
+that would emit valid-but-wrong WebAssembly.** This is deliberate — the most dangerous failure mode
+for an optimizer is output that passes `WebAssembly.compile()` but computes the wrong result, and a
+series of such latent bugs (silent `?? 0` index fallbacks, `nop` opcode fall-throughs, dropped
+table/data entries, mis-resolved branch depths) were eliminated by replacing the silent fallback
+with an error.
+
+Concretely, the parser/encoder throw rather than corrupt when they hit:
+
+- an unresolved function / global / table / tag / type / branch-label reference (e.g. a dangling
+  node left behind by a pass);
+- a branch depth or function-type that cannot be reproduced exactly on re-encode;
+- an unsupported or not-yet-implemented construct — bulk-memory/table ops, passive/declarative
+  element segments, multiple memories, `ref.null` table entries, multi-value block types, and the
+  non-MVP corners of the GC / atomics proposals.
+
+Downstream consumers (e.g. [wasmtk](https://jsr.io/@jrmarcum/wasmtk)) should therefore expect a
+clear exception for an unsupported module rather than a miscompiled one, and can catch it to fall
+back (for example, skip optimization for that module). The native `wasm-opt` path additionally
+re-validates its output with `WebAssembly.compile()` by default (toggle with `--validate` /
+`--no-validate`).
+
 ## Contributing
 
 The upstream C++ source is tracked as a git submodule at `upstream/` for reference. When porting a
