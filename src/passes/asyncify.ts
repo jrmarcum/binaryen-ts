@@ -46,20 +46,29 @@ import {
   BinaryOp,
   type CallExpr,
   type CallIndirectExpr,
+  type DropExpr,
   type Expression,
   ExpressionKind,
   makeBinary,
   makeBlock,
+  makeCall,
+  makeF32Const,
+  makeF64Const,
   makeGlobalGet,
   makeGlobalSet,
   makeI32Const,
+  makeI64Const,
   makeIf,
   makeLoad,
   makeLocalGet,
+  makeLocalSet,
+  makeUnary,
   makeUnreachable,
+  type LocalSetExpr,
+  UnaryOp,
 } from "../ir/expressions.ts";
-import type { Local, WasmImport, WasmModule } from "../ir/module.ts";
-import { ValType } from "../ir/types.ts";
+import type { Local, WasmFunction, WasmImport, WasmModule } from "../ir/module.ts";
+import { None, type Type, ValType } from "../ir/types.ts";
 import { walkExpression } from "../ir/walk.ts";
 import type { Pass, PassOptions } from "./pass.ts";
 
@@ -481,6 +490,237 @@ export function analyzeModule(
   }
 
   return { instrumentedFuncs, canChangeState, addedFromList };
+}
+
+// ---------------------------------------------------------------------------
+// AsyncifyFlow (Stage 3b) — mirror Asyncify.cpp lines 878-1258.
+//
+// Instruments an already-FLATTENED instrumented function so it can pause and
+// resume: it "linearizes" control flow (always skipping forward while
+// rewinding) and wraps each state-changing call with a call-index check + a
+// possible-unwind. Runs on flat IR (Stage 3a), which guarantees calls are
+// standalone statements and control-flow conditions are trivial.
+//
+// The three helpers below are emitted as calls to TEMPORARY intrinsics that
+// Stage 4 (AsyncifyLocals) implements against the asyncify stack; until then a
+// flow-instrumented module references undefined functions and cannot run. This
+// is why the flow is exposed as its own function and NOT yet wired into
+// `AsyncifyPass.run` (the pass stays at Stage 2 output — analyze + runtime
+// support — so its Stage-1/2 tests still round-trip).
+// ---------------------------------------------------------------------------
+
+/** Temporary intrinsic: pop the next call index off the stack (start of a rewind). */
+const ASYNCIFY_GET_CALL_INDEX = "$__asyncify_get_call_index";
+/** Temporary intrinsic: is `index` the call to resume into? → i32. */
+const ASYNCIFY_CHECK_CALL_INDEX = "$__asyncify_check_call_index";
+/** Temporary intrinsic: note an unwind through call `index`. */
+const ASYNCIFY_UNWIND = "$__asyncify_unwind";
+
+/** Per-function flow context. */
+export interface FlowCtx {
+  func: WasmFunction;
+  /** `canChangeState` per function name, from {@link analyzeModule}. */
+  canChangeState: Map<string, boolean>;
+  /** Whether indirect calls are assumed to change state. */
+  canIndirect: boolean;
+  /** Functions whose indirect calls are instrumented even under ignore-indirect. */
+  addedFromList: Set<string>;
+  /** Mutable running call index. */
+  callIndex: { n: number };
+  /** Fake globals created per call-result type (name keyed by type). */
+  fakeGlobals: Map<Type, string>;
+}
+
+/** `i32.eq($__asyncify_state, value)`. */
+function makeStateCheck(state: State): Expression {
+  return makeBinary(
+    BinaryOp.EqI32,
+    makeGlobalGet(ASYNCIFY_STATE, ValType.I32),
+    makeI32Const(state),
+  );
+}
+
+/** `if (state == Normal) curr` — run `curr` only in normal execution (skip while rewinding). */
+function makeMaybeSkip(curr: Expression): Expression {
+  return makeIf(makeStateCheck(State.Normal), curr);
+}
+
+/** True if `expr` may start an unwind/rewind (contains a call to a state-changer). */
+function exprCanChangeState(expr: Expression, ctx: FlowCtx): boolean {
+  let changes = false;
+  let indirect = false;
+  walkExpression(expr, (e) => {
+    if (e.kind === ExpressionKind.Call) {
+      if (ctx.canChangeState.get((e as CallExpr).target)) changes = true;
+    } else if (e.kind === ExpressionKind.CallIndirect) {
+      indirect = true;
+    }
+  });
+  if (indirect && (ctx.canIndirect || ctx.addedFromList.has(ctx.func.name))) changes = true;
+  return changes;
+}
+
+/** Does `curr` perform a call (possibly under a `local.set` or `drop`)? */
+function doesCall(curr: Expression): boolean {
+  let inner = curr;
+  if (curr.kind === ExpressionKind.LocalSet) inner = (curr as LocalSetExpr).value;
+  else if (curr.kind === ExpressionKind.Drop) inner = (curr as DropExpr).value;
+  return inner.kind === ExpressionKind.Call || inner.kind === ExpressionKind.CallIndirect;
+}
+
+/** The fake global name for a call-result `type` (created lazily). */
+function fakeGlobalFor(ctx: FlowCtx, type: Type): string {
+  let name = ctx.fakeGlobals.get(type);
+  if (!name) {
+    name = `$asyncify_fake_call_global_${type}`;
+    ctx.fakeGlobals.set(type, name);
+  }
+  return name;
+}
+
+/** A zero constant of `type` (for fake-global initializers). */
+function makeZero(type: Type): Expression {
+  switch (type) {
+    case ValType.I32:
+      return makeI32Const(0);
+    case ValType.I64:
+      return makeI64Const(0n);
+    case ValType.F32:
+      return makeF32Const(0);
+    case ValType.F64:
+      return makeF64Const(0);
+    default:
+      throw new Error(`asyncify: unsupported call-result type for fake global: ${type}`);
+  }
+}
+
+/** `if (state == Unwinding) __asyncify_unwind(index) else ifNotUnwinding`. */
+function makePossibleUnwind(index: number, ifNotUnwinding: Expression | null): Expression {
+  return makeIf(
+    makeStateCheck(State.Unwinding),
+    makeCall(ASYNCIFY_UNWIND, [makeI32Const(index)], None),
+    ifNotUnwinding,
+  );
+}
+
+/**
+ * Wrap a state-changing call statement so it runs only when normal OR when
+ * rewinding into exactly this call, and notes an unwind afterwards. The
+ * `local.set` case defers the set via a fake global so an unwinding call's fake
+ * return value never lands in a real local.
+ */
+function makeCallSupport(curr: Expression, ctx: FlowCtx): Expression {
+  const index = ctx.callIndex.n++;
+  let executed = curr; // run in the if-then
+  let setBack: Expression | null = null; // the deferred local.set, if any
+
+  if (curr.kind === ExpressionKind.LocalSet) {
+    const set = curr as LocalSetExpr;
+    const fake = fakeGlobalFor(ctx, set.value.type);
+    executed = makeGlobalSet(fake, set.value);
+    setBack = makeLocalSet(set.index, makeGlobalGet(fake, set.value.type as ValType));
+  }
+
+  const thenSeq = makeBlock([executed, makePossibleUnwind(index, setBack)], null);
+  return makeIf(
+    makeBinary(
+      BinaryOp.OrI32,
+      makeStateCheck(State.Normal),
+      makeCall(ASYNCIFY_CHECK_CALL_INDEX, [makeI32Const(index)], ValType.I32),
+    ),
+    thenSeq,
+  );
+}
+
+/** Recursively instrument a flat expression tree for unwind/rewind. */
+function processFlow(curr: Expression, ctx: FlowCtx): Expression {
+  // A subtree that can't change state is simply skipped while rewinding.
+  if (!exprCanChangeState(curr, ctx)) return makeMaybeSkip(curr);
+
+  switch (curr.kind) {
+    case ExpressionKind.Block: {
+      const children = curr.children;
+      const newList: Expression[] = [];
+      let i = 0;
+      while (i < children.length) {
+        if (exprCanChangeState(children[i], ctx)) {
+          newList.push(processFlow(children[i], ctx));
+          i++;
+        } else {
+          // Clump a run of non-state-changing statements under one skip.
+          let j = i;
+          while (j < children.length && !exprCanChangeState(children[j], ctx)) j++;
+          const run = children.slice(i, j);
+          newList.push(run.length === 1 ? makeMaybeSkip(run[0]) : makeMaybeSkip(makeBlock(run, null)));
+          i = j;
+        }
+      }
+      return makeBlock(newList, curr.name);
+    }
+
+    case ExpressionKind.If: {
+      // In flat form the state change is in an arm, never the condition.
+      if (!curr.ifFalse) {
+        const newIfTrue = processFlow(curr.ifTrue, ctx);
+        return makeIf(makeBinary(BinaryOp.OrI32, curr.condition, makeStateCheck(State.Rewinding)), newIfTrue);
+      }
+      // Two arms: pass through both while rewinding, gated on a saved condition.
+      const newIfTrue = processFlow(curr.ifTrue, ctx);
+      const newIfFalse = processFlow(curr.ifFalse, ctx);
+      const condTemp = ctx.func.locals.length;
+      ctx.func.locals.push({ type: ValType.I32 });
+      const pre = makeMaybeSkip(makeLocalSet(condTemp, curr.condition));
+      const if1 = makeIf(
+        makeBinary(BinaryOp.OrI32, makeLocalGet(condTemp, ValType.I32), makeStateCheck(State.Rewinding)),
+        newIfTrue,
+      );
+      const if2 = makeIf(
+        makeBinary(
+          BinaryOp.OrI32,
+          makeUnary(UnaryOp.EqzI32, makeLocalGet(condTemp, ValType.I32)),
+          makeStateCheck(State.Rewinding),
+        ),
+        newIfFalse,
+      );
+      return makeBlock([pre, if1, if2], null);
+    }
+
+    case ExpressionKind.Loop:
+      return { ...curr, type: None, body: processFlow(curr.body, ctx) };
+
+    default:
+      if (doesCall(curr)) return makeCallSupport(curr, ctx);
+      throw new Error(`asyncify flow: unexpected state-changing expression ${curr.kind}`);
+  }
+}
+
+/**
+ * Flow-instrument one already-flattened instrumented function in place. The
+ * body is wrapped so a rewind first pops its call index, then re-executes,
+ * skipping forward to the paused call. Emits the temporary intrinsics that
+ * Stage 4 implements.
+ */
+export function flowInstrumentFunction(func: WasmFunction, ctx: FlowCtx): void {
+  const processed = processFlow(func.body, ctx);
+  const list: Expression[] = [
+    makeIf(makeStateCheck(State.Rewinding), makeCall(ASYNCIFY_GET_CALL_INDEX, [], None)),
+    processed,
+  ];
+  // Rewriting control flow may leave the value-producing tail conditional; a
+  // trailing unreachable keeps a value-returning function well-formed (the
+  // optimizer removes it later).
+  if (func.results.length > 0) list.push(makeUnreachable());
+  func.body = makeBlock(list, null);
+}
+
+/**
+ * Materialize the fake call-result globals collected during flow instrumentation
+ * (one mutable global per call-result type), adding them to `module`.
+ */
+export function materializeFakeGlobals(module: WasmModule, fakeGlobals: Map<Type, string>): void {
+  for (const [type, name] of fakeGlobals) {
+    module.globals.push({ name, type: type as ValType, mutable: true, init: makeZero(type) });
+  }
 }
 
 // ---------------------------------------------------------------------------

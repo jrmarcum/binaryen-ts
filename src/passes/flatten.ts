@@ -43,6 +43,8 @@
 import {
   type BlockExpr,
   type BreakExpr,
+  type CallExpr,
+  type CallIndirectExpr,
   type Expression,
   ExpressionKind,
   type IfExpr,
@@ -107,6 +109,25 @@ function rejectUnsupported(e: Expression): void {
 
 interface Ctx {
   func: WasmFunction;
+  /**
+   * Maps a direct-call target name to its result type. The WAT/binary parser
+   * leaves `Call.type === none` (the callee's result is implicit in wasm), so
+   * flatten must resolve it here to know whether a call produces a value that
+   * needs hoisting into a local.
+   */
+  callResultTypes: Map<string, Type>;
+}
+
+/** The effective result type of a (possibly type-`none`) call node. */
+function callEffectiveType(e: Expression, ctx: Ctx): Type {
+  if (e.kind === ExpressionKind.Call) {
+    return ctx.callResultTypes.get((e as CallExpr).target) ?? None;
+  }
+  if (e.kind === ExpressionKind.CallIndirect) {
+    const r = (e as CallIndirectExpr).results;
+    return r.length > 0 ? r[0] : None;
+  }
+  return e.type;
 }
 
 /** Allocate a fresh local of `type` and return its index. */
@@ -166,11 +187,13 @@ function flattenExpr(e: Expression, ctx: Ctx): Flat {
   if (rebuilt.type === Unreachable) {
     return { pre: [...childPre, rebuilt], value: makeUnreachable() };
   }
-  if (isConcrete(rebuilt.type)) {
-    const temp = allocTemp(ctx, rebuilt.type);
+  // Calls carry `type === none` from the parser; resolve their true result type.
+  const effType = callEffectiveType(rebuilt, ctx);
+  if (isConcrete(effType)) {
+    const temp = allocTemp(ctx, effType);
     return {
       pre: [...childPre, makeLocalSet(temp, rebuilt)],
-      value: makeLocalGet(temp, rebuilt.type as ValType),
+      value: makeLocalGet(temp, effType as ValType),
     };
   }
   // Void statement (store, local.set, drop, void call, br/br_if without value…).
@@ -279,12 +302,38 @@ function flattenLoop(loop: LoopExpr, ctx: Ctx): Flat {
 // Function driver + pass
 // ---------------------------------------------------------------------------
 
-/** Flatten a single function body in place. */
-export function flattenFunction(func: WasmFunction): void {
-  const ctx: Ctx = { func };
-  // A concrete function body becomes a `return` so its value leaves via the
-  // return, matching upstream (the body block ends up void).
-  const bodyIsValue = isConcrete(func.body.type) && func.results.length > 0;
+/**
+ * Build the direct-call result-type map (`funcName → result type`) a module
+ * needs for flattening — imports and defined functions. Pass it to
+ * {@link flattenFunction}; the {@link FlattenPass} builds it automatically.
+ */
+export function buildCallResultTypes(module: WasmModule): Map<string, Type> {
+  const map = new Map<string, Type>();
+  for (const imp of module.imports) {
+    if (imp.kind === "function") map.set(imp.name, imp.results?.[0] ?? None);
+  }
+  for (const f of module.functions) {
+    map.set(f.name, f.results[0] ?? None);
+  }
+  return map;
+}
+
+/**
+ * Flatten a single function body in place. `callResultTypes` maps direct-call
+ * targets to their result type (see {@link buildCallResultTypes}); when omitted
+ * calls are treated as void (correct only for modules with no value-returning
+ * calls).
+ */
+export function flattenFunction(
+  func: WasmFunction,
+  callResultTypes: Map<string, Type> = new Map(),
+): void {
+  const ctx: Ctx = { func, callResultTypes };
+  // A value-returning function body yields the return value; route it through a
+  // `return` (matching upstream) so the body block ends up void. Guard on the
+  // result signature, not `body.type`, since a call-bodied function has
+  // `body.type === none` from the parser.
+  const bodyIsValue = func.results.length > 0 && func.body.type !== Unreachable;
   const source = bodyIsValue ? makeReturn(func.body) : func.body;
 
   const f = flattenExpr(source, ctx);
@@ -304,8 +353,9 @@ export class FlattenPass implements Pass {
   readonly requiresNonNullableLocalFixups = false;
 
   run(module: WasmModule, _options: PassOptions): void {
+    const callResultTypes = buildCallResultTypes(module);
     for (const func of module.functions) {
-      flattenFunction(func);
+      flattenFunction(func, callResultTypes);
     }
   }
 }
