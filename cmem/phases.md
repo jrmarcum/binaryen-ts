@@ -45,9 +45,9 @@ Enforced by `deno task bump`. See [publishing.md](publishing.md).
 
 ## In progress
 
-- **Asyncify** (`--asyncify` port, for TinyGo goroutines). **Stages 1-3a of 5 done** (2026-07-05,
-  `2902fca` runtime support + `3b35d97` ModuleAnalyzer + `2e30ea4` flatten pass), validated vs `wasm-opt`
-  v130 + behavioral equivalence. Stage 3b (AsyncifyFlow) + Stage 4 (AsyncifyLocals) +
+- **Asyncify** (`--asyncify` port, for TinyGo goroutines). **Stages 1-3b of 5 done** (2026-07-05,
+  `2902fca` runtime support + `3b35d97` ModuleAnalyzer + `2e30ea4` flatten + `62a4573` flow), validated vs `wasm-opt`
+  v130 + behavioral equivalence. Stage 4 (AsyncifyLocals + intrinsic lowering) +
   Stage 5 (validate + register + CLI wiring) remain. Full detail + resume point in
   [passes.md](passes.md) § "Asyncify".
 

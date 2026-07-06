@@ -34,7 +34,7 @@ that before touching CoalesceLocals, LocalCSE, Inlining, or Vacuum.
 | `remove-unused-names.ts`           | Strip unused block/loop labels (2-pass per fn: collect branch targets, then strip bottom-up). A loop with no back-edge → replaced by its body (type-guarded).                                                                                             |
 | `strip-eh.ts`                      | `throw`/`throw_ref` → `block[drop(op)…, unreachable]`; `rethrow` → `unreachable`; `try`/`try_table` → body. Clears tags + `hasExceptionHandling`.                                                                                                         |
 | `flatten.ts`                       | Rewrites functions into **Flat IR**: every value subexpr hoisted into its own `local.set`, operands trivial, control flow routes values through temp locals. Port of upstream `--flatten`. Registered. Prerequisite for Asyncify Stage 3b. Also surfaced the `mapChildrenShallow` fix in `walk.ts`. |
-| `asyncify.ts`                      | **IN PROGRESS (Stage 3a/5 done).** Pause/resume (unwind/rewind the call stack) — port of upstream `--asyncify`. S1 runtime support; S2 `analyzeModule` instrument-set (oracle-validated); S3a `flatten` prerequisite done. NOT registered until instrumentation (S3b flow + S4 locals) lands. See the dedicated section below. |
+| `asyncify.ts`                      | **IN PROGRESS (Stage 3b/5 done).** Pause/resume (unwind/rewind the call stack) — port of upstream `--asyncify`. S1 runtime support; S2 `analyzeModule` instrument-set (oracle-validated); S3a flatten + S3b flow (control-flow skip/unwind, structural-validated) done. NOT registered until S4 (locals + intrinsic lowering) lands. See the dedicated section below. |
 
 ## CoalesceLocals + CFG liveness (`cfg.ts` + `coalesce-locals.ts`, Phase 4.1)
 
@@ -160,28 +160,42 @@ forward while rewinding, jump out while unwinding" over structured control flow 
   callback — identical behavior, full suite green) and exposed `mapChildrenShallow`. Validation:
   behavioral equivalence (run original vs flattened, bit-identical) + flatness invariants (no
   local.tee, trivial conditions/operands, calls hoisted). **9 tests**; full suite **367/367**.
-- **Stage 3b (NEXT)** — `AsyncifyFlow`: per-function control-flow skip/unwind body transform
-  (`Asyncify.cpp` ~922-1260), applied only to `analysis.instrumentedFuncs` AFTER flattening them; the
-  `$__asyncify_unwind` block + call-index dispatch. Two-phase Scan/Finish work-stack that linearizes
-  if/loop/block ("if (rewinding || cond)" arms), wraps each state-changing call with
-  `makeCallSupport` (note-unwind + call-index check), and `makeMaybeSkip` for non-state-changing
-  chunks. Uses the `analyzer.canChangeState(expr, func)` per-call-site check (port `Asyncify.cpp`
-  810-860 — walks an expr for calls to state-changers / the temporary asyncify intrinsics).
-- **Stage 4** — `AsyncifyLocals`: liveness-driven local save/restore over the asyncify stack
-  (`Asyncify.cpp` ~1358-1700), reusing `cfg.ts`/`coalesce-locals.ts` liveness.
+- **Stage 3b ✅** (commit `62a4573`) — `flowInstrumentFunction(func, ctx)` ported from AsyncifyFlow
+  (`Asyncify.cpp` 878-1258). On a flattened instrumented func: wraps the body so a rewind pops its call
+  index then re-executes skipping forward; linearizes if (→ guarded `rewinding||cond` arms) / loop /
+  block (clumps non-state-changing runs under one `if(state==Normal)` skip); wraps each state-changing
+  call (`makeCallSupport`) with a call-index check + possible-unwind; `local.set`-of-call defers via a
+  per-type **fake global**. `exprCanChangeState` = the per-call-site walk. Emits 3 TEMPORARY intrinsics
+  (`$__asyncify_get_call_index`/`_check_call_index`/`_unwind`) that Stage 4 implements — so flow output
+  isn't runnable yet and is NOT wired into `run()` (kept as its own exported fn); validated
+  **structurally** (rewind prelude, 1 check+unwind per call w/ distinct indices, if/loop linearization,
+  fake-global deferral). **7 tests.** **Also fixed a latent Flatten gap it surfaced:** the parser leaves
+  `Call.type===none`, so flatten was dropping value-returning calls as void — added `buildCallResultTypes`
+  + a resolver threaded into `flattenFunction` (now takes the map; `FlattenPass` builds it). Full suite **374/374**.
+- **Stage 4 (NEXT)** — `AsyncifyLocals` + **implement the 3 temporary intrinsics** (`Asyncify.cpp`
+  ~1358-1700 + the intrinsic lowering). Adds, per instrumented func: the `$__asyncify_unwind` block
+  target, local save (on unwind) / restore (on rewind) over the asyncify stack using liveness (reuse
+  `cfg.ts`/`coalesce-locals.ts`), the call-index push/pop/check against the stack, and the increment of
+  the stack pointer. Replaces the fake globals + intrinsic calls emitted in 3b with real stack ops.
+  After this the module is RUNNABLE — first point behavioral tests are possible.
 - **Stage 5** — port `test_asyncify.py` cases + a real TinyGo goroutine e2e; then `registerPass` +
-  wire `--asyncify` into `wasm-opt.ts`/compat. The pass is deliberately **unregistered** until Stage 4
-  completes (nothing may invoke a half-instrumented transform).
+  wire `--asyncify` into `wasm-opt.ts`/compat + `AsyncifyPass.run` (analyze → per-instrumented-func
+  flatten+flow+locals → synthesize runtime support). The pass is deliberately **unregistered** until
+  Stage 4 completes (nothing may invoke a half-instrumented transform).
 
-**RESUME POINT (next session):** Stage 3b — port `AsyncifyFlow` (`Asyncify.cpp` 922-1260) +
-`ModuleAnalyzer::canChangeState(expr, func)` (810-860). In `AsyncifyPass.run`: after `analyzeModule`,
-for each name in `analysis.instrumentedFuncs` run `flattenFunction(func)` (Stage 3a) THEN the flow
-transform, then `synthesizeRuntimeSupport`. The flow wraps the (now flat) body in `block[ if(rewinding)
-callIndexPop; process(body) ]`; `process` is the two-phase Scan/Finish work-stack that linearizes
-control flow (if→two guarded ifs, "keep going forward" while rewinding) and wraps each state-changing
-call with note-unwind + call-index check. Temp/global intrinsics needed: `$__asyncify_unwind` block
-label, a call-index counter, `makeStateCheck(State)`, `makeCallIndexPush/Pop`. Differentially check
-the instrumented output behaves like `wasm-opt --asyncify` (run a suspend/resume driver). Stage 4
-(AsyncifyLocals) then adds local save/restore over the asyncify stack. `analyzeModule` already returns
-`{ instrumentedFuncs, canChangeState, addedFromList }`; `flattenFunction` is exported from `flatten.ts`.
+**RESUME POINT (next session):** Stage 4 — port `AsyncifyLocals` (`Asyncify.cpp` ~1358-1700) and
+**lower the 3 temporary intrinsics** that Stage 3b emits. Per instrumented (flat+flowed) function,
+AsyncifyLocals: (1) wraps the body in a `$__asyncify_unwind` block; (2) uses liveness (reuse
+`cfg.ts`/`coalesce-locals.ts`) to find the locals live across each call, and emits save-on-unwind /
+restore-on-rewind over the asyncify stack (`__asyncify_data`'s stack ptr @0, end @4; STACK_ALIGN=4;
+grows up); (3) lowers the intrinsics: `$__asyncify_check_call_index(i)` → compare the popped index to
+`i`; `$__asyncify_get_call_index()` → load the next index from the stack; `$__asyncify_unwind(i)` →
+push `i` + break to `$__asyncify_unwind`; and resolves the fake globals (`$asyncify_fake_call_global_*`)
+into the local save/restore. See upstream `AsyncifyLocals` struct + `makeCallIndexPush/Peek` and the
+`AsyncifyBuilder::makeGetStackPos`/`makeIncStackPos` (Asyncify.cpp 888-912) for the exact stack ops.
+After Stage 4 the module is RUNNABLE → first behavioral tests (a hand-written suspend/resume driver,
+then TinyGo). Then Stage 5 wires `AsyncifyPass.run` (analyze → per-func flatten+flow+locals →
+synthesize) + registers the pass + `--asyncify` CLI. Exported building blocks already in `asyncify.ts`:
+`analyzeModule`, `flowInstrumentFunction`, `materializeFakeGlobals`, `synthesizeRuntimeSupport`;
+`flattenFunction`/`buildCallResultTypes` in `flatten.ts`.
 </content>
