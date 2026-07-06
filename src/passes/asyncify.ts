@@ -44,7 +44,10 @@
 
 import {
   BinaryOp,
+  type CallExpr,
+  type CallIndirectExpr,
   type Expression,
+  ExpressionKind,
   makeBinary,
   makeBlock,
   makeGlobalGet,
@@ -55,8 +58,9 @@ import {
   makeLocalGet,
   makeUnreachable,
 } from "../ir/expressions.ts";
-import type { Local, WasmModule } from "../ir/module.ts";
+import type { Local, WasmImport, WasmModule } from "../ir/module.ts";
 import { ValType } from "../ir/types.ts";
+import { walkExpression } from "../ir/walk.ts";
 import type { Pass, PassOptions } from "./pass.ts";
 
 // ---------------------------------------------------------------------------
@@ -285,17 +289,213 @@ function addExportedFunction(
 }
 
 // ---------------------------------------------------------------------------
+// ModuleAnalyzer (Stage 2) — mirror Asyncify.cpp lines 538-808.
+//
+// Whole-program analysis of which functions "can change the state" — i.e. may
+// start an unwind/rewind, directly or transitively — and therefore must be
+// instrumented. The safe default (upstream): every import and every indirect
+// call is assumed to be able to unwind; `asyncify-imports` / `-ignore-imports`
+// / `-ignore-indirect` and the add/remove/only lists refine that.
+// ---------------------------------------------------------------------------
+
+/** Result of the whole-program analysis. */
+export interface AnalysisResult {
+  /** Internal names of the DEFINED functions that need instrumentation. */
+  instrumentedFuncs: Set<string>;
+  /**
+   * `canChangeState` per function name (defined AND imported). Consumed by the
+   * Stage-3 flow transform to decide which call sites to instrument.
+   */
+  canChangeState: Map<string, boolean>;
+  /**
+   * Functions forced in via the add-list / only-list. Per the upstream docs
+   * these also get their indirect calls instrumented even under
+   * `ignore-indirect`.
+   */
+  addedFromList: Set<string>;
+}
+
+/** The `asyncify` import module namespace (the in-wasm-runtime control API). */
+const ASYNCIFY_IMPORT_MODULE = "asyncify";
+
+/**
+ * Translate a wildcard pattern (`*` matches any run of characters, as in the
+ * upstream `String::wildcardMatch`) into an anchored RegExp and test it.
+ */
+function wildcardMatch(pattern: string, str: string): boolean {
+  const escaped = pattern.replace(/[.+?^${}()|[\]\\]/g, "\\$&").replace(/\*/g, ".*");
+  return new RegExp(`^${escaped}$`).test(str);
+}
+
+/**
+ * Analyze `module` and compute the set of functions to instrument.
+ *
+ * Faithful to the common-path logic of upstream `ModuleAnalyzer`
+ * (Asyncify.cpp 538-808): initial per-function scan (imports + indirect calls),
+ * remove-list, add-list (pre- or post-propagation per `propagate-addlist`),
+ * backward call-graph propagation, and the only-list override.
+ *
+ * **Not yet supported:** the "manage everything inside wasm" mode where the
+ * module imports `asyncify.start_unwind` / `.stop_unwind` / `.start_rewind` /
+ * `.stop_rewind` (top-most / bottom-most runtime handling). Such a module
+ * throws here rather than being silently mis-analyzed — the driving use cases
+ * (TinyGo goroutines, JS-driven Emscripten-style pausing) do not use it.
+ */
+export function analyzeModule(
+  module: WasmModule,
+  options: AsyncifyOptions,
+): AnalysisResult {
+  // Unsupported advanced mode: in-wasm asyncify.* runtime imports.
+  const asyncifyImport = module.imports.find(
+    (i) => i.kind === "function" && i.module === ASYNCIFY_IMPORT_MODULE,
+  );
+  if (asyncifyImport) {
+    throw new Error(
+      `asyncify: importing from the "${ASYNCIFY_IMPORT_MODULE}" module ` +
+        `(in-wasm unwind/rewind runtime) is not yet supported by this port; ` +
+        `drive unwind/rewind from the host via the exported control functions.`,
+    );
+  }
+
+  if (options.onlyList.length > 0 && (options.removeList.length > 0 || options.addList.length > 0)) {
+    throw new Error(
+      "asyncify: an only-list cannot be combined with an add-list or remove-list.",
+    );
+  }
+
+  const canIndirect = !options.ignoreIndirect;
+  // Default (no imports-list and no ignore-imports): every import can unwind.
+  const allImportsCanChange = options.imports.length === 0 && !options.ignoreImports;
+  const canImportChangeState = (imp: WasmImport): boolean => {
+    if (allImportsCanChange) return true;
+    const full = `${imp.module}.${imp.base}`;
+    return options.imports.some((p) => wildcardMatch(p, full));
+  };
+
+  const matchesAny = (patterns: string[], name: string): boolean =>
+    patterns.some((p) => (p.includes("*") ? wildcardMatch(p, name) : p === name));
+
+  // Reverse call-graph edges: callee name -> set of (defined) caller names.
+  const calledBy = new Map<string, Set<string>>();
+  const canChangeState = new Map<string, boolean>();
+  const hasIndirectCall = new Map<string, boolean>();
+  const inRemoveList = new Set<string>();
+  const addedFromList = new Set<string>();
+
+  const addEdge = (callee: string, caller: string): void => {
+    let s = calledBy.get(callee);
+    if (!s) calledBy.set(callee, s = new Set());
+    s.add(caller);
+  };
+
+  // Seed imports.
+  for (const imp of module.imports) {
+    if (imp.kind === "function") {
+      canChangeState.set(imp.name, canImportChangeState(imp));
+    }
+  }
+
+  // Initial scan of defined functions: build the call graph + seed from
+  // indirect calls (direct-call-driven state change is added by propagation).
+  for (const func of module.functions) {
+    let indirect = false;
+    walkExpression(func.body, (e: Expression) => {
+      if (e.kind === ExpressionKind.Call) {
+        const call = e as CallExpr;
+        if (call.isReturn) {
+          throw new Error("asyncify: tail calls (return_call) are not yet supported.");
+        }
+        addEdge(call.target, func.name);
+      } else if (e.kind === ExpressionKind.CallIndirect) {
+        if ((e as CallIndirectExpr).isReturn) {
+          throw new Error("asyncify: tail calls (return_call_indirect) are not yet supported.");
+        }
+        indirect = true;
+      }
+    });
+    hasIndirectCall.set(func.name, indirect);
+    canChangeState.set(func.name, indirect && canIndirect);
+  }
+
+  // remove-list: assumed not to change state (and a barrier to propagation).
+  for (const func of module.functions) {
+    if (matchesAny(options.removeList, func.name)) {
+      inRemoveList.add(func.name);
+      canChangeState.set(func.name, false);
+    }
+  }
+
+  const applyAddList = (): void => {
+    if (options.addList.length === 0) return;
+    for (const func of module.functions) {
+      const inAdd = matchesAny(options.addList, func.name);
+      if (inAdd && matchesAny(options.removeList, func.name)) {
+        throw new Error(`asyncify: "${func.name}" is in both the add-list and the remove-list.`);
+      }
+      if (inAdd) {
+        canChangeState.set(func.name, true);
+        addedFromList.add(func.name);
+      }
+    }
+  };
+
+  // With propagate-addlist, seed add-list BEFORE propagation so callers of
+  // add-listed functions are instrumented too.
+  if (options.propagateAddList) applyAddList();
+
+  // Backward propagation: any function that (transitively) calls a
+  // state-changing function also changes state. remove-list funcs never receive
+  // the property and so do not propagate it further.
+  const worklist: string[] = [];
+  for (const [name, changes] of canChangeState) {
+    if (changes && !inRemoveList.has(name)) worklist.push(name);
+  }
+  while (worklist.length > 0) {
+    const callee = worklist.pop()!;
+    for (const caller of calledBy.get(callee) ?? []) {
+      if (!inRemoveList.has(caller) && !canChangeState.get(caller)) {
+        canChangeState.set(caller, true);
+        worklist.push(caller);
+      }
+    }
+  }
+
+  // only-list: exactly these defined functions change state, nothing else.
+  if (options.onlyList.length > 0) {
+    for (const func of module.functions) {
+      const matched = matchesAny(options.onlyList, func.name);
+      canChangeState.set(func.name, matched);
+      if (matched) addedFromList.add(func.name);
+    }
+  }
+
+  // Default add-list behaviour (no propagate): add AFTER propagation, so the
+  // added functions are instrumented but do not pull in their callers.
+  if (!options.propagateAddList) applyAddList();
+
+  // needsInstrumentation(func) = canChangeState && !isTopMostRuntime. We reject
+  // the asyncify.* import mode above, so isTopMostRuntime is never set.
+  const instrumentedFuncs = new Set<string>();
+  for (const func of module.functions) {
+    if (canChangeState.get(func.name)) instrumentedFuncs.add(func.name);
+  }
+
+  return { instrumentedFuncs, canChangeState, addedFromList };
+}
+
+// ---------------------------------------------------------------------------
 // Pass
 // ---------------------------------------------------------------------------
 
 /**
  * The Asyncify transformation pass.
  *
- * **Incomplete (Stage 1):** currently only synthesizes the runtime-support
- * globals + control functions. Whole-program analysis and body instrumentation
- * (Stages 2-4) are not yet applied, so a module run through this pass is not
- * yet functionally suspendable. The pass is deliberately left unregistered
- * until instrumentation is complete.
+ * **Incomplete (Stages 1-2 done):** computes the instrument set (Stage 2) and
+ * synthesizes the runtime-support globals + control functions (Stage 1). Body
+ * instrumentation (Stages 3-4: AsyncifyFlow + AsyncifyLocals) is not yet
+ * applied, so a module run through this pass is not yet functionally
+ * suspendable. The pass is deliberately left unregistered until instrumentation
+ * is complete.
  */
 export class AsyncifyPass implements Pass {
   readonly name = "Asyncify";
@@ -306,8 +506,11 @@ export class AsyncifyPass implements Pass {
 
   run(module: WasmModule, options: PassOptions): void {
     const opts = parseAsyncifyOptions(options.passArgs);
-    // TODO(stage 2): ModuleAnalyzer — determine the instrument set.
-    // TODO(stage 3): AsyncifyFlow — control-flow skip/unwind body transform.
+    // Stage 2: analyze BEFORE synthesizing runtime support, so the newly-added
+    // control functions are never themselves considered for instrumentation.
+    analyzeModule(module, opts);
+    // TODO(stage 3): AsyncifyFlow — control-flow skip/unwind body transform,
+    //   applied only to `analysis.instrumentedFuncs`.
     // TODO(stage 4): AsyncifyLocals — liveness-driven local save/restore.
     synthesizeRuntimeSupport(module, opts);
   }
