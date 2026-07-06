@@ -43,6 +43,13 @@ See [correctness.md](correctness.md) for the full root-cause detail on every WT 
 Sub-version-capped-at-9: `1.0.9 → 1.1.0`, `1.9.9 → 2.0.0`, major uncapped (`9.9.9 → 10.0.0`).
 Enforced by `deno task bump`. See [publishing.md](publishing.md).
 
+## In progress
+
+- **Asyncify** (`--asyncify` port, for TinyGo goroutines). **Stage 1 of 5 done** (2026-07-05,
+  `2902fca`): runtime-support synthesis, differentially validated vs `wasm-opt` v130. Stages 2-4
+  (ModuleAnalyzer / AsyncifyFlow / AsyncifyLocals) + Stage 5 (validate + register + CLI wiring) remain.
+  Full detail + resume point in [passes.md](passes.md) § "Asyncify".
+
 ## Deferred / not-yet-done
 
 - Phase 10 kernel selection (deferred until real-corpus profiling).
