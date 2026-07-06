@@ -33,7 +33,7 @@ that before touching CoalesceLocals, LocalCSE, Inlining, or Vacuum.
 | `inlining.ts`                      | `Inlining` + `InliningOptimizing` (see below).                                                                                                                                                                                                            |
 | `remove-unused-names.ts`           | Strip unused block/loop labels (2-pass per fn: collect branch targets, then strip bottom-up). A loop with no back-edge → replaced by its body (type-guarded).                                                                                             |
 | `strip-eh.ts`                      | `throw`/`throw_ref` → `block[drop(op)…, unreachable]`; `rethrow` → `unreachable`; `try`/`try_table` → body. Clears tags + `hasExceptionHandling`.                                                                                                         |
-| `asyncify.ts`                      | **IN PROGRESS (Stage 1/5).** Pause/resume (unwind/rewind the call stack) — port of upstream `--asyncify`. Stage 1 = runtime-support synthesis only; NOT registered until instrumentation (Stages 2-4) lands. See the dedicated section below.             |
+| `asyncify.ts`                      | **IN PROGRESS (Stage 2/5).** Pause/resume (unwind/rewind the call stack) — port of upstream `--asyncify`. Stage 1 = runtime support; Stage 2 = `analyzeModule` instrument-set (oracle-validated). NOT registered until instrumentation (Stages 3-4) lands. Stage 3 needs a `flatten` pass first. See the dedicated section below. |
 
 ## CoalesceLocals + CFG liveness (`cfg.ts` + `coalesce-locals.ts`, Phase 4.1)
 
@@ -139,22 +139,34 @@ forward while rewinding, jump out while unwinding" over structured control flow 
   `gt_u` stack-overflow check at offsets 0/4, export order); real wasm-opt round-trips our binary.
   **7 tests** in `tests/passes/asyncify_test.ts`; full suite **348/348**. wasm32 only (wasm64 throws a
   clear "not yet" — TinyGo is wasm32).
-- **Stage 2 (NEXT)** — `ModuleAnalyzer`: whole-program analysis of which functions can be on the stack
-  during a pause (transitive over the call graph; imports default-can-unwind unless
+- **Stage 2 ✅** (commit `3b35d97`) — `analyzeModule(module, options)`: whole-program analysis of which
+  functions can change state (transitive over the call graph; imports **default-can-unwind** unless
   `asyncify-imports`/`ignore-imports`; indirect calls default-can-unwind unless `ignore-indirect`;
-  `add`/`remove`/`only` lists; runtime code that calls the 5 control fns is never instrumented). Port
-  from `Asyncify.cpp` ~lines 538-860.
-- **Stage 3** — `AsyncifyFlow`: per-function control-flow skip/unwind body transform (`Asyncify.cpp`
-  ~922-1260); the `$__asyncify_unwind` block + call-index dispatch.
+  `add`/`remove`/`only` lists with backward propagation). Ported from `Asyncify.cpp` 538-808. The
+  in-wasm `asyncify.*` import runtime mode is **rejected with a clear error** (not mis-analyzed) —
+  TinyGo/host-driven pausing don't use it. **Differentially validated** vs `wasm-opt --asyncify
+  --pass-arg=asyncify-verbose` v130 (parse the "[asyncify] X can change the state" lines): all 6 cases
+  match. **10 tests** in `tests/passes/asyncify_analyzer_test.ts`; full suite **358/358**.
+- **Stage 3 (NEXT)** — `AsyncifyFlow`: per-function control-flow skip/unwind body transform
+  (`Asyncify.cpp` ~922-1260); the `$__asyncify_unwind` block + call-index dispatch, applied only to
+  `analysis.instrumentedFuncs`. **PREREQUISITE FOUND:** upstream runs `flatten` + `dce` before
+  AsyncifyFlow (flat IR is what makes it safe to wrap each call) — **binaryen-ts has `dce` but NO
+  `flatten` pass**. So Stage 3 splits: **3a = port `flatten`** (upstream `Flatten.cpp`, 424 LOC — moves
+  side-effecting subexprs like calls into `local.set` statements so each call stands alone) as a
+  reusable pass, then **3b = AsyncifyFlow on flat IR**. (Do NOT delegate flatten to binaryen.js interop
+  — that reintroduces the external-binaryen dep this whole item exists to remove.)
 - **Stage 4** — `AsyncifyLocals`: liveness-driven local save/restore over the asyncify stack
   (`Asyncify.cpp` ~1358-1700), reusing `cfg.ts`/`coalesce-locals.ts` liveness.
 - **Stage 5** — port `test_asyncify.py` cases + a real TinyGo goroutine e2e; then `registerPass` +
   wire `--asyncify` into `wasm-opt.ts`/compat. The pass is deliberately **unregistered** until Stage 4
   completes (nothing may invoke a half-instrumented transform).
 
-**RESUME POINT (next session):** Stage 2 — port `ModuleAnalyzer`. Read `Asyncify.cpp` 538-860; reuse
-the module's call-graph (imports + `Call`/`CallIndirect`/`RefFunc` walks like
-`remove-unused-module-elements.ts`); output = the set of function names to instrument, threaded into
-`AsyncifyPass.run` between option-parse and `synthesizeRuntimeSupport`. Oracle: compare our instrument
-set against which functions `wasm-opt --asyncify` actually transforms on the same input.
+**RESUME POINT (next session):** Stage 3a — port `flatten` (`upstream/src/passes/Flatten.cpp`, 424
+LOC) into `src/passes/flatten.ts` as a standalone registered pass: flatten each function so every
+side-effecting subexpression (notably `Call`/`CallIndirect`) is hoisted into its own `local.set` and
+each statement is a single flat operation. Validate against `wasm-opt --flatten` on sample WATs
+(structural/behavioral equivalence). THEN Stage 3b: port `AsyncifyFlow` (`Asyncify.cpp` 922-1260)
+operating on the flattened `instrumentedFuncs`, differentially checked against `wasm-opt --asyncify`
+disassembly. `analyzeModule` already returns `{ instrumentedFuncs, canChangeState, addedFromList }`
+for the flow to consume; thread it into `AsyncifyPass.run` where the Stage-3 TODO is.
 </content>
