@@ -45,3 +45,4 @@ import "./pick-load-signs.ts";
 import "./inlining.ts";
 import "./remove-unused-names.ts";
 import "./strip-eh.ts";
+import "./flatten.ts";

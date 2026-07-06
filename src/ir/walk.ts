@@ -44,7 +44,7 @@ export function mapExpression(
   expr: Expression,
   fn: (e: Expression) => Expression,
 ): Expression {
-  const mapped = _mapChildren(expr, fn);
+  const mapped = _mapChildren(expr, (c) => mapExpression(c, fn));
   return fn(mapped);
 }
 
@@ -84,8 +84,28 @@ export function visitChildren(
   _visitChildren(expr, visit);
 }
 
+/**
+ * Rebuilds `expr` with each of its **direct** children replaced by `fn(child)`,
+ * visiting children in evaluation order. Unlike {@link mapExpression}, `fn` is
+ * NOT applied to `expr` itself and the recursion does NOT descend past the
+ * direct children — the caller controls whether to recurse. This is the
+ * one-level structural rebuild primitive used by passes (e.g. Flatten) that
+ * need per-child control while collecting side information in `fn`.
+ *
+ * @param expr - The parent whose children to rebuild.
+ * @param fn   - Maps each direct child to its replacement (called in eval order).
+ * @returns A new parent node of the same kind with replaced children.
+ */
+export function mapChildrenShallow(
+  expr: Expression,
+  fn: (e: Expression) => Expression,
+): Expression {
+  return _mapChildren(expr, fn);
+}
+
 // ---------------------------------------------------------------------------
-// Internal: map children
+// Internal: map children. `fn` is applied to each DIRECT child (shallow);
+// `mapExpression` passes a callback that recurses, so it maps the whole tree.
 // ---------------------------------------------------------------------------
 
 function _mapChildren(
@@ -94,249 +114,249 @@ function _mapChildren(
 ): Expression {
   switch (expr.kind) {
     case ExpressionKind.Block:
-      return { ...expr, children: expr.children.map((c) => mapExpression(c, fn)) };
+      return { ...expr, children: expr.children.map((c) => fn(c)) };
 
     case ExpressionKind.If:
       return {
         ...expr,
-        condition: mapExpression(expr.condition, fn),
-        ifTrue: mapExpression(expr.ifTrue, fn),
-        ifFalse: expr.ifFalse ? mapExpression(expr.ifFalse, fn) : null,
+        condition: fn(expr.condition),
+        ifTrue: fn(expr.ifTrue),
+        ifFalse: expr.ifFalse ? fn(expr.ifFalse) : null,
       };
 
     case ExpressionKind.Loop:
-      return { ...expr, body: mapExpression(expr.body, fn) };
+      return { ...expr, body: fn(expr.body) };
 
     case ExpressionKind.Break:
       return {
         ...expr,
-        condition: expr.condition ? mapExpression(expr.condition, fn) : null,
-        value: expr.value ? mapExpression(expr.value, fn) : null,
+        condition: expr.condition ? fn(expr.condition) : null,
+        value: expr.value ? fn(expr.value) : null,
       };
 
     case ExpressionKind.Switch:
       return {
         ...expr,
-        condition: mapExpression(expr.condition, fn),
-        value: expr.value ? mapExpression(expr.value, fn) : null,
+        condition: fn(expr.condition),
+        value: expr.value ? fn(expr.value) : null,
       };
 
     case ExpressionKind.Return:
       return {
         ...expr,
-        value: expr.value ? mapExpression(expr.value, fn) : null,
+        value: expr.value ? fn(expr.value) : null,
       };
 
     case ExpressionKind.LocalSet:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.LocalTee:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.TableGet:
-      return { ...expr, index: mapExpression(expr.index, fn) };
+      return { ...expr, index: fn(expr.index) };
 
     case ExpressionKind.TableSet:
       return {
         ...expr,
-        index: mapExpression(expr.index, fn),
-        value: mapExpression(expr.value, fn),
+        index: fn(expr.index),
+        value: fn(expr.value),
       };
 
     case ExpressionKind.GlobalSet:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.Unary:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.Binary:
       return {
         ...expr,
-        left: mapExpression(expr.left, fn),
-        right: mapExpression(expr.right, fn),
+        left: fn(expr.left),
+        right: fn(expr.right),
       };
 
     case ExpressionKind.Select:
       return {
         ...expr,
-        ifTrue: mapExpression(expr.ifTrue, fn),
-        ifFalse: mapExpression(expr.ifFalse, fn),
-        condition: mapExpression(expr.condition, fn),
+        ifTrue: fn(expr.ifTrue),
+        ifFalse: fn(expr.ifFalse),
+        condition: fn(expr.condition),
       };
 
     case ExpressionKind.Drop:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.Load:
-      return { ...expr, ptr: mapExpression(expr.ptr, fn) };
+      return { ...expr, ptr: fn(expr.ptr) };
 
     case ExpressionKind.Store:
       return {
         ...expr,
-        ptr: mapExpression(expr.ptr, fn),
-        value: mapExpression(expr.value, fn),
+        ptr: fn(expr.ptr),
+        value: fn(expr.value),
       };
 
     case ExpressionKind.MemoryGrow:
-      return { ...expr, delta: mapExpression(expr.delta, fn) };
+      return { ...expr, delta: fn(expr.delta) };
 
     case ExpressionKind.MemoryCopy:
       return {
         ...expr,
-        dest: mapExpression(expr.dest, fn),
-        source: mapExpression(expr.source, fn),
-        size: mapExpression(expr.size, fn),
+        dest: fn(expr.dest),
+        source: fn(expr.source),
+        size: fn(expr.size),
       };
 
     case ExpressionKind.MemoryFill:
       return {
         ...expr,
-        dest: mapExpression(expr.dest, fn),
-        value: mapExpression(expr.value, fn),
-        size: mapExpression(expr.size, fn),
+        dest: fn(expr.dest),
+        value: fn(expr.value),
+        size: fn(expr.size),
       };
 
     case ExpressionKind.Call:
       return {
         ...expr,
-        operands: expr.operands.map((o) => mapExpression(o, fn)),
+        operands: expr.operands.map((o) => fn(o)),
       };
 
     case ExpressionKind.CallIndirect:
       return {
         ...expr,
-        target: mapExpression(expr.target, fn),
-        operands: expr.operands.map((o) => mapExpression(o, fn)),
+        target: fn(expr.target),
+        operands: expr.operands.map((o) => fn(o)),
       };
 
     case ExpressionKind.RefIsNull:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.RefEq:
       return {
         ...expr,
-        left: mapExpression(expr.left, fn),
-        right: mapExpression(expr.right, fn),
+        left: fn(expr.left),
+        right: fn(expr.right),
       };
 
     case ExpressionKind.RefI31:
-      return { ...expr, value: mapExpression(expr.value, fn) };
+      return { ...expr, value: fn(expr.value) };
 
     case ExpressionKind.I31Get:
-      return { ...expr, i31: mapExpression(expr.i31, fn) };
+      return { ...expr, i31: fn(expr.i31) };
 
     case ExpressionKind.StructNew:
-      return { ...expr, operands: expr.operands.map((o) => mapExpression(o, fn)) };
+      return { ...expr, operands: expr.operands.map((o) => fn(o)) };
 
     case ExpressionKind.StructGet:
-      return { ...expr, ref: mapExpression(expr.ref, fn) };
+      return { ...expr, ref: fn(expr.ref) };
 
     case ExpressionKind.StructSet:
       return {
         ...expr,
-        ref: mapExpression(expr.ref, fn),
-        value: mapExpression(expr.value, fn),
+        ref: fn(expr.ref),
+        value: fn(expr.value),
       };
 
     case ExpressionKind.ArrayNew:
       return {
         ...expr,
-        init: expr.init ? mapExpression(expr.init, fn) : null,
-        length: mapExpression(expr.length, fn),
+        init: expr.init ? fn(expr.init) : null,
+        length: fn(expr.length),
       };
 
     case ExpressionKind.ArrayNewFixed:
-      return { ...expr, values: expr.values.map((v) => mapExpression(v, fn)) };
+      return { ...expr, values: expr.values.map((v) => fn(v)) };
 
     case ExpressionKind.ArrayNewData:
     case ExpressionKind.ArrayNewElem:
       return {
         ...expr,
-        offset: mapExpression(expr.offset, fn),
-        length: mapExpression(expr.length, fn),
+        offset: fn(expr.offset),
+        length: fn(expr.length),
       };
 
     case ExpressionKind.ArrayGet:
       return {
         ...expr,
-        ref: mapExpression(expr.ref, fn),
-        index: mapExpression(expr.index, fn),
+        ref: fn(expr.ref),
+        index: fn(expr.index),
       };
 
     case ExpressionKind.ArraySet:
       return {
         ...expr,
-        ref: mapExpression(expr.ref, fn),
-        index: mapExpression(expr.index, fn),
-        value: mapExpression(expr.value, fn),
+        ref: fn(expr.ref),
+        index: fn(expr.index),
+        value: fn(expr.value),
       };
 
     case ExpressionKind.ArrayLen:
-      return { ...expr, ref: mapExpression(expr.ref, fn) };
+      return { ...expr, ref: fn(expr.ref) };
 
     case ExpressionKind.RefTest:
     case ExpressionKind.RefCast:
-      return { ...expr, ref: mapExpression(expr.ref, fn) };
+      return { ...expr, ref: fn(expr.ref) };
 
     case ExpressionKind.BrOn:
-      return { ...expr, ref: mapExpression(expr.ref, fn) };
+      return { ...expr, ref: fn(expr.ref) };
 
     case ExpressionKind.TryTable:
       return {
         ...expr,
-        body: mapExpression(expr.body, fn),
+        body: fn(expr.body),
       };
 
     case ExpressionKind.Try:
       return {
         ...expr,
-        body: mapExpression(expr.body, fn),
-        catchBodies: expr.catchBodies.map((b) => mapExpression(b, fn)),
+        body: fn(expr.body),
+        catchBodies: expr.catchBodies.map((b) => fn(b)),
       };
 
     case ExpressionKind.Throw:
-      return { ...expr, operands: expr.operands.map((o) => mapExpression(o, fn)) };
+      return { ...expr, operands: expr.operands.map((o) => fn(o)) };
 
     case ExpressionKind.ThrowRef:
-      return { ...expr, exnref: mapExpression(expr.exnref, fn) };
+      return { ...expr, exnref: fn(expr.exnref) };
 
     case ExpressionKind.SIMDExtract:
       return {
         ...(expr as SIMDExtractExpr),
-        vec: mapExpression((expr as SIMDExtractExpr).vec, fn),
+        vec: fn((expr as SIMDExtractExpr).vec),
       };
 
     case ExpressionKind.SIMDReplace: {
       const e = expr as SIMDReplaceExpr;
-      return { ...e, vec: mapExpression(e.vec, fn), value: mapExpression(e.value, fn) };
+      return { ...e, vec: fn(e.vec), value: fn(e.value) };
     }
 
     case ExpressionKind.SIMDShuffle: {
       const e = expr as SIMDShuffleExpr;
-      return { ...e, left: mapExpression(e.left, fn), right: mapExpression(e.right, fn) };
+      return { ...e, left: fn(e.left), right: fn(e.right) };
     }
 
     case ExpressionKind.SIMDTernary: {
       const e = expr as SIMDTernaryExpr;
       return {
         ...e,
-        a: mapExpression(e.a, fn),
-        b: mapExpression(e.b, fn),
-        c: mapExpression(e.c, fn),
+        a: fn(e.a),
+        b: fn(e.b),
+        c: fn(e.c),
       };
     }
 
     case ExpressionKind.SIMDShift: {
       const e = expr as SIMDShiftExpr;
-      return { ...e, vec: mapExpression(e.vec, fn), shift: mapExpression(e.shift, fn) };
+      return { ...e, vec: fn(e.vec), shift: fn(e.shift) };
     }
 
     case ExpressionKind.SIMDLoad:
-      return { ...(expr as SIMDLoadExpr), ptr: mapExpression((expr as SIMDLoadExpr).ptr, fn) };
+      return { ...(expr as SIMDLoadExpr), ptr: fn((expr as SIMDLoadExpr).ptr) };
 
     case ExpressionKind.SIMDLoadStoreLane: {
       const e = expr as SIMDLoadStoreLaneExpr;
-      return { ...e, ptr: mapExpression(e.ptr, fn), vec: mapExpression(e.vec, fn) };
+      return { ...e, ptr: fn(e.ptr), vec: fn(e.vec) };
     }
 
     // Leaf nodes — no children to transform
