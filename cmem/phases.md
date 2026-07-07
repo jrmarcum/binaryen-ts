@@ -43,13 +43,14 @@ See [correctness.md](correctness.md) for the full root-cause detail on every WT 
 Sub-version-capped-at-9: `1.0.9 → 1.1.0`, `1.9.9 → 2.0.0`, major uncapped (`9.9.9 → 10.0.0`).
 Enforced by `deno task bump`. See [publishing.md](publishing.md).
 
-## In progress
+## Recently completed
 
-- **Asyncify** (`--asyncify` port, for TinyGo goroutines). **Stages 1-3b of 5 done** (2026-07-05,
-  `2902fca` runtime support + `3b35d97` ModuleAnalyzer + `2e30ea4` flatten + `62a4573` flow), validated vs `wasm-opt`
-  v130 + behavioral equivalence. Stage 4 (AsyncifyLocals + intrinsic lowering) +
-  Stage 5 (validate + register + CLI wiring) remain. Full detail + resume point in
-  [passes.md](passes.md) § "Asyncify".
+- **Asyncify** (`--asyncify` port, for TinyGo goroutines) — ✅ **COMPLETE, all 5 stages** (2026-07-05):
+  `2902fca` runtime support + `3b35d97` ModuleAnalyzer + `2e30ea4` flatten pass (+`mapChildrenShallow`
+  walk.ts fix) + `62a4573` flow + `c446a3d` locals/intrinsics (runnable) + `62f0fb0` wire/register/CLI.
+  Registered `"Asyncify"` (opt-in), runnable e2e that **differentially matches `wasm-opt --asyncify`
+  v130**. Follow-up (wasmtk side): wire into `--lang=go` + a TinyGo-build goroutine e2e; publish
+  binaryen-ts. Full detail in [passes.md](passes.md) § "Asyncify".
 
 ## Deferred / not-yet-done
 

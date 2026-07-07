@@ -34,7 +34,7 @@ that before touching CoalesceLocals, LocalCSE, Inlining, or Vacuum.
 | `remove-unused-names.ts`           | Strip unused block/loop labels (2-pass per fn: collect branch targets, then strip bottom-up). A loop with no back-edge → replaced by its body (type-guarded).                                                                                             |
 | `strip-eh.ts`                      | `throw`/`throw_ref` → `block[drop(op)…, unreachable]`; `rethrow` → `unreachable`; `try`/`try_table` → body. Clears tags + `hasExceptionHandling`.                                                                                                         |
 | `flatten.ts`                       | Rewrites functions into **Flat IR**: every value subexpr hoisted into its own `local.set`, operands trivial, control flow routes values through temp locals. Port of upstream `--flatten`. Registered. Prerequisite for Asyncify Stage 3b. Also surfaced the `mapChildrenShallow` fix in `walk.ts`. |
-| `asyncify.ts`                      | **IN PROGRESS (Stage 3b/5 done).** Pause/resume (unwind/rewind the call stack) — port of upstream `--asyncify`. S1 runtime support; S2 `analyzeModule` instrument-set (oracle-validated); S3a flatten + S3b flow (control-flow skip/unwind, structural-validated) done. NOT registered until S4 (locals + intrinsic lowering) lands. See the dedicated section below. |
+| `asyncify.ts`                      | ✅ **COMPLETE + registered** (`"Asyncify"`, opt-in). Pause/resume (unwind/rewind the call stack) — full port of upstream `--asyncify`; runnable e2e, differentially matches wasm-opt v130. See the dedicated section below. |
 
 ## CoalesceLocals + CFG liveness (`cfg.ts` + `coalesce-locals.ts`, Phase 4.1)
 
@@ -108,13 +108,22 @@ consumer of `passArgs`). The 19 placeholder
 `ExpressionKind` members are dead but kept as a deliberate roadmap — `walk.ts` throws if one is ever
 constructed without a case.
 
-## Asyncify (`asyncify.ts`) — IN PROGRESS (Stage 1 of 5 done, 2026-07-05)
+## Asyncify (`asyncify.ts`) — ✅ FUNCTIONALLY COMPLETE (all 5 stages, 2026-07-05)
 
 Faithful port of upstream `--asyncify` (`upstream/src/passes/Asyncify.cpp`, **2030 LOC**) into native
-TS. **Driving use case:** be the `wasm-opt --asyncify` post-processing step that **TinyGo goroutine**
-wasm requires, so wasmtk's `--lang=go` path needs no external binaryen (roadmap item #2 / wasmtk
-`cmem/roadmap.md`). TinyGo depends on the exact ABI, so the transform + generated runtime-support must
-match upstream in shape.
+TS. **Registered** as `"Asyncify"` (opt-in; never in `-Oz` defaults); runnable end-to-end and
+**differentially validated to match `wasm-opt --asyncify` (Binaryen v130)** on suspend/resume with
+locals surviving a rewind. **Driving use case:** be the `wasm-opt --asyncify` post-processing step that
+**TinyGo goroutine** wasm requires, so wasmtk's `--lang=go` path needs no external binaryen (roadmap
+item #2). TinyGo depends on the exact ABI, so the transform + runtime-support match upstream in shape.
+**Remaining follow-up (wasmtk side, not binaryen-ts):** wire this pass into wasmtk's `--lang=go` build
+in place of external `wasm-opt`, with a full TinyGo-build goroutine e2e.
+
+`AsyncifyPass.run` = analyze → per instrumented func `flattenFunction` → `flowInstrumentFunction` →
+`localsInstrumentFunction` → `synthesizeRuntimeSupport`. `createPass` is now case-insensitive so the
+upstream lowercase flag (`--asyncify`) resolves to `"Asyncify"`. **Tests:** `asyncify_test.ts` (S1),
+`asyncify_analyzer_test.ts` (S2), `asyncify_flow_test.ts` (S3b structural), `asyncify_e2e_test.ts`
+(S4/S5 runnable + differential vs wasm-opt). Full suite **379/379**.
 
 **Foundation (all present — this is a port, not a from-scratch build):** the 66 `make*` IR builders,
 `ModuleBuilder`, the CFG + backward-flow liveness in `cfg.ts`/`coalesce-locals.ts` (exactly what
@@ -172,30 +181,30 @@ forward while rewinding, jump out while unwinding" over structured control flow 
   fake-global deferral). **7 tests.** **Also fixed a latent Flatten gap it surfaced:** the parser leaves
   `Call.type===none`, so flatten was dropping value-returning calls as void — added `buildCallResultTypes`
   + a resolver threaded into `flattenFunction` (now takes the map; `FlattenPass` builds it). Full suite **374/374**.
-- **Stage 4 (NEXT)** — `AsyncifyLocals` + **implement the 3 temporary intrinsics** (`Asyncify.cpp`
-  ~1358-1700 + the intrinsic lowering). Adds, per instrumented func: the `$__asyncify_unwind` block
-  target, local save (on unwind) / restore (on rewind) over the asyncify stack using liveness (reuse
-  `cfg.ts`/`coalesce-locals.ts`), the call-index push/pop/check against the stack, and the increment of
-  the stack pointer. Replaces the fake globals + intrinsic calls emitted in 3b with real stack ops.
-  After this the module is RUNNABLE — first point behavioral tests are possible.
-- **Stage 5** — port `test_asyncify.py` cases + a real TinyGo goroutine e2e; then `registerPass` +
-  wire `--asyncify` into `wasm-opt.ts`/compat + `AsyncifyPass.run` (analyze → per-instrumented-func
-  flatten+flow+locals → synthesize runtime support). The pass is deliberately **unregistered** until
-  Stage 4 completes (nothing may invoke a half-instrumented transform).
+- **Stage 4 ✅** (commit `c446a3d`) — `localsInstrumentFunction` (`Asyncify.cpp` 1446-1730). Lowers the
+  3 temporary intrinsics into real stack ops: `__asyncify_unwind(i)` → `br $__asyncify_unwind (i)`;
+  `__asyncify_get_call_index` → `stackPos -= 4; rewindIndex = load i32 @ stackPos`;
+  `__asyncify_check_call_index(i)` → `i32.eq(rewindIndex, i)`; fake globals → per-type scratch LOCALS.
+  Wraps the body: `[ if(Rewinding) restore-locals; unwindIndex = block $__asyncify_unwind [body,
+  barrier]; push-call-index; save-locals; zero-ret ]`. Stack ops via `$__asyncify_data[stackPos]`
+  (`makeGetStackPos`/`makeIncStackPos`), STACK_ALIGN=4. **Simplification vs upstream:** saves/restores
+  ALL original locals (params + user + flatten/flow temps) rather than a liveness-minimized set —
+  correct (dead local restored then overwritten), just more stack/frame; liveness is a future opt.
+  **Module now RUNNABLE:** e2e tests drive a real unwind/rewind — `compute(10)+get()→42 == 52`, loop
+  `sum(3),get→7 == 21` with locals surviving — and **differentially match `wasm-opt --asyncify`**.
+- **Stage 5 ✅** (commit `62f0fb0`) — `AsyncifyPass.run` wired to the full pipeline, `registerPass`,
+  added to the pass index; `createPass` made case-insensitive so `--asyncify` (upstream lowercase flag,
+  via `wasm-opt.ts`'s unknown-`--flag`→pass path) resolves to `"Asyncify"`. e2e test confirms the
+  registered path (`PassRunner.add("asyncify").run()`) produces a runnable, correct module.
 
-**RESUME POINT (next session):** Stage 4 — port `AsyncifyLocals` (`Asyncify.cpp` ~1358-1700) and
-**lower the 3 temporary intrinsics** that Stage 3b emits. Per instrumented (flat+flowed) function,
-AsyncifyLocals: (1) wraps the body in a `$__asyncify_unwind` block; (2) uses liveness (reuse
-`cfg.ts`/`coalesce-locals.ts`) to find the locals live across each call, and emits save-on-unwind /
-restore-on-rewind over the asyncify stack (`__asyncify_data`'s stack ptr @0, end @4; STACK_ALIGN=4;
-grows up); (3) lowers the intrinsics: `$__asyncify_check_call_index(i)` → compare the popped index to
-`i`; `$__asyncify_get_call_index()` → load the next index from the stack; `$__asyncify_unwind(i)` →
-push `i` + break to `$__asyncify_unwind`; and resolves the fake globals (`$asyncify_fake_call_global_*`)
-into the local save/restore. See upstream `AsyncifyLocals` struct + `makeCallIndexPush/Peek` and the
-`AsyncifyBuilder::makeGetStackPos`/`makeIncStackPos` (Asyncify.cpp 888-912) for the exact stack ops.
-After Stage 4 the module is RUNNABLE → first behavioral tests (a hand-written suspend/resume driver,
-then TinyGo). Then Stage 5 wires `AsyncifyPass.run` (analyze → per-func flatten+flow+locals →
-synthesize) + registers the pass + `--asyncify` CLI. Exported building blocks already in `asyncify.ts`:
-`analyzeModule`, `flowInstrumentFunction`, `materializeFakeGlobals`, `synthesizeRuntimeSupport`;
-`flattenFunction`/`buildCallResultTypes` in `flatten.ts`.
+**STATUS: all 5 stages ✅ — the `--asyncify` pass is functionally complete and registered.** Known
+gaps / future work (none block TinyGo goroutine code): (1) **liveness-minimized local saving** — we
+save all original locals; upstream saves only the live set (smaller frames). (2) **wasm64** — throws a
+clear "not yet". (3) **EH / tuples / value-carrying branches** — flatten rejects them (out of scope for
+TinyGo). (4) the advanced **in-wasm `asyncify.*` import runtime mode** — rejected in `analyzeModule`.
+(5) **Publish** binaryen-ts (next `deno task bump`/`publish`) so wasmtk can consume the asyncify pass.
+
+**Cross-project follow-up (wasmtk side, tracked in wasmtk `cmem/roadmap.md` #2):** wire this pass into
+wasmtk's `--lang=go` build to replace external `wasm-opt --asyncify`, with a real TinyGo-build goroutine
+e2e. binaryen-ts's job (the pass itself) is done; that integration lives in wasmtk.
 </content>

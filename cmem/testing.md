@@ -4,7 +4,7 @@
 
 ```sh
 deno task check       # type-check all files
-deno task test        # run the full suite (374 passed, 1 ignored — verified 2026-07-05; +7 S1 +10 S2 +7 S3b asyncify +9 flatten)
+deno task test        # run the full suite (379 passed, 1 ignored — verified 2026-07-05; asyncify COMPLETE (+7 S1 +10 S2 +7 S3b +5 e2e) +9 flatten)
 deno task fmt         # format
 deno task lint        # lint
 deno task ci          # check + test (the bundle CI runs)
