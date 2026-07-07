@@ -49,8 +49,11 @@ import {
   type DropExpr,
   type Expression,
   ExpressionKind,
+  type GlobalGetExpr,
+  type GlobalSetExpr,
   makeBinary,
   makeBlock,
+  makeBreak,
   makeCall,
   makeF32Const,
   makeF64Const,
@@ -62,6 +65,8 @@ import {
   makeLoad,
   makeLocalGet,
   makeLocalSet,
+  makeReturn,
+  makeStore,
   makeUnary,
   makeUnreachable,
   type LocalSetExpr,
@@ -69,7 +74,7 @@ import {
 } from "../ir/expressions.ts";
 import type { Local, WasmFunction, WasmImport, WasmModule } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
-import { walkExpression } from "../ir/walk.ts";
+import { mapExpression, walkExpression } from "../ir/walk.ts";
 import type { Pass, PassOptions } from "./pass.ts";
 
 // ---------------------------------------------------------------------------
@@ -721,6 +726,236 @@ export function materializeFakeGlobals(module: WasmModule, fakeGlobals: Map<Type
   for (const [type, name] of fakeGlobals) {
     module.globals.push({ name, type: type as ValType, mutable: true, init: makeZero(type) });
   }
+}
+
+// ---------------------------------------------------------------------------
+// AsyncifyLocals (Stage 4) — mirror Asyncify.cpp lines 1446-1730.
+//
+// Lowers the temporary intrinsics from Stage 3b into real stack operations,
+// converts the fake globals to locals, and wraps the flowed body so that on an
+// unwind the call index is pushed and the live locals are saved to the asyncify
+// stack, and on a rewind they are restored. After this the module is runnable.
+//
+// Stack layout: `$__asyncify_data` points to `{ i32 stackPos@0; i32 stackEnd@4 }`
+// (wasm32). The stack grows UP from stackPos; each save pushes the used locals
+// then the call index; STACK_ALIGN = 4 bytes.
+//
+// Simplification vs upstream: rather than a liveness pass, this saves/restores
+// ALL of a function's *original* locals (params + user + flatten/flow temps —
+// everything present before this stage adds its own temps). That is correct
+// (a dead local is restored then overwritten) at the cost of a little extra
+// stack per frame; the fake-call scratch locals and this stage's own index
+// temps are excluded. Liveness-minimized saving is a future optimization.
+// ---------------------------------------------------------------------------
+
+/** Byte offset within `$__asyncify_data` of the current stack position. */
+const STACK_POS_OFFSET = DataOffset.StackPos;
+/** log2 alignment for i32 stack accesses (STACK_ALIGN = 4 bytes). */
+const STACK_ALIGN_LOG2 = 2;
+/** Branch label of the unwind block (breaks here to unwind out of the body). */
+const ASYNCIFY_UNWIND_LABEL = "$__asyncify_unwind";
+
+/** `load i32 from $__asyncify_data[stackPos]` — the current asyncify stack pointer. */
+function makeGetStackPos(): Expression {
+  return makeLoad(
+    4,
+    false,
+    STACK_POS_OFFSET,
+    STACK_ALIGN_LOG2,
+    makeGlobalGet(ASYNCIFY_DATA, ValType.I32),
+    ValType.I32,
+  );
+}
+
+/** `$__asyncify_data[stackPos] += by` (nop when `by === 0`). */
+function makeIncStackPos(by: number): Expression {
+  if (by === 0) return makeBlock([], null); // effect-free placeholder
+  return makeStore(
+    4,
+    STACK_POS_OFFSET,
+    STACK_ALIGN_LOG2,
+    makeGlobalGet(ASYNCIFY_DATA, ValType.I32),
+    makeBinary(BinaryOp.AddI32, makeGetStackPos(), makeI32Const(by)),
+  );
+}
+
+/** The byte size of a (numeric) value type. */
+function byteSize(type: Type): number {
+  switch (type) {
+    case ValType.I32:
+    case ValType.F32:
+      return 4;
+    case ValType.I64:
+    case ValType.F64:
+      return 8;
+    default:
+      throw new Error(`asyncify: cannot save/restore non-numeric local of type ${type}`);
+  }
+}
+
+/** log2 store size of a numeric type (for the memarg align). */
+function loadOpBytes(type: Type): 1 | 2 | 4 | 8 | 16 {
+  return byteSize(type) as 1 | 2 | 4 | 8 | 16;
+}
+
+/** Per-function locals context. */
+interface LocalsCtx {
+  func: WasmFunction;
+  /** Reverse of the flow's fake-global map: fake global name → value type. */
+  fakeNameToType: Map<string, Type>;
+  /** Fake-call scratch locals, allocated per type on demand. */
+  fakeCallLocals: Map<Type, number>;
+  /** Local holding the popped call index during a rewind. */
+  rewindIndex: number;
+}
+
+function allocLocal(func: WasmFunction, type: Type): number {
+  const idx = func.locals.length;
+  func.locals.push({ type: type as ValType });
+  return idx;
+}
+
+function fakeCallLocal(ctx: LocalsCtx, type: Type): number {
+  let idx = ctx.fakeCallLocals.get(type);
+  if (idx === undefined) {
+    idx = allocLocal(ctx.func, type);
+    ctx.fakeCallLocals.set(type, idx);
+  }
+  return idx;
+}
+
+/** Replace the temporary intrinsics and fake globals with real ops (bottom-up). */
+function lowerIntrinsics(body: Expression, ctx: LocalsCtx): Expression {
+  return mapExpression(body, (e) => {
+    if (e.kind === ExpressionKind.Call) {
+      const c = e as CallExpr;
+      if (c.target === ASYNCIFY_UNWIND) {
+        // Break out of the body to the unwind block, carrying the call index.
+        return makeBreak(ASYNCIFY_UNWIND_LABEL, null, c.operands[0]);
+      }
+      if (c.target === ASYNCIFY_GET_CALL_INDEX) {
+        // Pop the next index off the stack into $rewindIndex.
+        return makeBlock([
+          makeIncStackPos(-4),
+          makeLocalSet(
+            ctx.rewindIndex,
+            makeLoad(4, false, 0, STACK_ALIGN_LOG2, makeGetStackPos(), ValType.I32),
+          ),
+        ], null);
+      }
+      if (c.target === ASYNCIFY_CHECK_CALL_INDEX) {
+        // Is this the call to resume into?  rewindIndex == index
+        return makeBinary(BinaryOp.EqI32, makeLocalGet(ctx.rewindIndex, ValType.I32), c.operands[0]);
+      }
+    } else if (e.kind === ExpressionKind.GlobalSet) {
+      const g = e as GlobalSetExpr;
+      const type = ctx.fakeNameToType.get(g.name);
+      if (type !== undefined) return makeLocalSet(fakeCallLocal(ctx, type), g.value);
+    } else if (e.kind === ExpressionKind.GlobalGet) {
+      const g = e as GlobalGetExpr;
+      const type = ctx.fakeNameToType.get(g.name);
+      if (type !== undefined) return makeLocalGet(fakeCallLocal(ctx, type), type as ValType);
+    }
+    return e;
+  });
+}
+
+/** `store $__asyncify_data[stackPos] = index; stackPos += 4`. */
+function makeCallIndexPush(unwindIndex: number): Expression {
+  return makeBlock([
+    makeStore(4, 0, STACK_ALIGN_LOG2, makeGetStackPos(), makeLocalGet(unwindIndex, ValType.I32)),
+    makeIncStackPos(4),
+  ], null);
+}
+
+/** Restore the saved locals from the stack (run in the rewind prelude). */
+function makeLocalLoading(func: WasmFunction, saved: number[]): Expression {
+  if (saved.length === 0) return makeBlock([], null);
+  const total = saved.reduce((s, i) => s + byteSize(func.locals[i].type), 0);
+  const temp = allocLocal(func, ValType.I32);
+  const list: Expression[] = [
+    makeIncStackPos(-total),
+    makeLocalSet(temp, makeGetStackPos()),
+  ];
+  let offset = 0;
+  for (const i of saved) {
+    const t = func.locals[i].type;
+    list.push(makeLocalSet(
+      i,
+      makeLoad(loadOpBytes(t), true, offset, STACK_ALIGN_LOG2, makeLocalGet(temp, ValType.I32), t as ValType),
+    ));
+    offset += byteSize(t);
+  }
+  return makeBlock(list, null);
+}
+
+/** Save the live locals to the stack (run after an unwind). */
+function makeLocalSaving(func: WasmFunction, saved: number[]): Expression {
+  if (saved.length === 0) return makeBlock([], null);
+  const temp = allocLocal(func, ValType.I32);
+  const list: Expression[] = [makeLocalSet(temp, makeGetStackPos())];
+  let offset = 0;
+  for (const i of saved) {
+    const t = func.locals[i].type;
+    list.push(makeStore(
+      loadOpBytes(t),
+      offset,
+      STACK_ALIGN_LOG2,
+      makeLocalGet(temp, ValType.I32),
+      makeLocalGet(i, t as ValType),
+    ));
+    offset += byteSize(t);
+  }
+  list.push(makeIncStackPos(offset));
+  return makeBlock(list, null);
+}
+
+/**
+ * Locals-instrument one flowed instrumented function in place: lower the
+ * intrinsics + fake globals, then wrap the body with the unwind block and the
+ * save/restore prelude+postamble. After this the function is runnable.
+ *
+ * @param func - The function, already flattened (3a) and flow-instrumented (3b).
+ * @param fakeGlobals - The flow context's fake-global map (type → global name).
+ */
+export function localsInstrumentFunction(func: WasmFunction, fakeGlobals: Map<Type, string>): void {
+  // Locals to save/restore = everything present before this stage adds temps.
+  const numOriginalLocals = func.locals.length;
+  const saved: number[] = [];
+  for (let i = 0; i < numOriginalLocals; i++) saved.push(i);
+
+  const fakeNameToType = new Map<string, Type>();
+  for (const [type, name] of fakeGlobals) fakeNameToType.set(name, type);
+
+  const rewindIndex = allocLocal(func, ValType.I32);
+  const unwindIndex = allocLocal(func, ValType.I32);
+  const ctx: LocalsCtx = { func, fakeNameToType, fakeCallLocals: new Map(), rewindIndex };
+
+  // Lower intrinsics + fake globals inside the (flowed) body.
+  const loweredBody = lowerIntrinsics(func.body, ctx);
+
+  // On normal completion the body returns directly; on unwind it breaks to the
+  // unwind block with the call index. Barrier after the body must be reached
+  // only in the (impossible) fallthrough case.
+  const barrier = func.results.length === 0 ? makeReturn() : makeUnreachable();
+  const unwindBlock: Expression = {
+    kind: ExpressionKind.Block,
+    type: ValType.I32, // breaks carry the i32 call index
+    name: ASYNCIFY_UNWIND_LABEL,
+    children: [loweredBody, barrier],
+  };
+
+  const newList: Expression[] = [
+    makeIf(makeStateCheck(State.Rewinding), makeLocalLoading(func, saved)),
+    makeLocalSet(unwindIndex, unwindBlock),
+    makeCallIndexPush(unwindIndex),
+    makeLocalSaving(func, saved),
+  ];
+  // On the unwind path the function must still "return" a value (ignored by the
+  // host); provide a zero of the result type.
+  if (func.results.length > 0) newList.push(makeZero(func.results[0]));
+
+  func.body = makeBlock(newList, null);
 }
 
 // ---------------------------------------------------------------------------
