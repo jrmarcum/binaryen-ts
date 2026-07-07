@@ -184,10 +184,10 @@ const mod = new ModuleBuilder()
 import { listPasses, PassRunner } from "@jrmarcum/binaryen-ts/passes";
 import { ModuleBuilder } from "@jrmarcum/binaryen-ts/ir";
 
-// ["CoalesceLocals", "DCE", "Inlining", "InliningOptimizing", "LocalCSE",
-//  "OptimizeInstructions", "PickLoadSigns", "RemoveUnusedBrs",
-//  "RemoveUnusedModuleElements", "RemoveUnusedNames", "SimplifyLocals",
-//  "StripEH", "Vacuum"]
+// ["Asyncify", "CoalesceLocals", "DCE", "Flatten", "Inlining",
+//  "InliningOptimizing", "LocalCSE", "OptimizeInstructions", "PickLoadSigns",
+//  "RemoveUnusedBrs", "RemoveUnusedModuleElements", "RemoveUnusedNames",
+//  "SimplifyLocals", "StripEH", "Vacuum"]
 console.log(listPasses());
 
 const runner = new PassRunner(module, { optimizeLevel: 2, shrinkLevel: 0 });
@@ -220,6 +220,13 @@ wasm-opt input.wasm -o out.wasm -Oz
 
 # Run specific passes only
 wasm-opt input.wasm -o out.wasm --vacuum --dce
+
+# Asyncify — instrument a module to pause/resume (unwind/rewind the call stack;
+# e.g. coroutines, generators, TinyGo goroutines). Adds the __asyncify_state /
+# __asyncify_data globals and the exported asyncify_start_unwind / stop_unwind /
+# start_rewind / stop_rewind / get_state control functions.
+wasm-opt input.wasm -o out.wasm --asyncify
+wasm-opt input.wasm -o out.wasm --asyncify --pass-arg=asyncify-ignore-indirect
 
 # List all registered passes
 wasm-opt --print-all-passes
