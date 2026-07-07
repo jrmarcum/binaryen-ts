@@ -75,7 +75,8 @@ import {
 import type { Local, WasmFunction, WasmImport, WasmModule } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
-import type { Pass, PassOptions } from "./pass.ts";
+import { buildCallResultTypes, flattenFunction } from "./flatten.ts";
+import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 
 // ---------------------------------------------------------------------------
 // ABI constants (mirror Asyncify.cpp lines 366-386)
@@ -967,10 +968,11 @@ export function localsInstrumentFunction(func: WasmFunction, fakeGlobals: Map<Ty
  *
  * **Incomplete (Stages 1-2 done):** computes the instrument set (Stage 2) and
  * synthesizes the runtime-support globals + control functions (Stage 1). Body
- * instrumentation (Stages 3-4: AsyncifyFlow + AsyncifyLocals) is not yet
- * applied, so a module run through this pass is not yet functionally
- * suspendable. The pass is deliberately left unregistered until instrumentation
- * is complete.
+ * Runs the complete pipeline per instrumented function — Flat IR → flow
+ * (skip/unwind) → locals (save/restore + intrinsic lowering) — then adds the
+ * runtime-support globals and the five exported control functions. Registered
+ * as `"Asyncify"` and opt-in only (never in the default optimization pipeline),
+ * matching upstream `--asyncify`.
  */
 export class AsyncifyPass implements Pass {
   readonly name = "Asyncify";
@@ -981,12 +983,31 @@ export class AsyncifyPass implements Pass {
 
   run(module: WasmModule, options: PassOptions): void {
     const opts = parseAsyncifyOptions(options.passArgs);
-    // Stage 2: analyze BEFORE synthesizing runtime support, so the newly-added
-    // control functions are never themselves considered for instrumentation.
-    analyzeModule(module, opts);
-    // TODO(stage 3): AsyncifyFlow — control-flow skip/unwind body transform,
-    //   applied only to `analysis.instrumentedFuncs`.
-    // TODO(stage 4): AsyncifyLocals — liveness-driven local save/restore.
+    // Analyze BEFORE any transform, so the newly-added runtime-support control
+    // functions are never themselves considered for instrumentation.
+    const analysis = analyzeModule(module, opts);
+    const callResultTypes = buildCallResultTypes(module);
+
+    for (const func of module.functions) {
+      if (!analysis.instrumentedFuncs.has(func.name)) continue;
+      // Per instrumented function: Flat IR → flow (skip/unwind) → locals
+      // (save/restore + intrinsic lowering).
+      flattenFunction(func, callResultTypes);
+      const flowCtx: FlowCtx = {
+        func,
+        canChangeState: analysis.canChangeState,
+        canIndirect: !opts.ignoreIndirect,
+        addedFromList: analysis.addedFromList,
+        callIndex: { n: 0 },
+        fakeGlobals: new Map(),
+      };
+      flowInstrumentFunction(func, flowCtx);
+      localsInstrumentFunction(func, flowCtx.fakeGlobals);
+    }
+
+    // Globals + the 5 exported control functions.
     synthesizeRuntimeSupport(module, opts);
   }
 }
+
+registerPass(AsyncifyPass);

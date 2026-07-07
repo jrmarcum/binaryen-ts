@@ -175,10 +175,25 @@ export function listPasses(): string[] {
 
 /**
  * Creates a pass instance by name.
+ *
+ * Lookup is exact first, then case-insensitive — so the upstream-style CLI flags
+ * (`--asyncify`, `--flatten`, `--dce`) resolve to the registry's canonical
+ * PascalCase names (`Asyncify`, `Flatten`, `DCE`). No two registered passes
+ * differ only by case, so the fallback is unambiguous.
+ *
  * Throws if the name is unknown.
  */
 export function createPass(name: string): Pass {
-  const ctor = registry.get(name);
+  let ctor = registry.get(name);
+  if (!ctor) {
+    const lower = name.toLowerCase();
+    for (const [key, value] of registry) {
+      if (key.toLowerCase() === lower) {
+        ctor = value;
+        break;
+      }
+    }
+  }
   if (!ctor) {
     throw new Error(
       `Unknown pass: "${name}". Run listPasses() to see registered passes.`,

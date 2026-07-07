@@ -19,7 +19,7 @@
  * @license MIT
  */
 
-import { assertEquals } from "@std/assert";
+import { assert, assertEquals } from "@std/assert";
 
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { parseWat } from "../../src/parser/wat-parser.ts";
@@ -32,6 +32,7 @@ import {
   parseAsyncifyOptions,
   synthesizeRuntimeSupport,
 } from "../../src/passes/asyncify.ts";
+import { listPasses, PassRunner } from "../../src/passes/index.ts";
 import type { WasmModule } from "../../src/ir/module.ts";
 
 // ---------------------------------------------------------------------------
@@ -209,4 +210,12 @@ Deno.test("asyncify e2e — loop case matches wasm-opt --asyncify", () => {
     return;
   }
   assertEquals(driveOnce(ref, "sum", [3], "get", 7), 21);
+});
+
+Deno.test("asyncify — registered as a pass, runnable via PassRunner (lowercase name)", () => {
+  assert(listPasses().includes("Asyncify"), "Asyncify should be a registered pass");
+  const mod = parseWat(ADD_GET);
+  // Resolve the upstream-style lowercase flag name case-insensitively.
+  new PassRunner(mod).add("asyncify").run();
+  assertEquals(driveOnce(encodeWasm(mod), "compute", [10], "get", 42), 52);
 });

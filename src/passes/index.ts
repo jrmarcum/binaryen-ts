@@ -46,3 +46,4 @@ import "./inlining.ts";
 import "./remove-unused-names.ts";
 import "./strip-eh.ts";
 import "./flatten.ts";
+import "./asyncify.ts";
