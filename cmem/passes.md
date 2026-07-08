@@ -18,23 +18,23 @@ that before touching CoalesceLocals, LocalCSE, Inlining, or Vacuum.
 
 ## The pass set
 
-| Pass                               | What it does                                                                                                                                                                                                                                              |
-| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
-| `dce.ts`                           | Dead code elimination. EH-aware (`Try`/`TryTable` cases; `eliminateDeadBlock` recurses).                                                                                                                                                                  |
-| `vacuum.ts`                        | Remove `nop` from blocks; collapse empty + unnamed-single-child blocks (guarded: collapse only when child type matches the block OR is `unreachable`); `drop(const\|local.get\|global.get)` → `nop`. `vacuumNode` exported as a reusable per-node helper. |
-| `optimize-instructions.ts`         | Algebraic identities (RHS-constant-first: shift-by-0, identity elements, ÷1) + i32/i64 constant folding (clz/eqz/extend/wrap/sign-extend). **Float ops excluded** (NaN). `optimizeNode` exported.                                                         |
-| `remove-unused-brs.ts`             | Remove tail-position `br`/`br_if` to own label. Safety: the new last child must be type `none` so the block result type is unchanged.                                                                                                                     |
-| `simplify-locals.ts`               | Consecutive `local.set(i) + local.get(i)` → `local.tee`. Same-block, no intervening instr.                                                                                                                                                                |
-| `coalesce-locals.ts`               | Dead-write elimination + slot coalescing, driven by CFG liveness (see below).                                                                                                                                                                             |
-| `cfg.ts`                           | Structural CFG + backward-flow worklist liveness. Shared infra.                                                                                                                                                                                           |
-| `local-cse.ts`                     | Within-block common-subexpression elimination. Keys pure subexprs by structural string hash.                                                                                                                                                              |
-| `remove-unused-module-elements.ts` | Reachability-based dead function/global removal. Seeds from exports + element segments; fixed-point call-graph walk via `Call` + `RefFunc`. Imported elements never removed.                                                                              |
-| `pick-load-signs.ts`               | Sign/unsigned selection for narrow loads. Tracks `local.set(i, narrow_load)`, counts signed/unsigned uses, flips if all agree.                                                                                                                            |
-| `inlining.ts`                      | `Inlining` + `InliningOptimizing` (see below).                                                                                                                                                                                                            |
-| `remove-unused-names.ts`           | Strip unused block/loop labels (2-pass per fn: collect branch targets, then strip bottom-up). A loop with no back-edge → replaced by its body (type-guarded).                                                                                             |
-| `strip-eh.ts`                      | `throw`/`throw_ref` → `block[drop(op)…, unreachable]`; `rethrow` → `unreachable`; `try`/`try_table` → body. Clears tags + `hasExceptionHandling`.                                                                                                         |
+| Pass                               | What it does                                                                                                                                                                                                                                                                                        |
+| ---------------------------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
+| `dce.ts`                           | Dead code elimination. EH-aware (`Try`/`TryTable` cases; `eliminateDeadBlock` recurses).                                                                                                                                                                                                            |
+| `vacuum.ts`                        | Remove `nop` from blocks; collapse empty + unnamed-single-child blocks (guarded: collapse only when child type matches the block OR is `unreachable`); `drop(const\|local.get\|global.get)` → `nop`. `vacuumNode` exported as a reusable per-node helper.                                           |
+| `optimize-instructions.ts`         | Algebraic identities (RHS-constant-first: shift-by-0, identity elements, ÷1) + i32/i64 constant folding (clz/eqz/extend/wrap/sign-extend). **Float ops excluded** (NaN). `optimizeNode` exported.                                                                                                   |
+| `remove-unused-brs.ts`             | Remove tail-position `br`/`br_if` to own label. Safety: the new last child must be type `none` so the block result type is unchanged.                                                                                                                                                               |
+| `simplify-locals.ts`               | Consecutive `local.set(i) + local.get(i)` → `local.tee`. Same-block, no intervening instr.                                                                                                                                                                                                          |
+| `coalesce-locals.ts`               | Dead-write elimination + slot coalescing, driven by CFG liveness (see below).                                                                                                                                                                                                                       |
+| `cfg.ts`                           | Structural CFG + backward-flow worklist liveness. Shared infra.                                                                                                                                                                                                                                     |
+| `local-cse.ts`                     | Within-block common-subexpression elimination. Keys pure subexprs by structural string hash.                                                                                                                                                                                                        |
+| `remove-unused-module-elements.ts` | Reachability-based dead function/global removal. Seeds from exports + element segments; fixed-point call-graph walk via `Call` + `RefFunc`. Imported elements never removed.                                                                                                                        |
+| `pick-load-signs.ts`               | Sign/unsigned selection for narrow loads. Tracks `local.set(i, narrow_load)`, counts signed/unsigned uses, flips if all agree.                                                                                                                                                                      |
+| `inlining.ts`                      | `Inlining` + `InliningOptimizing` (see below).                                                                                                                                                                                                                                                      |
+| `remove-unused-names.ts`           | Strip unused block/loop labels (2-pass per fn: collect branch targets, then strip bottom-up). A loop with no back-edge → replaced by its body (type-guarded).                                                                                                                                       |
+| `strip-eh.ts`                      | `throw`/`throw_ref` → `block[drop(op)…, unreachable]`; `rethrow` → `unreachable`; `try`/`try_table` → body. Clears tags + `hasExceptionHandling`.                                                                                                                                                   |
 | `flatten.ts`                       | Rewrites functions into **Flat IR**: every value subexpr hoisted into its own `local.set`, operands trivial, control flow routes values through temp locals. Port of upstream `--flatten`. Registered. Prerequisite for Asyncify Stage 3b. Also surfaced the `mapChildrenShallow` fix in `walk.ts`. |
-| `asyncify.ts`                      | ✅ **COMPLETE + registered** (`"Asyncify"`, opt-in). Pause/resume (unwind/rewind the call stack) — full port of upstream `--asyncify`; runnable e2e, differentially matches wasm-opt v130. See the dedicated section below. |
+| `asyncify.ts`                      | ✅ **COMPLETE + registered** (`"Asyncify"`, opt-in). Pause/resume (unwind/rewind the call stack) — full port of upstream `--asyncify`; runnable e2e, differentially matches wasm-opt v130. See the dedicated section below.                                                                         |
 
 ## CoalesceLocals + CFG liveness (`cfg.ts` + `coalesce-locals.ts`, Phase 4.1)
 
@@ -104,20 +104,19 @@ a single `VERSION` constant.
 
 `optimizeLevel`, `shrinkLevel`, `partialInliningIfs` (default 0), `passArgs: Record<string,string>`
 (keys follow upstream `passname@argname`; `asyncify.ts`'s `parseAsyncifyOptions` is the first real
-consumer of `passArgs`). The 19 placeholder
-`ExpressionKind` members are dead but kept as a deliberate roadmap — `walk.ts` throws if one is ever
-constructed without a case.
+consumer of `passArgs`). The 19 placeholder `ExpressionKind` members are dead but kept as a
+deliberate roadmap — `walk.ts` throws if one is ever constructed without a case.
 
 ## Asyncify (`asyncify.ts`) — ✅ FUNCTIONALLY COMPLETE (all 5 stages, 2026-07-05)
 
-Faithful port of upstream `--asyncify` (`upstream/src/passes/Asyncify.cpp`, **2030 LOC**) into native
-TS. **Registered** as `"Asyncify"` (opt-in; never in `-Oz` defaults); runnable end-to-end and
+Faithful port of upstream `--asyncify` (`upstream/src/passes/Asyncify.cpp`, **2030 LOC**) into
+native TS. **Registered** as `"Asyncify"` (opt-in; never in `-Oz` defaults); runnable end-to-end and
 **differentially validated to match `wasm-opt --asyncify` (Binaryen v130)** on suspend/resume with
-locals surviving a rewind. **Driving use case:** be the `wasm-opt --asyncify` post-processing step that
-**TinyGo goroutine** wasm requires, so wasmtk's `--lang=go` path needs no external binaryen (roadmap
-item #2). TinyGo depends on the exact ABI, so the transform + runtime-support match upstream in shape.
-**Remaining follow-up (wasmtk side, not binaryen-ts):** wire this pass into wasmtk's `--lang=go` build
-in place of external `wasm-opt`, with a full TinyGo-build goroutine e2e.
+locals surviving a rewind. **Driving use case:** be the `wasm-opt --asyncify` post-processing step
+that **TinyGo goroutine** wasm requires, so wasmtk's `--lang=go` path needs no external binaryen
+(roadmap item #2). TinyGo depends on the exact ABI, so the transform + runtime-support match
+upstream in shape. **Remaining follow-up (wasmtk side, not binaryen-ts):** wire this pass into
+wasmtk's `--lang=go` build in place of external `wasm-opt`, with a full TinyGo-build goroutine e2e.
 
 `AsyncifyPass.run` = analyze → per instrumented func `flattenFunction` → `flowInstrumentFunction` →
 `localsInstrumentFunction` → `synthesizeRuntimeSupport`. `createPass` is now case-insensitive so the
@@ -127,36 +126,41 @@ upstream lowercase flag (`--asyncify`) resolves to `"Asyncify"`. **Tests:** `asy
 
 **Foundation (all present — this is a port, not a from-scratch build):** the 66 `make*` IR builders,
 `ModuleBuilder`, the CFG + backward-flow liveness in `cfg.ts`/`coalesce-locals.ts` (exactly what
-AsyncifyLocals needs), and the `Pass` framework. Upstream `Asyncify.cpp` + `upstream/test/unit/
+AsyncifyLocals needs), and the `Pass` framework. Upstream `Asyncify.cpp` +
+`upstream/test/unit/
 test_asyncify.py` are vendored to port from and validate against.
 
 **Reference oracle for differential validation:** real `wasm-opt` **v130** and **TinyGo 0.41.1** are
-installed on this machine. Every stage is checked against `wasm-opt --asyncify` on identical inputs; a
-real TinyGo goroutine module is the Stage-5 end-to-end acceptance test.
+installed on this machine. Every stage is checked against `wasm-opt --asyncify` on identical inputs;
+a real TinyGo goroutine module is the Stage-5 end-to-end acceptance test.
 
 **ABI produced** (upstream header contract): global `$__asyncify_state` (i32: 0 normal / 1 unwind /
-2 rewind) + `$__asyncify_data` (i32 ptr to `{ i32 stackPos@0; i32 stackEnd@4 }`; i64 fields @0/@8 for
-wasm64). Five exported control fns: `asyncify_start_unwind(ptr)`, `asyncify_stop_unwind()`,
-`asyncify_start_rewind(ptr)`, `asyncify_stop_rewind()`, `asyncify_get_state()`. Body transform = "skip
-forward while rewinding, jump out while unwinding" over structured control flow (not a CFG rewrite).
+2 rewind) + `$__asyncify_data` (i32 ptr to `{ i32 stackPos@0; i32 stackEnd@4 }`; i64 fields @0/@8
+for wasm64). Five exported control fns: `asyncify_start_unwind(ptr)`, `asyncify_stop_unwind()`,
+`asyncify_start_rewind(ptr)`, `asyncify_stop_rewind()`, `asyncify_get_state()`. Body transform =
+"skip forward while rewinding, jump out while unwinding" over structured control flow (not a CFG
+rewrite).
 
 **Staged plan** (commit `2902fca` = Stage 1):
+
 - **Stage 1 ✅** — ABI constants (`State` 0/1/2, `DataOffset` 0/4, global + fn names),
   `parseAsyncifyOptions` (full `--pass-arg=asyncify-*` surface: imports / ignore-imports /
   ignore-indirect / add-remove-only lists / memory / import-export-globals), and
   `synthesizeRuntimeSupport` (2 mut-i32 globals + 5 exported control fns). Differentially validated:
-  our emitted globals + 5 control fns are **byte-for-shape identical** to wasm-opt v130 (state values,
-  `gt_u` stack-overflow check at offsets 0/4, export order); real wasm-opt round-trips our binary.
-  **7 tests** in `tests/passes/asyncify_test.ts`; full suite **348/348**. wasm32 only (wasm64 throws a
-  clear "not yet" — TinyGo is wasm32).
-- **Stage 2 ✅** (commit `3b35d97`) — `analyzeModule(module, options)`: whole-program analysis of which
-  functions can change state (transitive over the call graph; imports **default-can-unwind** unless
-  `asyncify-imports`/`ignore-imports`; indirect calls default-can-unwind unless `ignore-indirect`;
-  `add`/`remove`/`only` lists with backward propagation). Ported from `Asyncify.cpp` 538-808. The
-  in-wasm `asyncify.*` import runtime mode is **rejected with a clear error** (not mis-analyzed) —
-  TinyGo/host-driven pausing don't use it. **Differentially validated** vs `wasm-opt --asyncify
-  --pass-arg=asyncify-verbose` v130 (parse the "[asyncify] X can change the state" lines): all 6 cases
-  match. **10 tests** in `tests/passes/asyncify_analyzer_test.ts`; full suite **358/358**.
+  our emitted globals + 5 control fns are **byte-for-shape identical** to wasm-opt v130 (state
+  values, `gt_u` stack-overflow check at offsets 0/4, export order); real wasm-opt round-trips our
+  binary. **7 tests** in `tests/passes/asyncify_test.ts`; full suite **348/348**. wasm32 only
+  (wasm64 throws a clear "not yet" — TinyGo is wasm32).
+- **Stage 2 ✅** (commit `3b35d97`) — `analyzeModule(module, options)`: whole-program analysis of
+  which functions can change state (transitive over the call graph; imports **default-can-unwind**
+  unless `asyncify-imports`/`ignore-imports`; indirect calls default-can-unwind unless
+  `ignore-indirect`; `add`/`remove`/`only` lists with backward propagation). Ported from
+  `Asyncify.cpp` 538-808. The in-wasm `asyncify.*` import runtime mode is **rejected with a clear
+  error** (not mis-analyzed) — TinyGo/host-driven pausing don't use it. **Differentially validated**
+  vs `wasm-opt --asyncify
+  --pass-arg=asyncify-verbose` v130 (parse the "[asyncify] X can change
+  the state" lines): all 6 cases match. **10 tests** in `tests/passes/asyncify_analyzer_test.ts`;
+  full suite **358/358**.
 - **Stage 3a ✅** (commit `2e30ea4`) — ported `flatten` (`src/passes/flatten.ts`, registered) from
   upstream `Flatten.cpp`. Rewrites each function into Flat IR: every value subexpr hoisted into its
   own `local.set`, operands trivial (`local.get`/const), control flow (block/if/loop) routes values
@@ -165,46 +169,53 @@ forward while rewinding, jump out while unwinding" over structured control flow 
   across side-effecting preludes); const stays inline. EH/tuples/value-carrying branches throw
   (TinyGo code — loops/ifs/calls/locals — fully covered). **Surfaced+fixed a latent `walk.ts` bug:**
   `_mapChildren` recursed via `mapExpression` on every child, so there was no true one-level mapper;
-  refactored it to apply its callback to DIRECT children only (`mapExpression` now passes a recursing
-  callback — identical behavior, full suite green) and exposed `mapChildrenShallow`. Validation:
-  behavioral equivalence (run original vs flattened, bit-identical) + flatness invariants (no
-  local.tee, trivial conditions/operands, calls hoisted). **9 tests**; full suite **367/367**.
+  refactored it to apply its callback to DIRECT children only (`mapExpression` now passes a
+  recursing callback — identical behavior, full suite green) and exposed `mapChildrenShallow`.
+  Validation: behavioral equivalence (run original vs flattened, bit-identical) + flatness
+  invariants (no local.tee, trivial conditions/operands, calls hoisted). **9 tests**; full suite
+  **367/367**.
 - **Stage 3b ✅** (commit `62a4573`) — `flowInstrumentFunction(func, ctx)` ported from AsyncifyFlow
-  (`Asyncify.cpp` 878-1258). On a flattened instrumented func: wraps the body so a rewind pops its call
-  index then re-executes skipping forward; linearizes if (→ guarded `rewinding||cond` arms) / loop /
-  block (clumps non-state-changing runs under one `if(state==Normal)` skip); wraps each state-changing
-  call (`makeCallSupport`) with a call-index check + possible-unwind; `local.set`-of-call defers via a
-  per-type **fake global**. `exprCanChangeState` = the per-call-site walk. Emits 3 TEMPORARY intrinsics
-  (`$__asyncify_get_call_index`/`_check_call_index`/`_unwind`) that Stage 4 implements — so flow output
-  isn't runnable yet and is NOT wired into `run()` (kept as its own exported fn); validated
-  **structurally** (rewind prelude, 1 check+unwind per call w/ distinct indices, if/loop linearization,
-  fake-global deferral). **7 tests.** **Also fixed a latent Flatten gap it surfaced:** the parser leaves
-  `Call.type===none`, so flatten was dropping value-returning calls as void — added `buildCallResultTypes`
-  + a resolver threaded into `flattenFunction` (now takes the map; `FlattenPass` builds it). Full suite **374/374**.
-- **Stage 4 ✅** (commit `c446a3d`) — `localsInstrumentFunction` (`Asyncify.cpp` 1446-1730). Lowers the
-  3 temporary intrinsics into real stack ops: `__asyncify_unwind(i)` → `br $__asyncify_unwind (i)`;
-  `__asyncify_get_call_index` → `stackPos -= 4; rewindIndex = load i32 @ stackPos`;
-  `__asyncify_check_call_index(i)` → `i32.eq(rewindIndex, i)`; fake globals → per-type scratch LOCALS.
-  Wraps the body: `[ if(Rewinding) restore-locals; unwindIndex = block $__asyncify_unwind [body,
-  barrier]; push-call-index; save-locals; zero-ret ]`. Stack ops via `$__asyncify_data[stackPos]`
-  (`makeGetStackPos`/`makeIncStackPos`), STACK_ALIGN=4. **Simplification vs upstream:** saves/restores
-  ALL original locals (params + user + flatten/flow temps) rather than a liveness-minimized set —
-  correct (dead local restored then overwritten), just more stack/frame; liveness is a future opt.
-  **Module now RUNNABLE:** e2e tests drive a real unwind/rewind — `compute(10)+get()→42 == 52`, loop
-  `sum(3),get→7 == 21` with locals surviving — and **differentially match `wasm-opt --asyncify`**.
+  (`Asyncify.cpp` 878-1258). On a flattened instrumented func: wraps the body so a rewind pops its
+  call index then re-executes skipping forward; linearizes if (→ guarded `rewinding||cond` arms) /
+  loop / block (clumps non-state-changing runs under one `if(state==Normal)` skip); wraps each
+  state-changing call (`makeCallSupport`) with a call-index check + possible-unwind;
+  `local.set`-of-call defers via a per-type **fake global**. `exprCanChangeState` = the
+  per-call-site walk. Emits 3 TEMPORARY intrinsics
+  (`$__asyncify_get_call_index`/`_check_call_index`/`_unwind`) that Stage 4 implements — so flow
+  output isn't runnable yet and is NOT wired into `run()` (kept as its own exported fn); validated
+  **structurally** (rewind prelude, 1 check+unwind per call w/ distinct indices, if/loop
+  linearization, fake-global deferral). **7 tests.** **Also fixed a latent Flatten gap it
+  surfaced:** the parser leaves `Call.type===none`, so flatten was dropping value-returning calls as
+  void — added `buildCallResultTypes`
+  - a resolver threaded into `flattenFunction` (now takes the map; `FlattenPass` builds it). Full
+    suite **374/374**.
+- **Stage 4 ✅** (commit `c446a3d`) — `localsInstrumentFunction` (`Asyncify.cpp` 1446-1730). Lowers
+  the 3 temporary intrinsics into real stack ops: `__asyncify_unwind(i)` →
+  `br $__asyncify_unwind (i)`; `__asyncify_get_call_index` →
+  `stackPos -= 4; rewindIndex = load i32 @ stackPos`; `__asyncify_check_call_index(i)` →
+  `i32.eq(rewindIndex, i)`; fake globals → per-type scratch LOCALS. Wraps the body:
+  `[ if(Rewinding) restore-locals; unwindIndex = block $__asyncify_unwind [body,
+  barrier]; push-call-index; save-locals; zero-ret ]`.
+  Stack ops via `$__asyncify_data[stackPos]` (`makeGetStackPos`/`makeIncStackPos`), STACK_ALIGN=4.
+  **Simplification vs upstream:** saves/restores ALL original locals (params + user + flatten/flow
+  temps) rather than a liveness-minimized set — correct (dead local restored then overwritten), just
+  more stack/frame; liveness is a future opt. **Module now RUNNABLE:** e2e tests drive a real
+  unwind/rewind — `compute(10)+get()→42 == 52`, loop `sum(3),get→7 == 21` with locals surviving —
+  and **differentially match `wasm-opt --asyncify`**.
 - **Stage 5 ✅** (commit `62f0fb0`) — `AsyncifyPass.run` wired to the full pipeline, `registerPass`,
-  added to the pass index; `createPass` made case-insensitive so `--asyncify` (upstream lowercase flag,
-  via `wasm-opt.ts`'s unknown-`--flag`→pass path) resolves to `"Asyncify"`. e2e test confirms the
-  registered path (`PassRunner.add("asyncify").run()`) produces a runnable, correct module.
+  added to the pass index; `createPass` made case-insensitive so `--asyncify` (upstream lowercase
+  flag, via `wasm-opt.ts`'s unknown-`--flag`→pass path) resolves to `"Asyncify"`. e2e test confirms
+  the registered path (`PassRunner.add("asyncify").run()`) produces a runnable, correct module.
 
 **STATUS: all 5 stages ✅ — the `--asyncify` pass is functionally complete and registered.** Known
 gaps / future work (none block TinyGo goroutine code): (1) **liveness-minimized local saving** — we
-save all original locals; upstream saves only the live set (smaller frames). (2) **wasm64** — throws a
-clear "not yet". (3) **EH / tuples / value-carrying branches** — flatten rejects them (out of scope for
-TinyGo). (4) the advanced **in-wasm `asyncify.*` import runtime mode** — rejected in `analyzeModule`.
-(5) **Publish** binaryen-ts (next `deno task bump`/`publish`) so wasmtk can consume the asyncify pass.
+save all original locals; upstream saves only the live set (smaller frames). (2) **wasm64** — throws
+a clear "not yet". (3) **EH / tuples / value-carrying branches** — flatten rejects them (out of
+scope for TinyGo). (4) the advanced **in-wasm `asyncify.*` import runtime mode** — rejected in
+`analyzeModule`. (5) **Publish** binaryen-ts (next `deno task bump`/`publish`) so wasmtk can consume
+the asyncify pass.
 
-**Cross-project follow-up (wasmtk side, tracked in wasmtk `cmem/roadmap.md` #2):** wire this pass into
-wasmtk's `--lang=go` build to replace external `wasm-opt --asyncify`, with a real TinyGo-build goroutine
-e2e. binaryen-ts's job (the pass itself) is done; that integration lives in wasmtk.
+**Cross-project follow-up (wasmtk side, tracked in wasmtk `cmem/roadmap.md` #2):** wire this pass
+into wasmtk's `--lang=go` build to replace external `wasm-opt --asyncify`, with a real TinyGo-build
+goroutine e2e. binaryen-ts's job (the pass itself) is done; that integration lives in wasmtk.
 </content>

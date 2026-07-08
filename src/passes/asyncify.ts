@@ -51,6 +51,7 @@ import {
   ExpressionKind,
   type GlobalGetExpr,
   type GlobalSetExpr,
+  type LocalSetExpr,
   makeBinary,
   makeBlock,
   makeBreak,
@@ -69,7 +70,6 @@ import {
   makeStore,
   makeUnary,
   makeUnreachable,
-  type LocalSetExpr,
   UnaryOp,
 } from "../ir/expressions.ts";
 import type { Local, WasmFunction, WasmImport, WasmModule } from "../ir/module.ts";
@@ -372,7 +372,9 @@ export function analyzeModule(
     );
   }
 
-  if (options.onlyList.length > 0 && (options.removeList.length > 0 || options.addList.length > 0)) {
+  if (
+    options.onlyList.length > 0 && (options.removeList.length > 0 || options.addList.length > 0)
+  ) {
     throw new Error(
       "asyncify: an only-list cannot be combined with an add-list or remove-list.",
     );
@@ -657,7 +659,9 @@ function processFlow(curr: Expression, ctx: FlowCtx): Expression {
           let j = i;
           while (j < children.length && !exprCanChangeState(children[j], ctx)) j++;
           const run = children.slice(i, j);
-          newList.push(run.length === 1 ? makeMaybeSkip(run[0]) : makeMaybeSkip(makeBlock(run, null)));
+          newList.push(
+            run.length === 1 ? makeMaybeSkip(run[0]) : makeMaybeSkip(makeBlock(run, null)),
+          );
           i = j;
         }
       }
@@ -668,7 +672,10 @@ function processFlow(curr: Expression, ctx: FlowCtx): Expression {
       // In flat form the state change is in an arm, never the condition.
       if (!curr.ifFalse) {
         const newIfTrue = processFlow(curr.ifTrue, ctx);
-        return makeIf(makeBinary(BinaryOp.OrI32, curr.condition, makeStateCheck(State.Rewinding)), newIfTrue);
+        return makeIf(
+          makeBinary(BinaryOp.OrI32, curr.condition, makeStateCheck(State.Rewinding)),
+          newIfTrue,
+        );
       }
       // Two arms: pass through both while rewinding, gated on a saved condition.
       const newIfTrue = processFlow(curr.ifTrue, ctx);
@@ -677,7 +684,11 @@ function processFlow(curr: Expression, ctx: FlowCtx): Expression {
       ctx.func.locals.push({ type: ValType.I32 });
       const pre = makeMaybeSkip(makeLocalSet(condTemp, curr.condition));
       const if1 = makeIf(
-        makeBinary(BinaryOp.OrI32, makeLocalGet(condTemp, ValType.I32), makeStateCheck(State.Rewinding)),
+        makeBinary(
+          BinaryOp.OrI32,
+          makeLocalGet(condTemp, ValType.I32),
+          makeStateCheck(State.Rewinding),
+        ),
         newIfTrue,
       );
       const if2 = makeIf(
@@ -846,7 +857,11 @@ function lowerIntrinsics(body: Expression, ctx: LocalsCtx): Expression {
       }
       if (c.target === ASYNCIFY_CHECK_CALL_INDEX) {
         // Is this the call to resume into?  rewindIndex == index
-        return makeBinary(BinaryOp.EqI32, makeLocalGet(ctx.rewindIndex, ValType.I32), c.operands[0]);
+        return makeBinary(
+          BinaryOp.EqI32,
+          makeLocalGet(ctx.rewindIndex, ValType.I32),
+          c.operands[0],
+        );
       }
     } else if (e.kind === ExpressionKind.GlobalSet) {
       const g = e as GlobalSetExpr;
@@ -883,7 +898,14 @@ function makeLocalLoading(func: WasmFunction, saved: number[]): Expression {
     const t = func.locals[i].type;
     list.push(makeLocalSet(
       i,
-      makeLoad(loadOpBytes(t), true, offset, STACK_ALIGN_LOG2, makeLocalGet(temp, ValType.I32), t as ValType),
+      makeLoad(
+        loadOpBytes(t),
+        true,
+        offset,
+        STACK_ALIGN_LOG2,
+        makeLocalGet(temp, ValType.I32),
+        t as ValType,
+      ),
     ));
     offset += byteSize(t);
   }
@@ -976,8 +998,7 @@ export function localsInstrumentFunction(func: WasmFunction, fakeGlobals: Map<Ty
  */
 export class AsyncifyPass implements Pass {
   readonly name = "Asyncify";
-  readonly description =
-    "Transforms a module to support pausing and resuming (unwind/rewind the " +
+  readonly description = "Transforms a module to support pausing and resuming (unwind/rewind the " +
     "call stack). Port of Binaryen's --asyncify.";
   readonly requiresNonNullableLocalFixups = false;
 

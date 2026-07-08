@@ -25,6 +25,100 @@ The WT-2 series proved that structural round-trip checks (function/global/segmen
 
 ---
 
+## Fail-loud audit sweep (2026-07-07, post-Asyncify) — four passes, 20 fixes, suite 379 → 394
+
+A multi-pass whole-tree audit (mechanical grep sweeps + four parallel subagent code-review agents,
+every finding verified behaviorally / against upstream / rejected if wrong) for silent fallbacks,
+fall-throughs, and correctness bugs. **20 genuine issues fixed across four passes, including 6 real
+behavioral miscompiles**; ~15 regression tests + a 20k-iteration differential-fuzz confirmation.
+Shipped in **v1.3.6**. Pass 1 (the 9 fail-loud conversions) is detailed just below; Pass 2–4 (the
+behavioral miscompiles + remaining type-inference gaps) follow under "Deep-audit passes".
+
+**Root-cause find (the load-bearing one):** the WAT parser's `inferFuncResultType` /
+`inferGlobalType` were TODO stubs returning `null`, so **every `(call $f)` was typed `None`** and
+every `(global.get $g)` typed i32. A `None`-typed call flowed into Asyncify's flatten→flow stages,
+which derived a **`None`-typed spill local** from it; the encoder's `valTypeByte` `default` silently
+emitted that local as i32 (0x7f) — correct only by accident (the call happened to return i32; an
+i64/f64 async import would have been silently corrupted). Fix: first-pass `funcResults` /
+`globalTypes` maps ([src/parser/wat-parser.ts](../src/parser/wat-parser.ts)) populated for imports +
+inline-signature defined funcs/globals (forward-reference safe); `_firstResultTypeOf` scans inline
+`(result …)` only (can't reuse `parseFuncType` — it chokes on named `(param $x …)`).
+
+**The other eight (all silent-wrong → now throw):**
+
+- **Binary parser** ([src/binary/wasm-parser.ts](../src/binary/wasm-parser.ts)): (1) SIMD (0xFD)
+  decoder `default` emitted `nop` for unknown/relaxed sub-opcodes (dropped op + operands → stack
+  imbalance) — the GC/bulk-memory decoders already threw; this one was missed. (2) `readInitExpr`
+  `default` emitted `i32.const 0` for unknown init opcodes — mis-valued the global/offset AND left
+  operand bytes unconsumed, desyncing the reader. (3) `readHeapType` `default` returned `Any` for an
+  unknown abstract byte (mistyped ref) — now throws like `readValTypeByte`.
+- **Encoder** ([src/encoder/wasm-encoder.ts](../src/encoder/wasm-encoder.ts)): `valTypeByte`
+  `default` returned 0x7f (i32) for any unknown ValType — the guard that exposed the Asyncify root
+  cause above.
+- **WAT parser** ([src/parser/wat-parser.ts](../src/parser/wat-parser.ts)): `resolveTypeIndex`
+  `?? 0` (9 GC-op call sites → wrong type on `(type $name)` miss); `parseStorageTypeSExpr` `?? I32`
+  and `parseHeapType` `?? Any` (silent type fallbacks); `call_indirect (type $x)` with an
+  **unresolved** ref silently fell through to an empty signature (wrong arity) — the type ref is
+  authoritative, now throws.
+
+### Deep-audit passes (2–4) — behavioral miscompiles + type-inference gaps
+
+Pass 2 ran four subagent audits over passes / binary+encoder / WAT+IR / api+compat; passes 3–4
+closed the remainder. Every item was verified with a behavioral repro before fixing.
+
+- **`parseLoop` dropped `(result …)` → invalid wasm**
+  ([wat-parser.ts](../src/parser/wat-parser.ts)). It skipped the result clause and hardcoded
+  `type: None`, so a value-producing loop encoded a void blocktype (V8: "expected 0 for fallthru,
+  found 1"). Now mirrors `parseBlock`. Behavioral: `(loop
+  (result i32) (i32.const 5))` → `f()=5`.
+- **Flatten `local.tee` clobber → wrong value** ([flatten.ts](../src/passes/flatten.ts)). The tee
+  rewrite returned `local.get tee.index` (the ORIGINAL local), clobberable by a later sibling
+  operand writing the same local. Now captures into a fresh temp. Behavioral:
+  `sub(tee $t 10, tee
+  $t 3)` gave `0`, now `7`. Reachable via `--flatten` and Asyncify.
+- **`PickLoadSigns` — inert AND wrong** ([pick-load-signs.ts](../src/passes/pick-load-signs.ts)).
+  TWO bugs: (a) it counted signed/unsigned COMPARISONS as the flip signal (upstream counts only real
+  sign/zero-EXTEND ops and refuses to flip if ANY observing use exists) — a latent miscompile; (b)
+  it was silently inert anyway — `toSign` keyed a `Map` by the original `LoadExpr` while
+  `mapExpression` rebuilds the node (WT-2c #5 identity-loss), so no flip ever happened. Rewrote to
+  match upstream's `totalUsages` guard + symbol-marker identity (survives spread). A subagent
+  reported this as a "live −O1 miscompile"; **that was WRONG** (the inertness meant no live
+  miscompile) — caught by running it. Behavioral: load8_u feeding `lt_s` stays unsigned (`f()=0`).
+- **Inlining didn't reset ref/v128 non-param locals** ([inlining.ts](../src/passes/inlining.ts)).
+  `zeroForType` returned `null` for non-numeric types, so a callee's ref/v128 local kept the
+  PREVIOUS execution's value when the call site runs repeatedly (loop). Now emits `ref.null` /
+  `v128.const 0`.
+- **Multiple tables silently encoded against table 0**
+  ([wasm-encoder.ts](../src/encoder/wasm-encoder.ts)): `encodeElementSection` + `call_indirect`
+  hardcode table 0 (no guard, unlike memories). Added `checkSingleTable` fail-loud guard mirroring
+  `checkSingleMemory`.
+- **Multi-value type-index blocktype silently decoded to void**
+  ([wasm-parser.ts](../src/binary/wasm-parser.ts) `readBlockType`) — read the LEB then returned
+  `[]`, so the encoder's multi-value guard never saw it. Now throws.
+- **compat `_idToValType(x) ?? i32` at 6 required-type sites**
+  ([binaryen-compat.ts](../src/api/binaryen-compat.ts): `addFunction` vars,
+  `addGlobal`/`addGlobalImport` type, `local`/`global` get/tee) silently mistyped a bad type ID.
+  Added `_idToValTypeStrict` (throws), matching the params/results contract.
+- **`struct.get`/`array.get` hardcoded `i32` result type**
+  ([wat-parser.ts](../src/parser/wat-parser.ts)) — mistyped any non-i32 field/element. Added a
+  heapType-index→TypeDef map; result now follows the declared field/element type (packed `i8`/`i16`
+  unpack to `i32`).
+- **`resolveLocal` out-of-range index / `global.get $unknown`** silently typed `i32`; both now
+  throw.
+- **`(func (type $sig))` result-only signature typed the call `None`** — the same None-local class
+  as the Pass-1 root cause. Fixed with deferred resolution (`pendingFuncTypeRefs` resolved after the
+  first pass, since a `(type)` may follow the func in source order).
+
+**Deliberately left as-is (verified NOT bugs):** section-dispatch `default: seek(end)`
+(spec-compliant skip of unknown sections), custom/name-section skips (documented drop), pass-level
+`default: return
+expr` (unhandled kind = no-op is correct for an optimizer pass), the coarse
+ref-type model (`ref.null $type`/`readValTypeByte (ref $T)`→funcref/anyref, `br_on_cast ?? Any` —
+documented, consistent), and the binary parser's `locals[idx]?.type ?? i32` / `gi?.type ?? i32`
+defensive decoding (fires ONLY on an out-of-range index in a malformed binary that
+`WebAssembly.compile` rejects — the parser decodes, it deliberately does not validate; validation is
+wabt-ts's role).
+
 ## Hardening sweeps — Tiers 1–4 / A–C (post-v1.3.4)
 
 Multi-agent code reviews swept for silent-miscompile bug classes, dead code, facade/CLI defects.

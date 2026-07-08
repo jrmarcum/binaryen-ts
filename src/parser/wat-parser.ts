@@ -228,6 +228,12 @@ class WatModuleParser {
   // GC type name → heapTypes index
   private typeNames = new Map<string, number>();
 
+  // heapTypes index → its TypeDef. Backs struct.get/array.get result-type
+  // resolution: without it those instructions hardcoded `i32`, mistyping any
+  // non-i32 field/element in the built IR (valid output, but wrong `.type`
+  // mis-drives type-sensitive passes).
+  private heapTypeDefs = new Map<number, TypeDef>();
+
   // Function-signature type name → FuncTypeDef. Populated from
   // `(type $sig (func (param ...) (result ...)))` declarations. Used by
   // `parseCallIndirect` / `parseTryTable` / etc. to resolve `(type $sig)`
@@ -236,6 +242,21 @@ class WatModuleParser {
 
   // EH tag name → tag index
   private tagNames = new Map<string, number>();
+
+  // Function internal name → declared first-result type (or None). Populated in
+  // the first pass so `(call $f)` bodies type correctly even for forward
+  // references. Covers imports + inline-signature defined functions. A stale
+  // `null` here (the old `inferFuncResultType` TODO stub) typed every call
+  // `None`, which mis-encoded any spill local the optimizer derived from it.
+  private funcResults = new Map<string, Type>();
+  // Global internal name → value type (imports + defined globals). Backs
+  // `inferGlobalType`; a miss previously defaulted `global.get` to i32.
+  private globalTypes = new Map<string, ValType>();
+
+  // Functions whose signature is a `(type $sig)` reference (no inline result).
+  // Resolved into `funcResults` after the first pass, once every `(type …)` is
+  // collected — a `(type)` decl may follow the func in source order.
+  private pendingFuncTypeRefs: Array<{ name: string; sig: string }> = [];
 
   // All function-level definitions collected before building
   private rawFunctions: RawFunc[] = [];
@@ -296,6 +317,10 @@ class WatModuleParser {
       }
     }
 
+    // All types are now collected — resolve any `(func (type $sig))` result
+    // types deferred during function collection.
+    this.resolvePendingFuncTypeRefs();
+
     // Second pass: build function bodies, exports, data segments, elements
     for (const child of listFrom(list, childStart)) {
       if (child.kind !== "list") continue;
@@ -339,6 +364,7 @@ class WatModuleParser {
       const { name, params, results } = this.parseFuncType(descList);
       const internalName = name ?? `$__import_func_${this.funcNames.size}`;
       this.funcNames.set(internalName, this.funcNames.size);
+      this.funcResults.set(internalName, results.length > 0 ? results[0] : None);
       this.builder.addFunctionImport(internalName, modName, baseName, params, results);
     } else if (head === "global") {
       // `(global $name <type>)` or `(global $name (mut <type>))`
@@ -354,6 +380,7 @@ class WatModuleParser {
       const typeNode = gChildren[gIdx];
       if (!typeNode) this.err("import (global ...): missing type", descList.pos);
       const { type, mutable } = this.parseGlobalTypeNode(typeNode);
+      this.globalTypes.set(internalName, type);
       this.builder.addGlobalImport(internalName, modName, baseName, type, mutable);
     } else if (head === "memory") {
       // `(memory $name <initial> [<max>] [shared])`
@@ -415,7 +442,53 @@ class WatModuleParser {
     }
     const funcIndex = this.funcNames.size;
     if (name) this.funcNames.set(name, funcIndex);
-    this.rawFunctions.push({ name: name ?? `$f${funcIndex}`, list, funcIndex });
+    const fname = name ?? `$f${funcIndex}`;
+    // Record the declared result type so forward `(call $f)` references type
+    // correctly during body building. Prefer the inline `(result ...)`; when the
+    // signature is given only as a `(type $sig)` reference, defer resolution
+    // until the first pass has collected every type (a `(type)` may appear AFTER
+    // the func in source order).
+    const inlineResult = this._firstResultTypeOf(list);
+    if (inlineResult !== null) {
+      this.funcResults.set(fname, inlineResult);
+    } else {
+      const sig = this._funcTypeRef(list);
+      if (sig) this.pendingFuncTypeRefs.push({ name: fname, sig });
+      else this.funcResults.set(fname, None);
+    }
+    this.rawFunctions.push({ name: fname, list, funcIndex });
+  }
+
+  /** First declared result type of a `(func ...)` signature via an inline
+   *  `(result ...)` clause, or `null` if the func has none (its signature is a
+   *  `(type $sig)` reference, resolved later). Params (which carry `$names`) and
+   *  the body are ignored. */
+  private _firstResultTypeOf(list: SList): Type | null {
+    for (const c of listChildren(list)) {
+      if (isListWith(c, "result")) {
+        const first = listChildren(c as SList)[0];
+        return first ? this.parseValType(first) : None; // empty `(result)` = void
+      }
+    }
+    return null;
+  }
+
+  /** Name in a `(func … (type $sig) …)` signature reference, or `null`. */
+  private _funcTypeRef(list: SList): string | null {
+    for (const c of listChildren(list)) {
+      if (isListWith(c, "type")) return atomText(listChildren(c as SList)[0]) ?? null;
+    }
+    return null;
+  }
+
+  /** Resolve every deferred `(func (type $sig))` result type now that the first
+   *  pass has collected all `(type …)` declarations. */
+  private resolvePendingFuncTypeRefs(): void {
+    for (const { name, sig } of this.pendingFuncTypeRefs) {
+      const def = this.funcTypeDefs.get(sig);
+      this.funcResults.set(name, def?.results[0] ?? None);
+    }
+    this.pendingFuncTypeRefs.length = 0;
   }
 
   // -------------------------------------------------------------------------
@@ -610,7 +683,13 @@ class WatModuleParser {
     }
     if (head === "global.get") {
       const name = this.resolveGlobalName(args[0], head);
-      const type = this.inferGlobalType(name) ?? ValType.I32;
+      // A `$name` that resolves to no known global is malformed — fail loud
+      // rather than silently typing the get i32. (A numeric ref keeps the coarse
+      // i32 fallback; it's resolved by index at encode time.)
+      const type = this.inferGlobalType(name) ??
+        (name.startsWith("$")
+          ? this.err(`global.get: unknown global ${name}`, list.pos)
+          : ValType.I32);
       return { kind: ExpressionKind.GlobalGet, type, name } as GlobalGetExpr;
     }
     if (head === "global.set") {
@@ -821,7 +900,7 @@ class WatModuleParser {
       const fi = Number(atomInt(args[1])) ?? 0;
       const ref = this.parseExpr(args[2], ctx);
       const signed = head === "struct.get_s";
-      return makeStructGet(ti, fi, ref, ValType.I32, signed);
+      return makeStructGet(ti, fi, ref, this._structFieldType(ti, fi), signed);
     }
     if (head === "struct.set") {
       const ti = this.resolveTypeIndex(args[0]);
@@ -851,7 +930,7 @@ class WatModuleParser {
       const ref = this.parseExpr(args[1], ctx);
       const index = this.parseExpr(args[2], ctx);
       const signed = head === "array.get_s";
-      return makeArrayGet(ti, ref, index, ValType.I32, signed);
+      return makeArrayGet(ti, ref, index, this._arrayElementType(ti), signed);
     }
     if (head === "array.set") {
       const ti = this.resolveTypeIndex(args[0]);
@@ -949,18 +1028,26 @@ class WatModuleParser {
       label = (children[idx] as Atom).token.raw;
       idx++;
     }
-    // Optional result type
-    while (idx < children.length && isListWith(children[idx], "result")) idx++;
+    // Optional result type. A loop CAN produce a value (`(loop (result i32) …)`);
+    // dropping it here typed the loop `None`, so the encoder emitted a void
+    // blocktype for a value-producing loop → invalid module, and any pass reading
+    // `loop.type` saw `None`. Honor it, mirroring parseBlock.
+    const results: ValType[] = [];
+    while (idx < children.length && isListWith(children[idx], "result")) {
+      for (const t of listChildren(children[idx] as SList)) results.push(this.parseValType(t));
+      idx++;
+    }
     const innerCtx = this.pushLabel(label, ctx);
     const bodyExprs: Expression[] = [];
     while (idx < children.length) {
       bodyExprs.push(this.parseExpr(children[idx], innerCtx));
       idx++;
     }
+    const type: Type = results[0] ?? None;
     const body: Expression = bodyExprs.length === 1
       ? bodyExprs[0]
-      : { kind: ExpressionKind.Block, type: None, name: null, children: bodyExprs } as BlockExpr;
-    return { kind: ExpressionKind.Loop, type: None, name: label, body };
+      : { kind: ExpressionKind.Block, type, name: null, children: bodyExprs } as BlockExpr;
+    return { kind: ExpressionKind.Loop, type, name: label, body };
   }
 
   private parseIf(list: SList, ctx: FuncContext): IfExpr {
@@ -1253,6 +1340,11 @@ class WatModuleParser {
           // so the cast is safe in practice.
           typeRefParams = def.params as ValType[];
           typeRefResults = def.results as ValType[];
+        } else {
+          // An unresolved `(type $sig)` used to fall through to the (empty)
+          // inline signature, silently giving the indirect call zero args —
+          // a wrong-arity miscompile. The type ref is authoritative; fail loud.
+          this.err(`call_indirect: unknown type ${typeRef}`, _list.pos);
         }
       }
       idx++;
@@ -1513,6 +1605,7 @@ class WatModuleParser {
     const typeNode = children[idx++];
     if (!typeNode) this.err("global: missing type", list.pos);
     const { type, mutable } = this.parseGlobalTypeNode(typeNode);
+    this.globalTypes.set(internalName, type);
 
     const initNode = children[idx];
     if (!initNode) this.err("global: missing init expression", list.pos);
@@ -1741,11 +1834,36 @@ class WatModuleParser {
     }
     if (def) {
       const ti = this.builder.addHeapType(def);
+      this.heapTypeDefs.set(ti, def);
       if (name) {
         this.typeNames.set(name, ti);
         if (def.kind === "func") this.funcTypeDefs.set(name, def);
       }
     }
+  }
+
+  /** Result type of a `struct.get`/`array.get` given the field/element storage
+   *  type: packed `i8`/`i16` fields unpack to `i32` (the `_s`/`_u` variants
+   *  select the extension), every other storage type reads back as itself. */
+  private _storageResultType(storage: StorageType): ValType {
+    return storage === "i8" || storage === "i16" ? ValType.I32 : storage as ValType;
+  }
+
+  /** Declared result type of `struct.get $ti fi` (falls back to i32 if the type
+   *  index isn't a known struct or the field index is out of range). */
+  private _structFieldType(ti: number, fi: number): ValType {
+    const def = this.heapTypeDefs.get(ti);
+    if (def?.kind === "struct" && def.fields[fi]) {
+      return this._storageResultType(def.fields[fi].type);
+    }
+    return ValType.I32;
+  }
+
+  /** Declared result type of `array.get $ti` (falls back to i32 if unknown). */
+  private _arrayElementType(ti: number): ValType {
+    const def = this.heapTypeDefs.get(ti);
+    if (def?.kind === "array") return this._storageResultType(def.element.type);
+    return ValType.I32;
   }
 
   private parseStructFields(list: SList): FieldType[] {
@@ -1785,23 +1903,29 @@ class WatModuleParser {
     const raw = atomText(s);
     if (raw === "i8") return "i8";
     if (raw === "i16") return "i16";
-    return this.tryParseValType(s) ?? ValType.I32;
+    return this.tryParseValType(s) ?? this.err(`unknown storage type: ${sExprToString(s)}`, s.pos);
   }
 
   private resolveTypeIndex(s: SExpr | undefined): number {
-    if (!s) return 0;
+    if (!s) return this.err("missing type reference");
     const raw = atomText(s);
     if (raw?.startsWith("$")) {
-      return this.typeNames.get(raw) ?? 0;
+      // A silent `?? 0` here mapped an unknown `(type $name)` to type index 0 —
+      // the exact wrong-signature miscompile class the hardening sweeps closed.
+      return this.typeNames.get(raw) ?? this.err(`unknown type: ${raw}`, s.pos);
     }
-    return Number(atomInt(s)) ?? 0;
+    const n = Number(atomInt(s));
+    if (!Number.isFinite(n)) return this.err(`expected type index, got: ${raw ?? "?"}`, s.pos);
+    return n;
   }
 
   private parseHeapType(s: SExpr | undefined): HeapType {
     if (!s) return AbstractHeapType.Any;
     const raw = atomText(s);
     if (!raw) return AbstractHeapType.Any;
-    if (raw.startsWith("$")) return this.typeNames.get(raw) ?? AbstractHeapType.Any;
+    if (raw.startsWith("$")) {
+      return this.typeNames.get(raw) ?? this.err(`unknown heap type: ${raw}`, s.pos);
+    }
     const abstractMap: Record<string, AbstractHeapType> = {
       func: AbstractHeapType.Func,
       nofunc: AbstractHeapType.NoFunc,
@@ -1814,7 +1938,11 @@ class WatModuleParser {
       array: AbstractHeapType.Array,
       none: AbstractHeapType.None,
     };
-    return abstractMap[raw] ?? (isNaN(Number(raw)) ? AbstractHeapType.Any : Number(raw));
+    const abstract = abstractMap[raw];
+    if (abstract !== undefined) return abstract;
+    const n = Number(raw);
+    if (!isNaN(n)) return n; // numeric type index
+    return this.err(`unknown heap type: ${raw}`, s.pos);
   }
 
   // -------------------------------------------------------------------------
@@ -1878,10 +2006,17 @@ class WatModuleParser {
     if (raw?.startsWith("$")) {
       index = ctx.localNames.get(raw) ?? this.err(`${instr}: unknown local ${raw}`, s!.pos);
     } else {
-      index = Number(atomInt(s!)) ?? this.err(`${instr}: expected local index`, s!.pos);
+      const n = Number(atomInt(s!));
+      // `Number(atomInt(...))` yields NaN (not nullish) for a non-integer, so the
+      // old `?? this.err` never fired — validate explicitly.
+      if (!Number.isInteger(n)) this.err(`${instr}: expected local index`, s!.pos);
+      index = n;
     }
-    const type = ctx.locals[index]?.type ?? ValType.I32;
-    return { index, type };
+    // An out-of-range numeric index silently typed the get/tee as i32; a bad
+    // index is malformed input, so fail loud instead.
+    const local = ctx.locals[index];
+    if (!local) this.err(`${instr}: local index ${index} out of range`, s!.pos);
+    return { index, type: local.type };
   }
 
   private resolveGlobalName(s: SExpr | undefined, instr: string): string {
@@ -1913,14 +2048,12 @@ class WatModuleParser {
     return `$depth${ctx.labelDepth - Number(ref)}`;
   }
 
-  private inferGlobalType(_name: string): ValType | null {
-    // TODO: look up from parsed globals list
-    return null;
+  private inferGlobalType(name: string): ValType | null {
+    return this.globalTypes.get(name) ?? null;
   }
 
-  private inferFuncResultType(_name: string): Type | null {
-    // TODO: look up from rawFunctions list
-    return null;
+  private inferFuncResultType(name: string): Type | null {
+    return this.funcResults.get(name) ?? null;
   }
 
   private pushLabel(label: string | null, ctx: FuncContext): FuncContext {

@@ -605,7 +605,9 @@ function valTypeByte(t: ValType): number {
     case ValType.NullExnRef:
       return 0x74;
     default:
-      return 0x7f;
+      // Unknown ValType — silently encoding it as i32 (0x7f) would emit a
+      // valid-but-wrong module. Fail loudly.
+      throw new WasmEncodeError(`cannot encode value type: ${t}`);
   }
 }
 
@@ -804,6 +806,7 @@ class WasmEncoder {
 
   encode(): Uint8Array {
     this.checkSingleMemory();
+    this.checkSingleTable();
     this.buildIndices();
     this.collectTypes();
 
@@ -961,6 +964,25 @@ class WasmEncoder {
       throw new WasmEncodeError(
         "multiple memories are not supported: memory exports, data segments, and " +
           "memory.* instructions are encoded against memory index 0",
+      );
+    }
+  }
+
+  /**
+   * Fail loudly on multiple tables. Element segments are always encoded as
+   * kind-0 (implicit table 0) by `encodeElementSection`, and the binary parser
+   * decodes `call_indirect`/`return_call_indirect` against table 0 — so a
+   * segment or indirect call targeting a second table would be silently
+   * misencoded against table 0 (wrong dispatch / uninitialized table). Mirrors
+   * {@link checkSingleMemory}. Remove once the element section and indirect-call
+   * encoders thread the real table index.
+   */
+  private checkSingleTable(): void {
+    const importedTables = this.mod.imports.filter((i) => i.kind === "table").length;
+    if (importedTables + this.mod.tables.length > 1) {
+      throw new WasmEncodeError(
+        "multiple tables are not supported: element segments and call_indirect are " +
+          "encoded against table index 0",
       );
     }
   }

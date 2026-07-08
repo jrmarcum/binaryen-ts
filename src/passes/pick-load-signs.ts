@@ -67,27 +67,11 @@ registerPass(PickLoadSignsPass);
 // Implementation
 // ---------------------------------------------------------------------------
 
-/** Signed binary ops — the result depends on the sign of the operands. */
-const SIGNED_CMP_OPS = new Set<BinaryOp>([
-  BinaryOp.LtSI32,
-  BinaryOp.LeSI32,
-  BinaryOp.GtSI32,
-  BinaryOp.GeSI32,
-  BinaryOp.LtSI64,
-  BinaryOp.LeSI64,
-  BinaryOp.GtSI64,
-  BinaryOp.GeSI64,
-]);
-const UNSIGNED_CMP_OPS = new Set<BinaryOp>([
-  BinaryOp.LtUI32,
-  BinaryOp.LeUI32,
-  BinaryOp.GtUI32,
-  BinaryOp.GeUI32,
-  BinaryOp.LtUI64,
-  BinaryOp.LeUI64,
-  BinaryOp.GtUI64,
-  BinaryOp.GeUI64,
-]);
+/** Marks a load whose sign step 3 decided to flip, so the decision survives
+ *  `mapExpression`'s node rebuild (object spread copies symbol-keyed props).
+ *  Keying a `Map` by the original node reference did NOT survive the rebuild —
+ *  the pass was silently inert (the WT-2c #5 identity-loss class). */
+const _PICK_SIGN = Symbol("pickLoadSign");
 
 /** Zero-extension mask for a load of the given byte width. */
 function _zeroMask(bytes: number): number {
@@ -104,6 +88,11 @@ interface LoadInfo {
 interface Usage {
   signedCount: number;
   unsignedCount: number;
+  /** EVERY use of the local, extension or not. The flip is safe only when every
+   *  use re-extends the value (signedCount + unsignedCount === totalCount) — any
+   *  observing use (comparison, arithmetic, store, call operand) sees the sign
+   *  and would be corrupted by a flip. Mirrors upstream's `totalUsages` guard. */
+  totalCount: number;
 }
 
 function _pickLoadSigns(fn: WasmFunction): void {
@@ -130,67 +119,76 @@ function _pickLoadSigns(fn: WasmFunction): void {
   // --- Step 2: classify uses of each tracked local ---
   const usages = new Map<number, Usage>();
   for (const idx of loadsByLocal.keys()) {
-    usages.set(idx, { signedCount: 0, unsignedCount: 0 });
+    usages.set(idx, { signedCount: 0, unsignedCount: 0, totalCount: 0 });
   }
 
-  // Walk with parent context to classify uses
+  // Walk with parent context to classify uses. Per upstream PickLoadSigns.cpp,
+  // the ONLY uses that let us safely change a load's sign are ones that
+  // re-extend the value to the same width — then the load's own extension is
+  // redundant and the choice is free. Every other use OBSERVES the value; a
+  // signed/unsigned COMPARISON in particular changes its result if the load's
+  // sign flips, so it must be counted as neutral (totalCount only), NOT as a
+  // sign-determining use. (The prior code counted comparisons as the flip
+  // signal — a latent miscompile that only stayed dormant because step 3's
+  // rewrite was itself inert; see the identity-loss note below.)
   _walkWithParent(fn.body, null, (expr, parent) => {
     if (expr.kind !== ExpressionKind.LocalGet) return;
     const info = loadsByLocal.get(expr.index);
     if (!info) return;
     const usage = usages.get(expr.index)!;
+    usage.totalCount++;
 
-    if (!parent) return; // top-level get; neutral
+    if (!parent) return; // observing use (bare get)
 
-    // Signed comparison: local feeds into left/right of a signed cmp
-    if (parent.kind === ExpressionKind.Binary && SIGNED_CMP_OPS.has(parent.op)) {
-      usage.signedCount++;
-      return;
-    }
-
-    // Unsigned comparison
-    if (parent.kind === ExpressionKind.Binary && UNSIGNED_CMP_OPS.has(parent.op)) {
-      usage.unsignedCount++;
-      return;
-    }
-
-    // Zero-extension mask: (local.get & 0xFF) etc.
+    // One-level zero-extension mask: `(x & 0xFF)` for a byte load, etc. (The
+    // two-level sign-extend shift pair `(x << K) >> K` needs grandparent context
+    // this single-parent walk doesn't have — not detected, a conservative miss
+    // that only forgoes an optimization, never miscompiles.)
     if (
       parent.kind === ExpressionKind.Binary &&
       parent.op === BinaryOp.AndI32 &&
       parent.right.kind === ExpressionKind.Const &&
-      "i32" in parent.right.value
+      "i32" in parent.right.value &&
+      (parent.right.value.i32 as number) === _zeroMask(info.load.bytes as number)
     ) {
-      const maskVal = parent.right.value.i32 as number;
-      const loadBytes = info.load.bytes as number;
-      if (maskVal === _zeroMask(loadBytes)) {
-        usage.unsignedCount++;
-        return;
-      }
+      usage.unsignedCount++;
     }
-    // Neutral — no classification
+    // Everything else counts toward totalCount only → blocks the flip below.
   });
 
-  // --- Step 3: flip load sign where warranted ---
-  const toSign = new Map<LoadExpr, boolean>(); // true = signed, false = unsigned
+  // --- Step 3: flip load sign only when EVERY use re-extends it ---
+  const toFlip: LoadExpr[] = [];
   for (const [idx, info] of loadsByLocal) {
     const usage = usages.get(idx)!;
-    if (usage.signedCount > 0 && usage.unsignedCount === 0) {
-      if (!info.load.signed) toSign.set(info.load, true);
-    } else if (usage.unsignedCount > 0 && usage.signedCount === 0) {
-      if (info.load.signed) toSign.set(info.load, false);
+    // Upstream guard: give up unless all uses are sign/zero-extends. A single
+    // observing use makes the sign visible and the flip unsafe.
+    if (usage.totalCount === 0) continue;
+    if (usage.signedCount + usage.unsignedCount !== usage.totalCount) continue;
+    if (usage.unsignedCount > 0 && usage.signedCount === 0 && info.load.signed) {
+      (info.load as unknown as Record<symbol, boolean>)[_PICK_SIGN] = false;
+      toFlip.push(info.load);
+    } else if (usage.signedCount > 0 && usage.unsignedCount === 0 && !info.load.signed) {
+      (info.load as unknown as Record<symbol, boolean>)[_PICK_SIGN] = true;
+      toFlip.push(info.load);
     }
   }
 
-  if (toSign.size === 0) return;
+  if (toFlip.length === 0) return;
 
+  // Read the decision off the symbol marker (not a reference-keyed Map): object
+  // spread inside mapExpression copies symbol props, so the mark survives the
+  // node rebuild that previously neutered this pass.
   fn.body = mapExpression(fn.body, (expr) => {
-    if (expr.kind === ExpressionKind.Load && toSign.has(expr)) {
-      const signed = toSign.get(expr)!;
-      return { ...expr, signed };
+    if (expr.kind === ExpressionKind.Load && _PICK_SIGN in expr) {
+      const rec = expr as unknown as Record<symbol, boolean>;
+      const signed = rec[_PICK_SIGN];
+      const cleaned = { ...expr, signed };
+      delete (cleaned as unknown as Record<symbol, boolean>)[_PICK_SIGN];
+      return cleaned;
     }
     return expr;
   });
+  for (const load of toFlip) delete (load as unknown as Record<symbol, boolean>)[_PICK_SIGN];
 }
 
 // ---------------------------------------------------------------------------

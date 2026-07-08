@@ -57,7 +57,7 @@ function moduleWithImport(): WasmModule {
           { kind: ExpressionKind.Call, type: "none", target: "$sleep", operands: [] },
           { kind: ExpressionKind.LocalGet, type: ValType.I32, index: 0 },
         ],
-      // deno-lint-ignore no-explicit-any
+        // deno-lint-ignore no-explicit-any
       } as any,
     }],
     globals: [],
@@ -66,7 +66,14 @@ function moduleWithImport(): WasmModule {
     tags: [],
     elements: [],
     dataSegments: [],
-    imports: [{ module: "env", base: "sleep", name: "$sleep", kind: "function", params: [], results: [] }],
+    imports: [{
+      module: "env",
+      base: "sleep",
+      name: "$sleep",
+      kind: "function",
+      params: [],
+      results: [],
+    }],
     exports: [{ name: "foo", value: "$foo", kind: "function" }],
     hasExceptionHandling: false,
     hasMemory64: false,
@@ -241,7 +248,15 @@ Deno.test("Asyncify Stage 1 — runtime support encodes to valid wasm & round-tr
   assertEquals(decoded.globals.length, 2);
   // The 5 control functions survive as host exports (export names ARE preserved).
   const decodedFnExports = decoded.exports.filter((e) => e.kind === "function").map((e) => e.name);
-  for (const n of [ASYNCIFY_START_UNWIND, ASYNCIFY_STOP_UNWIND, ASYNCIFY_START_REWIND, ASYNCIFY_STOP_REWIND, ASYNCIFY_GET_STATE]) {
+  for (
+    const n of [
+      ASYNCIFY_START_UNWIND,
+      ASYNCIFY_STOP_UNWIND,
+      ASYNCIFY_START_REWIND,
+      ASYNCIFY_STOP_REWIND,
+      ASYNCIFY_GET_STATE,
+    ]
+  ) {
     assert(decodedFnExports.includes(n), `export ${n} missing after round-trip`);
   }
 });

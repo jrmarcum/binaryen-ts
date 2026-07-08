@@ -4,7 +4,7 @@
 
 ```sh
 deno task check       # type-check all files
-deno task test        # run the full suite (379 passed, 1 ignored — verified 2026-07-05; asyncify COMPLETE (+7 S1 +10 S2 +7 S3b +5 e2e) +9 flatten)
+deno task test        # run the full suite (394 passed, 1 ignored — verified 2026-07-07; asyncify COMPLETE; +9 flatten; four-pass fail-loud audit sweep (20 fixes, 6 behavioral miscompiles))
 deno task fmt         # format
 deno task lint        # lint
 deno task ci          # check + test (the bundle CI runs)
@@ -74,8 +74,10 @@ meaningful). This surfaced the six WT-2c miscompiles the validity-only bench had
 When fixing a footgun/silently-wrong bug, add the regression test alongside the invariant note in
 [correctness.md](correctness.md). **Fail-loud (throw) over silent-wrong output is the project
 contract.** Key files: `tests/binary/control_flow_regression_test.ts` (branch-depth, single-arm if,
-tag exports, WT-2b frames), `tests/passes/optimize_pipeline_test.ts` (WT-2i/j behavioral), the
-proposal `*_test.ts` files for GC/EH/SIMD round-trips.
+tag exports, WT-2b frames), `tests/passes/optimize_pipeline_test.ts` (WT-2i/j behavioral),
+`tests/parser/wat_parser_test.ts` (call/global result-type inference + fail-loud type/heap/
+call_indirect resolution — the 2026-07-07 audit sweep), `tests/encoder/wasm_encoder_test.ts`
+(None-typed local throws), the proposal `*_test.ts` files for GC/EH/SIMD round-trips.
 
 ## CI gate
 

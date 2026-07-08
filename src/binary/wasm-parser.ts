@@ -346,7 +346,9 @@ function readHeapType(r: BinaryReader): HeapType {
       return AbstractHeapType.NoExn;
     default:
       if (v >= 0) return v; // type index
-      return AbstractHeapType.Any; // fallback for unknown abstract types
+      // Unknown abstract heap-type byte — silently returning `any` mistyped the
+      // reference. Fail loudly, matching readValTypeByte.
+      return r.error(`unknown heap type: SLEB ${v}`);
   }
 }
 
@@ -423,9 +425,14 @@ function readBlockType(r: BinaryReader): (ValType | RefType)[] {
   ) {
     return [readValueType(r)];
   }
-  // type index (multi-value) — read as signed LEB128
-  r.readI32();
-  return [];
+  // Type-index blocktype = a multi-value (block inputs and/or ≥2 results)
+  // signature. Silently returning `[]` (void) here decoded such a block as void
+  // and re-encoded it with a void blocktype — dropping the signature and leaving
+  // operands dangling; the encoder's own multi-value guard never fired because
+  // the type was already flattened away. Fail loudly, matching the encoder's
+  // stance on multi-value blocktypes.
+  const typeIdx = r.readI32();
+  return r.error(`multi-value block type (type index ${typeIdx}) is not supported`);
 }
 
 function readMemArg(r: BinaryReader): { align: number; offset: number } {
@@ -1005,8 +1012,10 @@ class WasmParser {
         break;
       }
       default:
-        expr = makeI32Const(0);
-        break;
+        // Unknown init-expression opcode. A silent `i32.const 0` here both
+        // mis-valued the global/offset AND left the operand bytes unconsumed,
+        // desyncing the reader for the rest of the section. Fail loudly.
+        this.r.error(`unsupported init-expression opcode: 0x${opcode.toString(16)}`);
     }
     this.r.readU8(); // 0x0b end
     return expr;
@@ -3226,9 +3235,10 @@ function decodeSIMDPrefix(
       push(makeUnary(UnaryOp.ConvertLowUVecI32x4ToF64x2, pop()));
       break;
     default:
-      // Unknown or relaxed SIMD opcode — skip by emitting nop
-      push(makeNop());
-      break;
+      // Unknown / relaxed-SIMD sub-opcode. Emitting a `nop` silently dropped the
+      // op and its operands (stack imbalance / silent op loss); fail loudly,
+      // matching the GC (0xFB) and bulk-memory (0xFC) decoders.
+      r.error(`unsupported SIMD opcode: 0xFD 0x${sub.toString(16)}`);
   }
 }
 

@@ -227,3 +227,16 @@ Deno.test("flatten hoists every call to a standalone statement operand set", () 
   }
   assert(calls >= 3, "expected the 3 nested calls to survive flattening");
 });
+
+// Regression: a local.tee whose result is read by a parent must survive a later
+// sibling operand that writes the SAME local. Before the fix, flatten returned
+// `local.get tee.index` (the original local), which the second tee's prelude
+// clobbered → both operands read the second value. (sub(10,3)=7, not 3-3=0.)
+Deno.test("flatten — two tees to the same local as sibling operands are not clobbered", () => {
+  assertEquivalent(
+    `(module (func $f (export "f") (result i32) (local $t i32)
+      (i32.sub (local.tee $t (i32.const 10)) (local.tee $t (i32.const 3)))))`,
+    "f",
+    [[]],
+  );
+});

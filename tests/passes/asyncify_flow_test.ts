@@ -155,7 +155,9 @@ Deno.test("flow — instruments a call inside an if arm (linearized)", () => {
   // The state global is consulted (rewinding/normal checks) — many state reads.
   let stateReads = 0;
   walkExpression(foo.body, (e) => {
-    if (e.kind === ExpressionKind.GlobalGet && (e as { name: string }).name === "$__asyncify_state") {
+    if (
+      e.kind === ExpressionKind.GlobalGet && (e as { name: string }).name === "$__asyncify_state"
+    ) {
       stateReads++;
     }
   });
@@ -189,7 +191,10 @@ Deno.test("flow — a state-changing local.set defers via a fake global", () => 
   const foo = fn(mod, "$foo");
   let fakeSets = 0;
   walkExpression(foo.body, (e) => {
-    if (e.kind === ExpressionKind.GlobalSet && (e as { name: string }).name.startsWith("$asyncify_fake_call_global_")) {
+    if (
+      e.kind === ExpressionKind.GlobalSet &&
+      (e as { name: string }).name.startsWith("$asyncify_fake_call_global_")
+    ) {
       fakeSets++;
     }
   });

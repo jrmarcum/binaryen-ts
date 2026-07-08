@@ -426,3 +426,22 @@ Deno.test("encodeWasm: output is a Uint8Array", () => {
   const bytes = encodeWasm(mod);
   assertInstanceOf(bytes, Uint8Array);
 });
+
+Deno.test("encodeWasm: a None-typed local throws instead of silently encoding as i32", () => {
+  // A function local typed `none` is invalid wasm. The encoder used to fall
+  // through valTypeByte's `default` and emit it as i32 (0x7f), papering over
+  // upstream producers of such a local (e.g. Asyncify deriving a spill local
+  // from a mistyped void call). Fail loudly instead.
+  const mod = new ModuleBuilder()
+    .addFunction("f", [], [], makeI32Const(0), [{ type: None as unknown as ValType }])
+    .build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "cannot encode value type");
+});
+
+Deno.test("encodeWasm: multiple tables throw (element segments + call_indirect encode against table 0)", () => {
+  const mod = new ModuleBuilder()
+    .addTable("a", 1, null, ValType.FuncRef)
+    .addTable("b", 1, null, ValType.FuncRef)
+    .build();
+  assertThrows(() => encodeWasm(mod), WasmEncodeError, "multiple tables");
+});

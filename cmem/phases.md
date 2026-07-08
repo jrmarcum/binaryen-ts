@@ -1,7 +1,9 @@
 # Phase delivery status
 
 Condensed. The canonical line-by-line per-phase record lives in the gitignored `CLAUDE.md`; this
-table is the portable summary. Current version: **v1.3.5** on JSR.
+table is the portable summary. Current version: **v1.3.6** on JSR — the first release to ship
+Asyncify + Flatten + the four-pass fail-loud audit sweep (20 correctness fixes; see
+[correctness.md](correctness.md)). v1.3.5 and earlier predate all of it.
 
 ## Core phases
 
@@ -45,12 +47,24 @@ Enforced by `deno task bump`. See [publishing.md](publishing.md).
 
 ## Recently completed
 
-- **Asyncify** (`--asyncify` port, for TinyGo goroutines) — ✅ **COMPLETE, all 5 stages** (2026-07-05):
-  `2902fca` runtime support + `3b35d97` ModuleAnalyzer + `2e30ea4` flatten pass (+`mapChildrenShallow`
-  walk.ts fix) + `62a4573` flow + `c446a3d` locals/intrinsics (runnable) + `62f0fb0` wire/register/CLI.
-  Registered `"Asyncify"` (opt-in), runnable e2e that **differentially matches `wasm-opt --asyncify`
-  v130**. Follow-up (wasmtk side): wire into `--lang=go` + a TinyGo-build goroutine e2e; publish
-  binaryen-ts. Full detail in [passes.md](passes.md) § "Asyncify".
+- **Asyncify** (`--asyncify` port, for TinyGo goroutines) — ✅ **COMPLETE, all 5 stages**
+  (2026-07-05 → 2026-07-07): `2902fca` runtime support + `3b35d97` ModuleAnalyzer + `2e30ea4`
+  flatten pass (+`mapChildrenShallow` walk.ts fix) + `62a4573` flow + `c446a3d` locals/intrinsics
+  (runnable) + `62f0fb0` wire/register/CLI. Registered `"Asyncify"` (opt-in), runnable e2e that
+  **differentially matches `wasm-opt --asyncify` v130**. Follow-up (wasmtk side): wire into
+  `--lang=go` + a TinyGo-build goroutine e2e; publish binaryen-ts. Full detail in
+  [passes.md](passes.md) § "Asyncify".
+
+- **Fail-loud audit sweep** (2026-07-07, post-Asyncify, four passes) — mechanical grep sweeps + four
+  parallel subagent code-review agents, every finding verified behaviorally / against upstream. **20
+  correctness fixes incl. 6 real behavioral miscompiles**; ~15 regression tests + a 20k-iteration
+  differential-fuzz confirmation; 379 → 394; shipped in v1.3.6. Highlights: the
+  `inferFuncResultType`/`inferGlobalType` TODO-stub root cause (call typed `None` → Asyncify
+  None-local), `parseLoop` dropping `(result)`, Flatten `local.tee` clobber, `PickLoadSigns`
+  (inert + wrong classification), inlining ref/v128 non-param reset, multi-table +
+  multi-value-blocktype silent corruption, compat `_idToValType` mistype, `struct.get`/`array.get`
+  typing. One subagent "live miscompile" finding was verified WRONG and rejected. Full detail in
+  [correctness.md](correctness.md) § "Fail-loud audit sweep".
 
 ## Deferred / not-yet-done
 

@@ -57,7 +57,8 @@ async function wasmOptInstrumentSet(
     for (const [k, v] of Object.entries(passArgs)) {
       args.push(v === "" ? `--pass-arg=${k}` : `--pass-arg=${k}@${v}`);
     }
-    const out = await new Deno.Command("wasm-opt", { args, stdout: "piped", stderr: "piped" }).output();
+    const out = await new Deno.Command("wasm-opt", { args, stdout: "piped", stderr: "piped" })
+      .output();
     const text = new TextDecoder().decode(out.stdout) + new TextDecoder().decode(out.stderr);
     const set = new Set<string>();
     for (const line of text.split("\n")) {

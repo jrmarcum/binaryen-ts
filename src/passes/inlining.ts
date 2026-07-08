@@ -43,15 +43,17 @@ import {
   makeI64Const,
   makeLocalGet,
   makeLocalSet,
+  makeRefNull,
   makeReturn,
   makeUnary,
   makeUnreachable,
+  makeV128Const,
   type RefIsNullExpr,
   type UnaryExpr,
   UnaryOp,
 } from "../ir/expressions.ts";
 import type { Local, WasmFunction, WasmModule } from "../ir/module.ts";
-import { None, Unreachable, ValType } from "../ir/types.ts";
+import { isRef, None, Unreachable, ValType } from "../ir/types.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
 import { optimizeNode } from "./optimize-instructions.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
@@ -608,7 +610,17 @@ function zeroForType(type: ValType): Expression | null {
       return makeF32Const(0);
     case ValType.F64:
       return makeF64Const(0);
+    case ValType.V128:
+      return makeV128Const(new Uint8Array(16));
     default:
+      // Reference-typed local: its wasm default is `null`. In the coarse
+      // ref-type model every ref local is nullable, so `ref.null` is the
+      // correct per-entry reset (the pass runner fixes up any non-nullable
+      // locals afterward). Returning `null` here — as the old code did for all
+      // non-numeric types — skipped the reset, so an inlined callee's ref/v128
+      // local kept the PREVIOUS execution's value when the call site runs more
+      // than once (e.g. inside a loop): a stale-value miscompile.
+      if (isRef(type)) return makeRefNull(type);
       return null;
   }
 }

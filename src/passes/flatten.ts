@@ -158,12 +158,22 @@ function flattenExpr(e: Expression, ctx: Ctx): Flat {
   if (isControlFlow(e)) return flattenControlFlow(e, ctx);
 
   // local.tee is disallowed in Flat IR: rewrite to a set (prelude) + get.
+  // The result must read a FRESH temp, not `local.get tee.index`: returning the
+  // original local left the value clobberable by a later sibling operand whose
+  // own prelude writes the same local (e.g. two tees to the same local as
+  // sibling operands) → the parent read the wrong value. Capture into a temp
+  // that nothing else writes, mirroring the general-case hoist below.
   if (e.kind === ExpressionKind.LocalTee) {
     const tee = e as { index: number; value: Expression; type: Type };
     const inner = flattenExpr(tee.value, ctx);
+    const temp = allocTemp(ctx, tee.type);
     return {
-      pre: [...inner.pre, makeLocalSet(tee.index, inner.value)],
-      value: makeLocalGet(tee.index, tee.type as ValType),
+      pre: [
+        ...inner.pre,
+        makeLocalSet(temp, inner.value),
+        makeLocalSet(tee.index, makeLocalGet(temp, tee.type as ValType)),
+      ],
+      value: makeLocalGet(temp, tee.type as ValType),
     };
   }
 

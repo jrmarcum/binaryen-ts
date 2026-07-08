@@ -197,6 +197,20 @@ function _idToValType(id: number): ValType | null {
 }
 
 /**
+ * Like {@link _idToValType} but for positions that REQUIRE a concrete scalar
+ * type (a local, global, or function-var type). Throws on an unrecognized ID
+ * instead of silently defaulting to i32 — a bad/stale type constant there would
+ * otherwise mistype the local/global (and, for a global, emit a wrong-typed
+ * global into the binary) with no diagnostic. Matches the throw-on-invalid
+ * contract {@link _idToValTypeArray} already enforces for params/results.
+ */
+function _idToValTypeStrict(id: number): ValType {
+  const vt = _idToValType(id);
+  if (vt === null) throw new TypeError(`unrecognized wasm type id ${id}`);
+  return vt;
+}
+
+/**
  * Flattens a tuple type ID to an array of primitive types for use in
  * `addFunction` etc. Accepts either a single packed ID (the common case) or
  * an already-array tuple (binaryen-ts native shape).
@@ -885,7 +899,7 @@ export class F64Ops {
 export class LocalOps {
   /** `local.get index` — returns the value of local `index`, typed as `type`. */
   get(index: number, type: number): Expression {
-    const vt = _idToValType(type) ?? ValType.I32;
+    const vt = _idToValTypeStrict(type);
     return makeLocalGet(index, vt);
   }
   /** `local.set index value`. */
@@ -894,7 +908,7 @@ export class LocalOps {
   }
   /** `local.tee index value` — stores `value` to local `index` and forwards it. */
   tee(index: number, value: Expression, type: number): Expression {
-    const vt = _idToValType(type) ?? ValType.I32;
+    const vt = _idToValTypeStrict(type);
     return makeLocalTee(index, value, vt);
   }
 }
@@ -903,7 +917,7 @@ export class LocalOps {
 export class GlobalOps {
   /** `global.get $name` — returns the value of global `$name`, typed as `type`. */
   get(name: string, type: number): Expression {
-    const vt = _idToValType(type) ?? ValType.I32;
+    const vt = _idToValTypeStrict(type);
     return makeGlobalGet(name, vt);
   }
   /** `global.set $name value`. */
@@ -1041,7 +1055,7 @@ export class Module {
   ): WasmFunction {
     const paramVts = _idToValTypeArray(params);
     const resultVts = _idToValTypeArray(results);
-    const varVts = vars.map((v) => _idToValType(v) ?? ValType.I32);
+    const varVts = vars.map((v) => _idToValTypeStrict(v));
     const locals = [
       ...paramVts.map((type) => ({ type })),
       ...varVts.map((type) => ({ type })),
@@ -1092,7 +1106,7 @@ export class Module {
    * @param init - Constant initializer expression.
    */
   addGlobal(name: string, type: number, mutable: boolean, init: Expression): void {
-    const vt = _idToValType(type) ?? ValType.I32;
+    const vt = _idToValTypeStrict(type);
     this._inner.globals.push({ name, type: vt, mutable, init });
   }
 
@@ -1112,7 +1126,7 @@ export class Module {
     type: number,
     mutable = false,
   ): void {
-    const vt = _idToValType(type) ?? ValType.I32;
+    const vt = _idToValTypeStrict(type);
     this._inner.imports.push({
       kind: "global",
       name: internalName,
