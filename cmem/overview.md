@@ -9,7 +9,7 @@ single source tree.
 - **Repository:** <https://github.com/jrmarcum/binaryen-ts>
 - **Upstream reference:** <https://github.com/WebAssembly/binaryen>
 - **Authoring runtime:** Deno 2.x (canonical — drives `deno task` scripts and the JSR publish)
-- **Current version:** v1.3.5 (see [phases.md](phases.md) / [publishing.md](publishing.md))
+- **Current version:** v1.3.9 (see [phases.md](phases.md) / [publishing.md](publishing.md))
 
 ## Role in the toolchain
 

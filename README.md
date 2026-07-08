@@ -106,8 +106,8 @@ JSR ESM endpoint (or via a bundler like esbuild/Vite that supports the JSR regis
 
 ```html
 <script type="module">
-  import { BinaryOp, createModule, ValType } from "https://esm.sh/jsr/@jrmarcum/binaryen-ts/api";
-  // ... build and encode a module, then instantiate via WebAssembly.instantiate ...
+import { BinaryOp, createModule, ValType } from "https://esm.sh/jsr/@jrmarcum/binaryen-ts/api";
+// ... build and encode a module, then instantiate via WebAssembly.instantiate ...
 </script>
 ```
 
@@ -456,7 +456,21 @@ a prior sibling statement — but `_rewriteExpr` walks a single expression tree 
 Fixed by invalidating the cache on `LEFT` before rewriting `RIGHT` in the binary case. 1 new focused
 IR test (`f(x) = (x + (local0:=99)) + local0`, `f(5)===203`, verified to return `109` without the
 fix). Unblocks wasmtk dropping its `skipBinaryenOpt` workaround so merged modules can be `-Oz`'d
-again. 304 → 305 passing. |
+again. 304 → 305 passing. | | — | ✅ Done | Asyncify pass (`--asyncify`) — full five-stage port
+(runtime-support synthesis → whole-program `ModuleAnalyzer` → `Flatten` → control-flow unwind/rewind
+instrumentation → locals save/restore + intrinsic lowering) that adds suspend/resume for stackful
+coroutines (e.g. TinyGo goroutines); runnable end-to-end and differentially matches
+`wasm-opt --asyncify` v130. Ships the standalone `Flatten` pass (`--flatten`) as a prerequisite.
+Opt-in (registered as `Asyncify`). 305 → 379 passing. | | — | ✅ Done | Four-pass fail-loud audit
+sweep — mechanical + multi-agent code-review audit of the whole tree for silent fallbacks,
+fall-throughs, and correctness bugs; **20 fixes including 6 behavioral miscompiles** (the WAT-parser
+`(call)`/`(global.get)` result-type inference that fed Asyncify a `None`-typed local, `parseLoop`
+dropping `(result …)`, `Flatten` `local.tee` clobber, `PickLoadSigns` inert-and-wrong-classification
+rewrite to match upstream, inlining not resetting ref/`v128` locals between loop-inlined runs,
+multi-table + multi-value-blocktype fail-loud guards, `struct.get`/`array.get` field-type
+resolution, and 6 compat `_idToValType` strictness sites), each with a regression test, plus a 20
+000-iteration differential-fuzz confirmation that full `-Oz` stays bit-identical to unoptimized. 379
+→ 394 passing. |
 
 ## Robustness & error handling
 

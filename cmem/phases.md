@@ -1,9 +1,11 @@
 # Phase delivery status
 
 Condensed. The canonical line-by-line per-phase record lives in the gitignored `CLAUDE.md`; this
-table is the portable summary. Current version: **v1.3.6** on JSR — the first release to ship
-Asyncify + Flatten + the four-pass fail-loud audit sweep (20 correctness fixes; see
-[correctness.md](correctness.md)). v1.3.5 and earlier predate all of it.
+table is the portable summary. Current version: **v1.3.9** on JSR. Asyncify + Flatten + the
+four-pass fail-loud audit sweep (20 correctness fixes; see [correctness.md](correctness.md)) first
+shipped in **v1.3.6**; **v1.3.7–v1.3.9 are identical-code re-publishes** from the JSR provenance
+investigation (see [publishing.md](publishing.md) § "JSR-side provenance recording stopped"). v1.3.5
+and earlier predate the audit sweep.
 
 ## Core phases
 
