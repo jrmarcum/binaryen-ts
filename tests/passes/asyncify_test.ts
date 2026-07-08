@@ -11,7 +11,7 @@
  * @license MIT
  */
 
-import { assert, assertEquals } from "@std/assert";
+import { assert, assertEquals, assertThrows } from "@std/assert";
 
 import {
   BinaryOp,
@@ -110,6 +110,21 @@ Deno.test("parseAsyncifyOptions — accepts the Asyncify@ prefixed form", () => 
   assert(opts.ignoreImports);
 });
 
+Deno.test("parseAsyncifyOptions — accepts legacy blacklist/whitelist/relocatable aliases", () => {
+  const opts = parseAsyncifyOptions({
+    "asyncify-blacklist": "$x",
+    "asyncify-relocatable": "",
+  });
+  assertEquals(opts.removeList, ["$x"]);
+  assert(opts.importGlobals);
+  assertEquals(parseAsyncifyOptions({ "asyncify-whitelist": "$y" }).onlyList, ["$y"]);
+});
+
+Deno.test("parseAsyncifyOptions — splits list payloads on newlines as well as commas", () => {
+  const opts = parseAsyncifyOptions({ "asyncify-onlylist": "$a\n$b,\n $c " });
+  assertEquals(opts.onlyList, ["$a", "$b", "$c"]);
+});
+
 // ---------------------------------------------------------------------------
 // Runtime-support synthesis (ABI shape)
 // ---------------------------------------------------------------------------
@@ -183,6 +198,45 @@ Deno.test("Asyncify Stage 1 — synthesizes a memory for a memoryless module (re
   assert(
     WebAssembly.validate(bytes as BufferSource),
     "asyncified memoryless module must validate (loads/stores need a memory)",
+  );
+});
+
+Deno.test("Asyncify Stage 1 — import-globals imports the two globals instead of defining them", () => {
+  const m = moduleWithImport();
+  new AsyncifyPass().run(m, {
+    optimizeLevel: 2,
+    shrinkLevel: 0,
+    debugInfo: false,
+    closedWorld: false,
+    passArgs: { "asyncify-import-globals": "" },
+    partialInliningIfs: 0,
+  });
+  // The two globals are imported from env, not defined locally.
+  assert(!m.globals.some((g) => g.name === ASYNCIFY_STATE), "state global must not be defined");
+  assert(!m.globals.some((g) => g.name === ASYNCIFY_DATA), "data global must not be defined");
+  const importedGlobals = m.imports.filter((i) => i.kind === "global").map((i) => i.name).sort();
+  assertEquals(importedGlobals, [ASYNCIFY_DATA, ASYNCIFY_STATE].sort());
+  assert(
+    WebAssembly.validate(encodeWasm(m) as BufferSource),
+    "import-globals module must still validate",
+  );
+});
+
+Deno.test("Asyncify Stage 1 — rejects multi-memory modules", () => {
+  const m = moduleWithImport();
+  m.memories.push({ name: "$mem2", initial: 1, max: null, shared: false, is64: false });
+  assertThrows(
+    () =>
+      new AsyncifyPass().run(m, {
+        optimizeLevel: 2,
+        shrinkLevel: 0,
+        debugInfo: false,
+        closedWorld: false,
+        passArgs: {},
+        partialInliningIfs: 0,
+      }),
+    Error,
+    "multi-memory",
   );
 });
 

@@ -148,7 +148,9 @@ export interface AsyncifyOptions {
 
 function splitList(v: string | undefined): string[] {
   if (!v) return [];
-  return v.split(",").map((s) => s.trim()).filter((s) => s.length > 0);
+  // Upstream splits list payloads on commas AND newlines (String::Split::NewLineOr).
+  // (CLI `@response-file` expansion is a layer above passArgs and out of scope here.)
+  return v.split(/[,\n]/).map((s) => s.trim()).filter((s) => s.length > 0);
 }
 
 /**
@@ -179,11 +181,13 @@ export function parseAsyncifyOptions(passArgs: Record<string, string>): Asyncify
     ignoreUnwindFromCatch: has("ignore-unwind-from-catch"),
     verbose: has("verbose"),
     memory: get("memory") ?? "",
-    removeList: splitList(get("removelist")),
+    // Accept the upstream back-compat aliases: blacklist→removelist,
+    // whitelist→onlylist, relocatable→import-globals.
+    removeList: splitList(get("removelist") ?? get("blacklist")),
     addList: splitList(get("addlist")),
     propagateAddList: has("propagate-addlist"),
-    onlyList: splitList(get("onlylist")),
-    importGlobals: has("import-globals"),
+    onlyList: splitList(get("onlylist") ?? get("whitelist")),
+    importGlobals: has("import-globals") || has("relocatable"),
     exportGlobals: has("export-globals"),
   };
 }
@@ -248,14 +252,24 @@ export function synthesizeRuntimeSupport(
     );
   }
 
+  // Multiple memories: loads/stores in this IR carry no memory index, so the pass
+  // can only ever target memory 0. Reject rather than silently instrumenting the
+  // wrong memory (upstream fatals unless asyncify-memory@name selects one — which
+  // this port does not yet thread through the load/store builders).
+  const memoryCount = module.memories.length +
+    module.imports.filter((imp) => imp.kind === "memory").length;
+  if (memoryCount > 1 || module.hasMultiMemory) {
+    throw new Error(
+      "asyncify: multi-memory modules are not yet supported; the pass instruments memory 0.",
+    );
+  }
+
   // The control functions (and every instrumented function) load/store the
   // coroutine stack from linear memory. Ensure a memory exists — matching
   // upstream's MemoryUtils::ensureExists — so a memoryless module doesn't emit
   // loads/stores against a nonexistent memory 0 (invalid, unvalidatable wasm).
   // TinyGo output always has a memory, so this is a robustness backstop.
-  const hasMemory = module.memories.length > 0 ||
-    module.imports.some((imp) => imp.kind === "memory");
-  if (!hasMemory) {
+  if (memoryCount === 0) {
     module.memories.push({
       name: "$__asyncify_memory",
       initial: 1,
@@ -265,24 +279,47 @@ export function synthesizeRuntimeSupport(
     });
   }
 
-  // Globals: `__asyncify_state` and `__asyncify_data`, both mut i32 init 0.
-  // (import-globals / export-globals dynamic-linking modes are handled in a
-  // later stage; the default is internal-and-neither, matching upstream.)
-  module.globals.push({
-    name: ASYNCIFY_STATE,
-    type: ValType.I32,
-    mutable: true,
-    init: makeI32Const(0),
-  });
-  module.globals.push({
-    name: ASYNCIFY_DATA,
-    type: ValType.I32,
-    mutable: true,
-    init: makeI32Const(0),
-  });
-  if (options.exportGlobals) {
-    module.exports.push({ name: "__asyncify_state", value: ASYNCIFY_STATE, kind: "global" });
-    module.exports.push({ name: "__asyncify_data", value: ASYNCIFY_DATA, kind: "global" });
+  // Globals: `__asyncify_state` and `__asyncify_data`, both mut i32.
+  // import-globals (a.k.a. the legacy `asyncify-relocatable`) shares the two
+  // globals across modules by IMPORTING them from `env` instead of defining them;
+  // it is mutually exclusive with export-globals.
+  if (options.importGlobals && options.exportGlobals) {
+    throw new Error("asyncify: import-globals and export-globals are mutually exclusive.");
+  }
+  if (options.importGlobals) {
+    module.imports.push({
+      kind: "global",
+      name: ASYNCIFY_STATE,
+      module: "env",
+      base: "__asyncify_state",
+      type: ValType.I32,
+      mutable: true,
+    });
+    module.imports.push({
+      kind: "global",
+      name: ASYNCIFY_DATA,
+      module: "env",
+      base: "__asyncify_data",
+      type: ValType.I32,
+      mutable: true,
+    });
+  } else {
+    module.globals.push({
+      name: ASYNCIFY_STATE,
+      type: ValType.I32,
+      mutable: true,
+      init: makeI32Const(0),
+    });
+    module.globals.push({
+      name: ASYNCIFY_DATA,
+      type: ValType.I32,
+      mutable: true,
+      init: makeI32Const(0),
+    });
+    if (options.exportGlobals) {
+      module.exports.push({ name: "__asyncify_state", value: ASYNCIFY_STATE, kind: "global" });
+      module.exports.push({ name: "__asyncify_data", value: ASYNCIFY_DATA, kind: "global" });
+    }
   }
 
   const dataParam: Local[] = [{ type: ValType.I32 }];
@@ -395,6 +432,34 @@ export function analyzeModule(
     throw new Error(
       "asyncify: an only-list cannot be combined with an add-list or remove-list.",
     );
+  }
+
+  // Validate list entries: a plain (non-wildcard) name must be a DEFINED function.
+  // Naming an import is a hard error (upstream: "use the imports list for imports");
+  // a name matching nothing is a warning rather than a silent no-op.
+  const definedNames = new Set(module.functions.map((f) => f.name));
+  const importFnNames = new Set(
+    module.imports.filter((i) => i.kind === "function").map((i) => i.name),
+  );
+  for (
+    const [label, list] of [
+      ["add-list", options.addList],
+      ["remove-list", options.removeList],
+      ["only-list", options.onlyList],
+    ] as const
+  ) {
+    for (const entry of list) {
+      if (entry.includes("*")) continue; // wildcard patterns are matched by shape
+      if (importFnNames.has(entry)) {
+        throw new Error(
+          `asyncify: ${label} entry "${entry}" names an imported function; ` +
+            `use asyncify-imports to control imports, not a function list.`,
+        );
+      }
+      if (!definedNames.has(entry)) {
+        console.warn(`asyncify: ${label} entry "${entry}" matches no defined function.`);
+      }
+    }
   }
 
   const canIndirect = !options.ignoreIndirect;
