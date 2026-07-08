@@ -17,8 +17,14 @@
 
 import { assert, assertEquals } from "@std/assert";
 
-import { type Expression, ExpressionKind } from "../../src/ir/expressions.ts";
-import { walkExpression } from "../../src/ir/walk.ts";
+import {
+  type Expression,
+  ExpressionKind,
+  makeCallIndirect,
+  makeI32Const,
+} from "../../src/ir/expressions.ts";
+import { mapChildrenShallow, visitChildren, walkExpression } from "../../src/ir/walk.ts";
+import { ValType } from "../../src/ir/types.ts";
 import { encodeWasm } from "../../src/encoder/index.ts";
 import { parseWat } from "../../src/parser/wat-parser.ts";
 import { FlattenPass } from "../../src/passes/flatten.ts";
@@ -239,4 +245,58 @@ Deno.test("flatten — two tees to the same local as sibling operands are not cl
     "f",
     [[]],
   );
+});
+
+// Regression: `call_indirect` evaluates its operands BEFORE the table index
+// (target). walk's child-mapper had them reversed, so flatten hoisted the
+// target's prelude first. Here the target `(call $pick)` clobbers $g and the
+// operand `(global.get $g)` reads it: correct order → operand sees 7; buggy
+// order → $pick runs first and the operand sees 99. Original (unflattened)
+// semantics return 7, so any flatten reordering diverges.
+// Regression (walk.ts): `call_indirect` evaluates its operands BEFORE the table
+// index (target) — the order the encoder emits and that Flatten's prelude
+// hoisting (via mapChildrenShallow) relies on. The child mapper/visitor had them
+// reversed, so Flatten would hoist a side-effecting target ahead of the operands,
+// silently miscompiling any interface/func-value call whose target and operands
+// interact. Assert both the map primitive and the visitor yield operand→target.
+Deno.test("walk — call_indirect visits operands before the table index", () => {
+  const ci = makeCallIndirect(
+    "$t",
+    makeI32Const(200), // target (table index) — must be visited LAST
+    [makeI32Const(100)], // operand — must be visited FIRST
+    [ValType.I32],
+    [ValType.I32],
+  );
+  const readVal = (c: Expression) => (c as { value: { i32: number } }).value.i32;
+
+  const mapOrder: number[] = [];
+  mapChildrenShallow(ci, (c) => {
+    mapOrder.push(readVal(c));
+    return c;
+  });
+  assertEquals(mapOrder, [100, 200], "mapChildrenShallow: operand must precede target");
+
+  const visitOrder: number[] = [];
+  visitChildren(ci, (c) => visitOrder.push(readVal(c)));
+  assertEquals(visitOrder, [100, 200], "visitChildren: operand must precede target");
+});
+
+// Regression: a non-last `unreachable` inside a block is trivial with an empty
+// prelude, so the old flattenBlock appended it nowhere and the trap vanished —
+// letting control fall through. It must survive flattening.
+Deno.test("flatten — a non-last unreachable inside a block is preserved", () => {
+  const mod = flattenParsed(
+    `(module (func $f (export "f") (result i32) (local $x i32)
+      (block
+        (unreachable)
+        (local.set $x (i32.const 5)))
+      (local.get $x)))`,
+  );
+  let unreachables = 0;
+  for (const f of mod.functions) {
+    walkExpression(f.body, (e) => {
+      if (e.kind === ExpressionKind.Unreachable) unreachables++;
+    });
+  }
+  assert(unreachables >= 1, "flatten dropped the non-last unreachable (trap elided)");
 });

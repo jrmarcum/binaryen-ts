@@ -244,11 +244,15 @@ function flattenBlock(block: BlockExpr, ctx: Ctx): Flat {
     list.push(...f.pre);
     if (isLast && concrete) {
       list.push(makeLocalSet(resultTemp, f.value));
-    } else if (isConcrete(child.type) && child.type !== Unreachable) {
-      // A non-last concrete child (rare, e.g. a dropped value mid-block that
-      // reduced to a local.get) — discard its trivial value; effects are in pre.
-      // A trivial local.get has no effect so nothing needs emitting.
+    } else if (child.type === Unreachable) {
+      // A non-last `unreachable` (e.g. a bare `unreachable`, or the value of a
+      // call to a noreturn fn) is trivial with an empty prelude, so it would
+      // otherwise vanish. Keep it as a statement — it carries the trap and
+      // terminates control flow; dropping it lets execution fall through.
+      list.push(f.value);
     }
+    // A non-last concrete child (rare, e.g. a dropped value mid-block that
+    // reduced to a local.get) has no effect — discard its trivial value.
     // Void children: their statement is already in `f.pre` (general case emits
     // the rebuilt node into pre), so nothing else to push.
   });

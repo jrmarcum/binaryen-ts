@@ -624,9 +624,14 @@ function makeCallSupport(curr: Expression, ctx: FlowCtx): Expression {
 
   if (curr.kind === ExpressionKind.LocalSet) {
     const set = curr as LocalSetExpr;
-    const fake = fakeGlobalFor(ctx, set.value.type);
+    // Derive the deferred call's result type from the SET-TARGET local's
+    // declared type, not `set.value.type`: the parser leaves `Call.type === none`
+    // (see flatten.ts `callEffectiveType`), whereas the local's type is always
+    // concrete. Falling back to `set.value.type` only if the local is missing.
+    const callType = ctx.func.locals[set.index]?.type ?? set.value.type;
+    const fake = fakeGlobalFor(ctx, callType);
     executed = makeGlobalSet(fake, set.value);
-    setBack = makeLocalSet(set.index, makeGlobalGet(fake, set.value.type as ValType));
+    setBack = makeLocalSet(set.index, makeGlobalGet(fake, callType as ValType));
   }
 
   const thenSeq = makeBlock([executed, makePossibleUnwind(index, setBack)], null);

@@ -222,12 +222,14 @@ function _mapChildren(
         operands: expr.operands.map((o) => fn(o)),
       };
 
-    case ExpressionKind.CallIndirect:
-      return {
-        ...expr,
-        target: fn(expr.target),
-        operands: expr.operands.map((o) => fn(o)),
-      };
+    case ExpressionKind.CallIndirect: {
+      // Evaluation order is operands first, then the table index (target) last —
+      // match wasm semantics so effect/eval-order-sensitive consumers (Flatten's
+      // prelude hoisting, CFG construction) see children in the real order.
+      const operands = expr.operands.map((o) => fn(o));
+      const target = fn(expr.target);
+      return { ...expr, target, operands };
+    }
 
     case ExpressionKind.RefIsNull:
       return { ...expr, value: fn(expr.value) };
@@ -469,8 +471,9 @@ function _visitChildren(
       expr.operands.forEach(visit);
       break;
     case ExpressionKind.CallIndirect:
-      visit(expr.target);
+      // Operands evaluate before the table index (target) — visit in that order.
       expr.operands.forEach(visit);
+      visit(expr.target);
       break;
     case ExpressionKind.RefIsNull:
       visit(expr.value);
