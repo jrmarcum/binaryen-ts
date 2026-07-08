@@ -164,6 +164,28 @@ Deno.test("Asyncify Stage 1 — adds & exports the 5 control functions in order"
   assertEquals(funcByName(m, `$${ASYNCIFY_GET_STATE}`)!.results, [ValType.I32]);
 });
 
+Deno.test("Asyncify Stage 1 — synthesizes a memory for a memoryless module (result validates)", () => {
+  // The control functions (and instrumented code) load/store the coroutine stack
+  // from linear memory. A module reaching the pass without one must still produce
+  // valid wasm — asyncify ensures a memory exists (matching MemoryUtils::ensureExists).
+  const m = moduleWithImport();
+  m.memories = [];
+  new AsyncifyPass().run(m, {
+    optimizeLevel: 2,
+    shrinkLevel: 0,
+    debugInfo: false,
+    closedWorld: false,
+    passArgs: {},
+    partialInliningIfs: 0,
+  });
+  assertEquals(m.memories.length, 1, "asyncify must add a memory when none exists");
+  const bytes = encodeWasm(m);
+  assert(
+    WebAssembly.validate(bytes as BufferSource),
+    "asyncified memoryless module must validate (loads/stores need a memory)",
+  );
+});
+
 Deno.test("Asyncify Stage 1 — start_unwind body matches the ABI (state=1, data set, gt_u check)", () => {
   const m = moduleWithImport();
   new AsyncifyPass().run(m, {

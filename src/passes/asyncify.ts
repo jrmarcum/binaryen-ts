@@ -248,6 +248,23 @@ export function synthesizeRuntimeSupport(
     );
   }
 
+  // The control functions (and every instrumented function) load/store the
+  // coroutine stack from linear memory. Ensure a memory exists — matching
+  // upstream's MemoryUtils::ensureExists — so a memoryless module doesn't emit
+  // loads/stores against a nonexistent memory 0 (invalid, unvalidatable wasm).
+  // TinyGo output always has a memory, so this is a robustness backstop.
+  const hasMemory = module.memories.length > 0 ||
+    module.imports.some((imp) => imp.kind === "memory");
+  if (!hasMemory) {
+    module.memories.push({
+      name: "$__asyncify_memory",
+      initial: 1,
+      max: null,
+      shared: false,
+      is64: false,
+    });
+  }
+
   // Globals: `__asyncify_state` and `__asyncify_data`, both mut i32 init 0.
   // (import-globals / export-globals dynamic-linking modes are handled in a
   // later stage; the default is internal-and-neither, matching upstream.)
@@ -395,7 +412,6 @@ export function analyzeModule(
   // Reverse call-graph edges: callee name -> set of (defined) caller names.
   const calledBy = new Map<string, Set<string>>();
   const canChangeState = new Map<string, boolean>();
-  const hasIndirectCall = new Map<string, boolean>();
   const inRemoveList = new Set<string>();
   const addedFromList = new Set<string>();
 
@@ -430,7 +446,6 @@ export function analyzeModule(
         indirect = true;
       }
     });
-    hasIndirectCall.set(func.name, indirect);
     canChangeState.set(func.name, indirect && canIndirect);
   }
 
@@ -738,6 +753,12 @@ export function flowInstrumentFunction(func: WasmFunction, ctx: FlowCtx): void {
 /**
  * Materialize the fake call-result globals collected during flow instrumentation
  * (one mutable global per call-result type), adding them to `module`.
+ *
+ * TEST-ONLY: do NOT wire this into `AsyncifyPass.run`. The full pipeline runs
+ * flow→locals back-to-back per function, and Stage 4 `lowerIntrinsics` rewrites
+ * every fake `global.get`/`global.set` to a scratch local before anything
+ * validates or encodes — so no fake global ever needs to exist. Calling this in
+ * the pipeline would leave orphan, never-referenced globals in the output.
  */
 export function materializeFakeGlobals(module: WasmModule, fakeGlobals: Map<Type, string>): void {
   for (const [type, name] of fakeGlobals) {
