@@ -212,19 +212,21 @@ rewrite).
 **Audit-hardening (2026-07-08, wasmtk-side code-audit sweep — suite 397→401):** a three-pass
 adversarial audit of the port found + fixed two real correctness bugs in the shared IR and closed
 several option-parity gaps:
+
 - **`walk.ts` `call_indirect` eval order** — `_mapChildren`/`_visitChildren` walked `target` before
   `operands`; wasm evaluates operands first, then the table index. Flatten hoists preludes via
   `mapChildrenShallow`, so a `call_indirect` (Go interface / func-value call) whose target and
   operands interact was silently miscompiled. Fixed both; +IR regression.
 - **`flatten.ts` dropped a non-last `unreachable`** (trivial, empty prelude → hit neither block
   branch → the trap vanished). Kept as a statement; +structural regression.
-- **`asyncify.ts` option parity** — now: ensures a memory exists (upstream `MemoryUtils::ensureExists`
-  — a memoryless module otherwise emits loads against a nonexistent memory 0); **honors
-  `import-globals`** (imports the two globals from `env` instead of defining them; verified
-  encode + instantiate; mutually exclusive with `export-globals`); rejects multi-memory; splits list
-  payloads on newlines; accepts legacy `blacklist`/`whitelist`/`relocatable` aliases; diagnoses bad
-  add/remove/only-list entries (import-name → error, no-match → warning). Dead `hasIndirectCall` map
-  removed; `materializeFakeGlobals` documented TEST-ONLY. +4 tests (`asyncify_test.ts`).
+- **`asyncify.ts` option parity** — now: ensures a memory exists (upstream
+  `MemoryUtils::ensureExists` — a memoryless module otherwise emits loads against a nonexistent
+  memory 0); **honors `import-globals`** (imports the two globals from `env` instead of defining
+  them; verified encode + instantiate; mutually exclusive with `export-globals`); rejects
+  multi-memory; splits list payloads on newlines; accepts legacy
+  `blacklist`/`whitelist`/`relocatable` aliases; diagnoses bad add/remove/only-list entries
+  (import-name → error, no-match → warning). Dead `hasIndirectCall` map removed;
+  `materializeFakeGlobals` documented TEST-ONLY. +4 tests (`asyncify_test.ts`).
 
 Known gaps / future work (none block TinyGo goroutine code): (1) **liveness-minimized local saving**
 — we save all original locals; upstream saves only the live set (smaller frames). (2) **wasm64** —
