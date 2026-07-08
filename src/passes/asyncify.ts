@@ -437,6 +437,13 @@ export function analyzeModule(
   // Validate list entries: a plain (non-wildcard) name must be a DEFINED function.
   // Naming an import is a hard error (upstream: "use the imports list for imports");
   // a name matching nothing is a warning rather than a silent no-op.
+  //
+  // LIMITATION: list entries are matched against the module's INTERNAL function
+  // names (`func.name`). For a binary-parsed module the reader currently discards
+  // the name section and assigns synthetic `$funcN` names, so real-symbol lists
+  // (`--asyncify-onlylist@main`) won't match and will warn here. Lists are fully
+  // functional against ModuleBuilder / named-WAT modules; wiring asyncify to
+  // binary-parsed input (not yet done in wasmtk) requires name-section retention.
   const definedNames = new Set(module.functions.map((f) => f.name));
   const importFnNames = new Set(
     module.imports.filter((i) => i.kind === "function").map((i) => i.name),
