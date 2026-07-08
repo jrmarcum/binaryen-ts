@@ -43,16 +43,7 @@ jobs:
       - name: Install Deno
         uses: denoland/setup-deno@v2
         with:
-          # PINNED to 2.8.1 — the last Deno release whose provenance attestation
-          # JSR records. Deno 2.8.2 changed the attestation/bundle format it
-          # submits at publish; JSR's server-side verification no longer accepts
-          # it, so `deno publish` still uploads to Sigstore ("Provenance
-          # transparency log available…") but JSR silently drops the provenance
-          # (versions 1.3.5–1.3.7 all show rekorLogId=null; 1.3.3 on 2.8.1 was
-          # the last with a recorded rekorLogId). 2.9.1 did NOT fix it. Revisit
-          # the floating `v2.x` once a Deno release restores JSR-recorded
-          # provenance.
-          deno-version: v2.8.1
+          deno-version: v2.x
 
       - name: Verify deno.json version matches tag
         if: startsWith(github.ref, 'refs/tags/v')
