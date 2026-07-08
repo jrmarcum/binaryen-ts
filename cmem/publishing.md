@@ -1,8 +1,9 @@
 # Publishing & release flow
 
 Published as **`@jrmarcum/binaryen-ts`** on JSR. GitHub remote: `github.com/jrmarcum/binaryen-ts`.
-Current version: **v1.3.5**. JSR publish runs via GitHub Actions with **OIDC provenance — no publish
-token is stored anywhere**.
+Current version: **v1.3.9**. JSR publish runs via GitHub Actions with **OIDC provenance — no publish
+token is stored anywhere**. ⚠️ Provenance recording is currently broken JSR-side for this package
+since v1.3.5 — see "JSR-side provenance recording stopped" below.
 
 ## Never run `deno publish` locally
 
@@ -74,6 +75,46 @@ compat `Record` incomplete; local passed, CI failed at publish step 5 → orphan
 publish, no Release). **Recovery**: bump and re-publish (JSR has no record of the failed version).
 Future-proofing (not yet applied): `deno task check --reload` + `deno task test` in
 `scripts/publish.ts` before the tag push.
+
+### JSR-side provenance recording stopped (v1.3.5+, unresolved as of 2026-07-08)
+
+**Symptom**: `curl .../versions/X.Y.Z | grep rekorLogId` returns `"rekorLogId":null` for every
+binaryen-ts version since **v1.3.5 (~2026-06-10)**, even though the publish workflow is green and
+the `deno publish` step prints
+`Provenance transparency log available at https://search.sigstore.dev/?logIndex=…`
+
+- `Successfully published`. v1.1.1–v1.3.3 have a numeric `rekorLogId`.
+
+**Key distinction**: that Sigstore line proves **Deno created + uploaded the attestation** — it does
+NOT prove **JSR recorded it**. JSR records provenance in an async step a few seconds after publish;
+the tell is `updatedAt` vs `createdAt` on the version: working versions differ by ~5–10s (JSR's
+recording step ran), broken ones have `updatedAt == createdAt` (it never ran). `rekorLogId` in the
+JSR API is the authoritative indicator; the deno log line is not.
+
+**This is NOT** (all eliminated, four throwaway publishes v1.3.6–v1.3.9):
+
+- **Not a local publish** — those have `rekorLogId=""` (empty), these are `null`; all went through
+  CI.
+- **Not the Deno version** — v1.3.8 pinned to Deno **2.8.1** (the exact version that recorded fine
+  for v1.3.3) still came out null. So the 2.8.1→2.8.2 boundary was coincidental; the pin was
+  reverted.
+- **Not the publish command** — sibling `@jrmarcum/wasmtk` + `@jrmarcum/wabt-ts` use byte-for-byte
+  the same workflow (`deno publish`, `setup-deno@v2` `v2.x`, tag-push, `id-token: write`) and DO
+  record provenance (published 2026-07-03). So `npx jsr publish` vs `deno publish` is not the fix.
+- **Not JSR-wide / not the account** — `@std/assert`, `@oak/oak`, and the two siblings all record
+  it.
+- **Not a stale repo link** — JSR `githubRepository.id` (1226815384) matches the live GitHub repo
+  id. Unlink+relink in the JSR UI did **not** change the link's `createdAt` (still 2026-05-25) — JSR
+  appears to treat a same-repo relink as idempotent, so the timestamp is not a reliable "did it
+  take" signal.
+
+**Conclusion**: JSR-side state specific to the `binaryen-ts` package record; nothing in this repo's
+config can fix it (identical setup works for the siblings). **Contacted JSR support 2026-07-08.**
+Provenance **cannot be backfilled** onto v1.3.6–v1.3.9 — it attaches on the next publish _after_ JSR
+fixes their side. When they confirm a fix: bump + publish, then verify `rekorLogId` is a number
+within seconds (don't trust the deno Sigstore line alone). Diagnostic scripts were ad-hoc `curl` to
+`api.jsr.io/scopes/jrmarcum/packages/binaryen-ts[/versions/X.Y.Z]` and the GitHub Actions job-log
+API.
 
 ### tag-sync — `would clobber existing tag`
 
