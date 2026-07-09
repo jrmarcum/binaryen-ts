@@ -470,7 +470,21 @@ rewrite to match upstream, inlining not resetting ref/`v128` locals between loop
 multi-table + multi-value-blocktype fail-loud guards, `struct.get`/`array.get` field-type
 resolution, and 6 compat `_idToValType` strictness sites), each with a regression test, plus a 20
 000-iteration differential-fuzz confirmation that full `-Oz` stays bit-identical to unoptimized. 379
-→ 394 passing. |
+→ 394 passing. | | — | ✅ Done | **In-wasm asyncify-import mode** (v1.4.1) — the Asyncify pass now
+also handles modules that IMPORT the `asyncify.*` control API (`asyncify.start_unwind` /
+`stop_unwind` / `start_rewind` / `stop_rewind`), i.e. TinyGo's `-scheduler=asyncify` output: it
+removes those imports, synthesizes the control functions internally, and wires the calls — so
+goroutine Go compiles with NO external `wasm-opt`/binaryen. 394 → 403 passing. | | — | ✅ Done |
+**Liveness-minimized asyncify saving + a binary-decoder reorder fix** (v1.4.2). (1) The Asyncify
+pass saves only the locals LIVE across a suspend (computed via a CFG point-wise liveness walk)
+instead of every local — coroutine frames are now smaller than `wasm-opt --asyncify`. (2) **WT-2k**
+— the binary decoder no longer reorders a value kept on the operand stack past a statement that
+mutates the state it reads: TinyGo's goroutine trampoline keeps the caller's `$__stack_pointer` on
+the stack across `global.set $sp; call…`, then a trailing `global.set $sp` restores it; the decoder
+had re-evaluated `global.get $sp` after `$sp` was overwritten → a `global.set(global.get)`
+self-assign that corrupted the shadow stack (a `memory access out of bounds` trap in nested
+goroutines). The decoder now spills the reordered value into a temp local (a `Pop` placeholder is
+exempt). 403 → 405 passing. |
 
 ## Robustness & error handling
 

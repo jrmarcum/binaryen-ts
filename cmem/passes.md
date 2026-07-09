@@ -266,14 +266,16 @@ the un-instrumented module → binaryen-ts Asyncify (import mode) + `-Oz` → **
 (`sum: 30`)**. +2 tests (`asyncify_analyzer_test.ts` topMost/bottomMost; `asyncify_test.ts`
 imports-removed / control-fns-internal / validates). Suite 403/403.
 
-Known gaps / future work (none block TinyGo goroutine code): (1) **liveness-minimized local saving**
-— we save all original locals; upstream saves only the live set (smaller frames). (2) **wasm64** —
-throws a clear "not yet". (3) **EH / tuples / value-carrying branches** — flatten rejects them (out
-of scope for TinyGo). (4) **list options key on INTERNAL function names** — a binary-parsed module
-drops the name section (synthetic `$funcN`), so real-symbol lists (`--asyncify-onlylist@main`) won't
-match it and will warn; lists work against ModuleBuilder / named-WAT modules. Documented inline;
-needs name-section retention when asyncify is wired to binary-parsed input. (5) **Publish**
-binaryen-ts so wasmtk can consume the import-mode pass.
+Known gaps / future work (none block TinyGo goroutine code): (1) ✅ **liveness-minimized local
+saving — DONE (v1.4.2)**: `computeRelevantLocals` (CFG point-wise liveness) now saves only the
+locals live across a suspend, ∪ flow's condition temps; frames are smaller than `wasm-opt`. See
+above. (2) **wasm64** — throws a clear "not yet". (3) **EH / tuples / value-carrying branches** —
+flatten rejects them (out of scope for TinyGo). (4) **list options key on INTERNAL function names**
+— a binary-parsed module drops the name section (synthetic `$funcN`), so real-symbol lists
+(`--asyncify-onlylist@main`) won't match it and will warn; lists work against ModuleBuilder /
+named-WAT modules. Documented inline; needs name-section retention when asyncify is wired to
+binary-parsed input. (5) ✅ **Published** — v1.4.1 (import mode), v1.4.2 (liveness + the WT-2k
+decoder-reorder fix that was the true root cause of the nested-goroutine crash).
 
 **Cross-project follow-up (wasmtk side, tracked in wasmtk `cmem/roadmap.md` #2):** wire this pass
 into wasmtk's `--lang=go` build to replace external `wasm-opt --asyncify` — the shim delegates
