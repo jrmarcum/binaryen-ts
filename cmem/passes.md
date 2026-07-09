@@ -207,25 +207,10 @@ rewrite).
   ADDITIVE `BasicBlock.callPoints` field in `cfg.ts` records each call's action-position (the get/set
   liveness consumers — CoalesceLocals, `computeLiveness` — ignore it, so no regression; full suite
   403/403). `localsInstrumentFunction` takes an optional `savedLocals` (falls back to all-locals for
-  direct callers). **KNOWN GAP — nested-suspension over-use (still OPEN):** a goroutine that suspends
-  *inside* another suspending goroutine (`inner.Wait()` within an outer goroutine) still traps
-  `memory access out of bounds` at exactly linear-memory end, on both the old all-locals AND the new
-  liveness-minimized saving. **CONCLUSIVELY DIAGNOSED (2026-07-09) — it is NOT an asyncify save/restore
-  bug.** A runtime trace of `stackPos` at every control-function call shows our instrumentation
-  behaves **identically to `wasm-opt --asyncify`**: same 13 concurrent goroutine buffers at the same
-  addresses, individual buffers nowhere near full (used ≤116 B of a 64 KB buffer; ours uses LESS than
-  wasm-opt). The trap is a **memory-grow ORDERING** bug in the instrumented OUTPUT: nested spawns 13
-  concurrent goroutines, TinyGo mallocs a ~64 KB asyncify buffer per goroutine (marching up to ~14
-  pages), and ours ACCESSES a freshly-allocated buffer at the current memory boundary **just before**
-  TinyGo grows memory — faulting at exactly the current linear-memory end (0x80000 at 8 pages;
-  `-stack-size=8KB` shrinks buffers and the fault MOVES to 0x20000 at 2 pages — always the current
-  end, at any buffer size). `wasm-opt`'s output grows first, so it never faults; ours needs the whole
-  working set pre-allocated (≥15 pages initial for nested). The save/restore, call-index accounting,
-  and instrument SET are all correct and match `wasm-opt`; `-Oz` doesn't change it; the pre-liveness
-  all-locals version faulted identically. Root cause of the grow-vs-access ordering flip is a further
-  layer (instruction-level diff of the alloc/`memory.grow` path, `def #41`, which is uninstrumented
-  and byte-identical in both — so a CALLER's ordering differs). Not fixed. See wasmtk
-  `cmem/polyglot-producers.md` § "KNOWN GAP — NESTED SUSPENSION". **Module RUNNABLE:** e2e tests drive a real
+  direct callers). The nested-goroutine crash once tracked here was NOT an asyncify bug at all — it
+  was a **binary-decoder reorder bug, now FIXED (2026-07-09)** — see [correctness.md](correctness.md)
+  § "WT-2k". The liveness-minimized saving stands on its own merit (smaller frames, matches
+  `wasm-opt`). **Module RUNNABLE:** e2e tests drive a real
   unwind/rewind — `compute(10)+get()→42 == 52`, loop `sum(3),get→7 == 21` with locals surviving —
   and **differentially match `wasm-opt --asyncify`**.
 - **Stage 5 ✅** (commit `62f0fb0`) — `AsyncifyPass.run` wired to the full pipeline, `registerPass`,

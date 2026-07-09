@@ -1069,7 +1069,33 @@ class WasmParser {
       // code values are always on top, so this is a no-op there.
       for (let i = exprs.length - 1; i >= 0; i--) {
         if (exprs[i].type !== None) {
-          return exprs.splice(i, 1)[0];
+          // A `Pop` is a stack PLACEHOLDER (a multi-value call's extra result or
+          // a catch's exception param) that encodes to NOTHING — it must be
+          // consumed in place, never spilled (`local.set (pop)` would leave the
+          // set with no stack value). Splice it directly, as before.
+          if (i === exprs.length - 1 || exprs[i].kind === "pop") {
+            return exprs.splice(i, 1)[0];
+          }
+          // The value sits BELOW ≥1 statement. Returning it directly would move
+          // it AFTER those statements in the reconstructed tree — CORRECT only
+          // if the value can't observe their effects. It's WRONG when the value
+          // reads mutable state a skipped statement writes: e.g. the TinyGo
+          // goroutine trampoline keeps the caller's `$__stack_pointer`
+          // (`global.get`) live on the operand stack across
+          // `global.set $__stack_pointer …; call_indirect; call`, then a trailing
+          // `global.set $__stack_pointer` consumes it to RESTORE it. Re-evaluating
+          // `global.get $__stack_pointer` at that later point yields the callee's
+          // (already-overwritten) value → `global.set(global.get)` self-assign,
+          // which never restores the shadow stack and corrupts every later
+          // allocation. Spill the value into a fresh temp AT ITS ORIGINAL
+          // POSITION and read it back — exactly what the source's own local did —
+          // so evaluation order is preserved. (A later CoalesceLocals/Vacuum pass
+          // elides the temp where it turns out to be reorder-safe.)
+          const val = exprs[i];
+          const tmp = locals.length;
+          locals.push({ type: val.type as ValType });
+          exprs[i] = makeLocalSet(tmp, val);
+          return makeLocalGet(tmp, val.type as ValType);
         }
       }
       return makeNop();
