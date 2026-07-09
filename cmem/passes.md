@@ -210,12 +210,22 @@ rewrite).
   direct callers). **KNOWN GAP — nested-suspension over-use (still OPEN):** a goroutine that suspends
   *inside* another suspending goroutine (`inner.Wait()` within an outer goroutine) still traps
   `memory access out of bounds` at exactly linear-memory end, on both the old all-locals AND the new
-  liveness-minimized saving (so it is NOT the save-set size — per-frame saved bytes now MATCH
-  `wasm-opt`; `-stack-size` doesn't help; MORE initial memory does). It's a per-unwind/rewind-cycle
-  asyncify-stack over-use/leak that only accumulates over nested's many cycles (flat concurrency of
-  any width is fine). Pre-exists the liveness work; needs dedicated runtime debugging (instrument
-  stackPos across cycles vs `wasm-opt`). See wasmtk `cmem/polyglot-producers.md` § "KNOWN GAP —
-  NESTED SUSPENSION". **Module RUNNABLE:** e2e tests drive a real
+  liveness-minimized saving. **CONCLUSIVELY DIAGNOSED (2026-07-09) — it is NOT an asyncify save/restore
+  bug.** A runtime trace of `stackPos` at every control-function call shows our instrumentation
+  behaves **identically to `wasm-opt --asyncify`**: same 13 concurrent goroutine buffers at the same
+  addresses, individual buffers nowhere near full (used ≤116 B of a 64 KB buffer; ours uses LESS than
+  wasm-opt). The trap is a **memory-grow ORDERING** bug in the instrumented OUTPUT: nested spawns 13
+  concurrent goroutines, TinyGo mallocs a ~64 KB asyncify buffer per goroutine (marching up to ~14
+  pages), and ours ACCESSES a freshly-allocated buffer at the current memory boundary **just before**
+  TinyGo grows memory — faulting at exactly the current linear-memory end (0x80000 at 8 pages;
+  `-stack-size=8KB` shrinks buffers and the fault MOVES to 0x20000 at 2 pages — always the current
+  end, at any buffer size). `wasm-opt`'s output grows first, so it never faults; ours needs the whole
+  working set pre-allocated (≥15 pages initial for nested). The save/restore, call-index accounting,
+  and instrument SET are all correct and match `wasm-opt`; `-Oz` doesn't change it; the pre-liveness
+  all-locals version faulted identically. Root cause of the grow-vs-access ordering flip is a further
+  layer (instruction-level diff of the alloc/`memory.grow` path, `def #41`, which is uninstrumented
+  and byte-identical in both — so a CALLER's ordering differs). Not fixed. See wasmtk
+  `cmem/polyglot-producers.md` § "KNOWN GAP — NESTED SUSPENSION". **Module RUNNABLE:** e2e tests drive a real
   unwind/rewind — `compute(10)+get()→42 == 52`, loop `sum(3),get→7 == 21` with locals surviving —
   and **differentially match `wasm-opt --asyncify`**.
 - **Stage 5 ✅** (commit `62f0fb0`) — `AsyncifyPass.run` wired to the full pipeline, `registerPass`,
