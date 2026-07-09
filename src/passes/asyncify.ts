@@ -75,6 +75,7 @@ import {
 import type { Local, WasmFunction, WasmImport, WasmModule } from "../ir/module.ts";
 import { None, type Type, ValType } from "../ir/types.ts";
 import { mapExpression, walkExpression } from "../ir/walk.ts";
+import { buildCFG, computeLiveness } from "./cfg.ts";
 import { buildCallResultTypes, flattenFunction } from "./flatten.ts";
 import { type Pass, type PassOptions, registerPass } from "./pass.ts";
 
@@ -736,6 +737,14 @@ export interface FlowCtx {
   callIndex: { n: number };
   /** Fake globals created per call-result type (name keyed by type). */
   fakeGlobals: Map<Type, string>;
+  /**
+   * Locals THIS flow pass adds (the two-arm-`if` condition temps) that live
+   * across a suspend and therefore MUST be saved. Liveness on the pre-flow body
+   * can't see them, so flow collects them here for {@link localsInstrumentFunction}.
+   * Optional so flow-only callers/tests that don't run locals-instrumentation
+   * (and thus don't need the save set) can omit it.
+   */
+  savedCondTemps?: Set<number>;
 }
 
 /** `i32.eq($__asyncify_state, value)`. */
@@ -886,6 +895,7 @@ function processFlow(curr: Expression, ctx: FlowCtx): Expression {
       const newIfFalse = processFlow(curr.ifFalse, ctx);
       const condTemp = ctx.func.locals.length;
       ctx.func.locals.push({ type: ValType.I32 });
+      ctx.savedCondTemps?.add(condTemp);
       const pre = makeMaybeSkip(makeLocalSet(condTemp, curr.condition));
       const if1 = makeIf(
         makeBinary(
@@ -948,6 +958,77 @@ export function materializeFakeGlobals(module: WasmModule, fakeGlobals: Map<Type
   for (const [type, name] of fakeGlobals) {
     module.globals.push({ name, type: type as ValType, mutable: true, init: makeZero(type) });
   }
+}
+
+// ---------------------------------------------------------------------------
+// Relevant-locals analysis (mirror Asyncify.cpp's LivenessWalker / relevant set)
+// ---------------------------------------------------------------------------
+
+/** True if this single call node can start an unwind/rewind. */
+function callChangesState(
+  call: Expression,
+  canChangeState: Map<string, boolean>,
+  canIndirect: boolean,
+  funcName: string,
+  addedFromList: Set<string>,
+): boolean {
+  if (call.kind === ExpressionKind.Call) {
+    return canChangeState.get((call as CallExpr).target) === true;
+  }
+  if (call.kind === ExpressionKind.CallIndirect) {
+    return canIndirect || addedFromList.has(funcName);
+  }
+  return false;
+}
+
+/**
+ * The set of local indices that must be saved/restored across a suspend: a local
+ * is relevant iff it is LIVE just after some state-changing call (its value is
+ * needed once the function rewinds and resumes past that call). Mirrors upstream
+ * Binaryen's asyncify liveness — saving only this set instead of every local
+ * keeps coroutine frames small (large frames overflow the fixed asyncify stack
+ * TinyGo sizes for the live-only set, e.g. on deep nested-goroutine chains).
+ *
+ * Computed on the FLATTENED body (before flow adds its condition temps); flow's
+ * temps are folded in separately by the caller. Uses the CFG's per-block `end`
+ * (live-out) plus a backward point-wise walk to read liveness at each call.
+ */
+export function computeRelevantLocals(
+  func: WasmFunction,
+  canChangeState: Map<string, boolean>,
+  canIndirect: boolean,
+  addedFromList: Set<string>,
+): Set<number> {
+  const relevant = new Set<number>();
+  const cfg = buildCFG(func.body);
+  computeLiveness(cfg);
+  for (const block of cfg.blocks) {
+    if (block.callPoints.length === 0) continue;
+    // Group state-changing call points by their action position `pos`.
+    const posSet = new Set<number>();
+    for (const cp of block.callPoints) {
+      if (callChangesState(cp.call, canChangeState, canIndirect, func.name, addedFromList)) {
+        posSet.add(cp.pos);
+      }
+    }
+    if (posSet.size === 0) continue;
+    // Backward walk: `live` starts at block.end and, after processing action[i],
+    // holds the locals live just BEFORE action[i]. Live just AFTER a call at
+    // position `pos` == live before action[pos]; a call at pos === actions.length
+    // sits just before block.end.
+    const live = new Set<number>(block.end);
+    const snapshot = (pos: number): void => {
+      if (posSet.has(pos)) for (const l of live) relevant.add(l);
+    };
+    snapshot(block.actions.length);
+    for (let i = block.actions.length - 1; i >= 0; i--) {
+      const a = block.actions[i];
+      if (a.kind === "get") live.add(a.index);
+      else live.delete(a.index); // set / tee: defined here, not live before
+      snapshot(i);
+    }
+  }
+  return relevant;
 }
 
 // ---------------------------------------------------------------------------
@@ -1150,12 +1231,22 @@ function makeLocalSaving(func: WasmFunction, saved: number[]): Expression {
  *
  * @param func - The function, already flattened (3a) and flow-instrumented (3b).
  * @param fakeGlobals - The flow context's fake-global map (type → global name).
+ * @param savedLocals - Local indices to save/restore across a suspend (the
+ *   liveness-minimized "relevant" set from {@link computeRelevantLocals} unioned
+ *   with flow's condition temps). Omit to fall back to saving EVERY original
+ *   local (correct but larger frames — kept for direct callers/tests).
  */
-export function localsInstrumentFunction(func: WasmFunction, fakeGlobals: Map<Type, string>): void {
-  // Locals to save/restore = everything present before this stage adds temps.
+export function localsInstrumentFunction(
+  func: WasmFunction,
+  fakeGlobals: Map<Type, string>,
+  savedLocals?: Iterable<number>,
+): void {
+  // Locals to save/restore. Prefer the caller's liveness-minimized set; else
+  // fall back to every local present before this stage adds its own temps.
   const numOriginalLocals = func.locals.length;
-  const saved: number[] = [];
-  for (let i = 0; i < numOriginalLocals; i++) saved.push(i);
+  const saved: number[] = savedLocals !== undefined
+    ? [...new Set(savedLocals)].filter((i) => i >= 0 && i < numOriginalLocals).sort((a, b) => a - b)
+    : Array.from({ length: numOriginalLocals }, (_v, i) => i);
 
   const fakeNameToType = new Map<string, Type>();
   for (const [type, name] of fakeGlobals) fakeNameToType.set(name, type);
@@ -1229,6 +1320,17 @@ export class AsyncifyPass implements Pass {
       // Per instrumented function: Flat IR → flow (skip/unwind) → locals
       // (save/restore + intrinsic lowering).
       flattenFunction(func, callResultTypes);
+      // Liveness-minimized save set: locals live across a suspend, computed on
+      // the flattened body BEFORE flow adds its condition temps (which flow then
+      // records in flowCtx.savedCondTemps). Saving only these — instead of every
+      // local — keeps coroutine frames small enough to fit TinyGo's fixed
+      // asyncify stack (over-saving overflows it on deep nested-goroutine chains).
+      const relevant = computeRelevantLocals(
+        func,
+        analysis.canChangeState,
+        !opts.ignoreIndirect,
+        analysis.addedFromList,
+      );
       const flowCtx: FlowCtx = {
         func,
         canChangeState: analysis.canChangeState,
@@ -1236,9 +1338,10 @@ export class AsyncifyPass implements Pass {
         addedFromList: analysis.addedFromList,
         callIndex: { n: 0 },
         fakeGlobals: new Map(),
+        savedCondTemps: new Set(),
       };
       flowInstrumentFunction(func, flowCtx);
-      localsInstrumentFunction(func, flowCtx.fakeGlobals);
+      localsInstrumentFunction(func, flowCtx.fakeGlobals, [...relevant, ...flowCtx.savedCondTemps]);
     }
 
     // Globals + the 5 control functions (exported in host-driven mode; internal

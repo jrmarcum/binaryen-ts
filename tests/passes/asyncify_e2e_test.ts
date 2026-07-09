@@ -28,6 +28,7 @@ import {
   analyzeModule,
   type FlowCtx,
   flowInstrumentFunction,
+  computeRelevantLocals,
   localsInstrumentFunction,
   parseAsyncifyOptions,
   synthesizeRuntimeSupport,
@@ -47,6 +48,12 @@ function asyncify(mod: WasmModule, passArgs: Record<string, string> = {}): WasmM
   for (const func of mod.functions) {
     if (!analysis.instrumentedFuncs.has(func.name)) continue;
     flattenFunction(func, callResultTypes);
+    const relevant = computeRelevantLocals(
+      func,
+      analysis.canChangeState,
+      !opts.ignoreIndirect,
+      analysis.addedFromList,
+    );
     const flowCtx: FlowCtx = {
       func,
       canChangeState: analysis.canChangeState,
@@ -54,9 +61,10 @@ function asyncify(mod: WasmModule, passArgs: Record<string, string> = {}): WasmM
       addedFromList: analysis.addedFromList,
       callIndex: { n: 0 },
       fakeGlobals: new Map(),
+      savedCondTemps: new Set(),
     };
     flowInstrumentFunction(func, flowCtx);
-    localsInstrumentFunction(func, flowCtx.fakeGlobals);
+    localsInstrumentFunction(func, flowCtx.fakeGlobals, [...relevant, ...flowCtx.savedCondTemps]);
   }
   synthesizeRuntimeSupport(mod, opts);
   return mod;

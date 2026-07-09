@@ -197,9 +197,25 @@ rewrite).
   `[ if(Rewinding) restore-locals; unwindIndex = block $__asyncify_unwind [body,
   barrier]; push-call-index; save-locals; zero-ret ]`.
   Stack ops via `$__asyncify_data[stackPos]` (`makeGetStackPos`/`makeIncStackPos`), STACK_ALIGN=4.
-  **Simplification vs upstream:** saves/restores ALL original locals (params + user + flatten/flow
-  temps) rather than a liveness-minimized set — correct (dead local restored then overwritten), just
-  more stack/frame; liveness is a future opt. **Module now RUNNABLE:** e2e tests drive a real
+  **Liveness-minimized local saving ✅ (2026-07-09):** rather than saving/restoring EVERY original
+  local, the pass now saves only the **relevant** set — locals LIVE just after some state-changing
+  call (needed once the function rewinds and resumes past it), computed by `computeRelevantLocals`
+  (a backward point-wise walk over the flattened body's CFG) ∪ flow's two-arm-`if` condition temps
+  (collected in `FlowCtx.savedCondTemps`). This mirrors upstream Binaryen and keeps coroutine frames
+  small — output is now **smaller than `wasm-opt --asyncify`** on real TinyGo goroutine modules
+  (nested case: 27 KB vs 29 KB) with the e2e differential oracle still matching. Support: a new
+  ADDITIVE `BasicBlock.callPoints` field in `cfg.ts` records each call's action-position (the get/set
+  liveness consumers — CoalesceLocals, `computeLiveness` — ignore it, so no regression; full suite
+  403/403). `localsInstrumentFunction` takes an optional `savedLocals` (falls back to all-locals for
+  direct callers). **KNOWN GAP — nested-suspension over-use (still OPEN):** a goroutine that suspends
+  *inside* another suspending goroutine (`inner.Wait()` within an outer goroutine) still traps
+  `memory access out of bounds` at exactly linear-memory end, on both the old all-locals AND the new
+  liveness-minimized saving (so it is NOT the save-set size — per-frame saved bytes now MATCH
+  `wasm-opt`; `-stack-size` doesn't help; MORE initial memory does). It's a per-unwind/rewind-cycle
+  asyncify-stack over-use/leak that only accumulates over nested's many cycles (flat concurrency of
+  any width is fine). Pre-exists the liveness work; needs dedicated runtime debugging (instrument
+  stackPos across cycles vs `wasm-opt`). See wasmtk `cmem/polyglot-producers.md` § "KNOWN GAP —
+  NESTED SUSPENSION". **Module RUNNABLE:** e2e tests drive a real
   unwind/rewind — `compute(10)+get()→42 == 52`, loop `sum(3),get→7 == 21` with locals surviving —
   and **differentially match `wasm-opt --asyncify`**.
 - **Stage 5 ✅** (commit `62f0fb0`) — `AsyncifyPass.run` wired to the full pipeline, `registerPass`,

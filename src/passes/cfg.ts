@@ -73,6 +73,15 @@ export interface BasicBlock {
   start: Set<number>;
   /** Locals live on exit. Set by {@link computeLiveness}. */
   end: Set<number>;
+  /**
+   * Call sites within this block, in execution order. `pos` is the number of
+   * {@link actions} recorded before the call executes (so the locals live
+   * *just after* the call = the live set reached by processing `actions[pos..]`
+   * backward from {@link end}). Purely additive metadata — the get/set liveness
+   * consumers (CoalesceLocals, {@link computeLiveness}) ignore it. Used by the
+   * Asyncify pass to compute the locals that must be saved across a suspend.
+   */
+  callPoints: Array<{ pos: number; call: Expression }>;
 }
 
 /** Result of {@link buildCFG} — entry plus the dense block list. */
@@ -152,6 +161,7 @@ class _CFGBuilder {
       out: [],
       start: new Set(),
       end: new Set(),
+      callPoints: [],
     };
     this.blocks.push(b);
     return b;
@@ -387,6 +397,7 @@ class _CFGBuilder {
       case ExpressionKind.CallIndirect: {
         for (const op of e.operands) this.visit(op);
         this.visit(e.target);
+        if (this.current) this.current.callPoints.push({ pos: this.current.actions.length, call: e });
         this.throwingCallContinuation(); // may throw → enclosing handler (if in a try)
         return;
       }
@@ -397,6 +408,7 @@ class _CFGBuilder {
       // -------------------------------------------------------------------
       case ExpressionKind.Call: {
         for (const op of e.operands) this.visit(op);
+        if (this.current) this.current.callPoints.push({ pos: this.current.actions.length, call: e });
         this.throwingCallContinuation();
         return;
       }
