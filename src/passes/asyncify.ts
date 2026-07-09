@@ -1341,7 +1341,7 @@ export class AsyncifyPass implements Pass {
         savedCondTemps: new Set(),
       };
       flowInstrumentFunction(func, flowCtx);
-      localsInstrumentFunction(func, flowCtx.fakeGlobals, [...relevant, ...flowCtx.savedCondTemps]);
+      localsInstrumentFunction(func, flowCtx.fakeGlobals, [...relevant, ...(flowCtx.savedCondTemps ?? [])]);
     }
 
     // Globals + the 5 control functions (exported in host-driven mode; internal

@@ -64,7 +64,7 @@ function asyncify(mod: WasmModule, passArgs: Record<string, string> = {}): WasmM
       savedCondTemps: new Set(),
     };
     flowInstrumentFunction(func, flowCtx);
-    localsInstrumentFunction(func, flowCtx.fakeGlobals, [...relevant, ...flowCtx.savedCondTemps]);
+    localsInstrumentFunction(func, flowCtx.fakeGlobals, [...relevant, ...(flowCtx.savedCondTemps ?? [])]);
   }
   synthesizeRuntimeSupport(mod, opts);
   return mod;
