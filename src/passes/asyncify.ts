@@ -17,27 +17,27 @@
  * A new i32 global `__asyncify_state` is added: 0 = normal, 1 = unwinding,
  * 2 = rewinding. A second i32 global `__asyncify_data` points, while
  * unwinding/rewinding, to a `{ i32 stackPos; i32 stackEnd; }` structure (i64
- * fields for wasm64). Five control functions are created and exported:
+ * fields for wasm64). Five control functions are created:
  * `asyncify_start_unwind(data)`, `asyncify_stop_unwind()`,
  * `asyncify_start_rewind(data)`, `asyncify_stop_rewind()`, `asyncify_get_state()`.
  *
- * ## Incremental status
+ * ## Status — COMPLETE and registered
  *
- * This pass is being ported in stages:
- *  - **Stage 1 (this file, current):** ABI constants, option parsing, and the
- *    runtime-support synthesis (the 2 globals + 5 exported control functions),
- *    reproducing wasm-opt's output for those surfaces exactly. Function-body
- *    instrumentation is NOT yet applied.
- *  - Stage 2: `ModuleAnalyzer` — whole-program analysis of which functions can
- *    be on the stack during a pause and therefore need instrumenting.
- *  - Stage 3: `AsyncifyFlow` — the control-flow "skip/unwind" body transform.
- *  - Stage 4: `AsyncifyLocals` — liveness-driven local save/restore.
- *  - Stage 5: register the pass, wire `--asyncify` into the CLI, and validate
- *    end-to-end against `wasm-opt --asyncify` + a real TinyGo goroutine module.
+ * All stages are implemented and the pass is registered as `"Asyncify"` (opt-in;
+ * never in the `-Oz` default pipeline). The full pipeline runs per instrumented
+ * function — Flat IR → flow (skip/unwind) → locals (save/restore + intrinsic
+ * lowering) — plus whole-program analysis (`analyzeModule`) and runtime-support
+ * synthesis (`synthesizeRuntimeSupport`). Validated end-to-end against
+ * `wasm-opt --asyncify` v130.
  *
- * Until Stage 4 lands the pass is intentionally NOT registered with the pass
- * registry (so nothing can invoke a half-instrumented transform); it is used
- * directly by its own tests via {@link AsyncifyPass} / {@link synthesizeRuntimeSupport}.
+ * Two modes, both supported:
+ *  - **Host-driven** (default): the 5 control functions are EXPORTED for a host
+ *    to drive the unwind/rewind (e.g. Emscripten-style async).
+ *  - **In-wasm asyncify-import** (`resolveAsyncifyImports`): a module that
+ *    IMPORTS `asyncify.start_unwind`/`stop_unwind`/`start_rewind`/`stop_rewind`
+ *    and calls them to drive its OWN coroutines — **TinyGo goroutines**. The
+ *    imports are removed and their calls wired to the (internal, un-exported)
+ *    control functions. Validated on real TinyGo goroutine output.
  *
  * @license MIT
  */
