@@ -244,6 +244,7 @@ function makeStopBody(): Expression {
 export function synthesizeRuntimeSupport(
   module: WasmModule,
   options: AsyncifyOptions,
+  importMode = false,
 ): void {
   if (module.hasMemory64) {
     throw new Error(
@@ -324,27 +325,50 @@ export function synthesizeRuntimeSupport(
 
   const dataParam: Local[] = [{ type: ValType.I32 }];
 
-  // The five control functions, in upstream order.
-  addExportedFunction(module, ASYNCIFY_START_UNWIND, dataParam, [], makeStartBody(State.Unwinding));
-  addExportedFunction(module, ASYNCIFY_STOP_UNWIND, [], [], makeStopBody());
-  addExportedFunction(module, ASYNCIFY_START_REWIND, dataParam, [], makeStartBody(State.Rewinding));
-  addExportedFunction(module, ASYNCIFY_STOP_REWIND, [], [], makeStopBody());
-  addExportedFunction(
+  // The five control functions, in upstream order. In the in-wasm asyncify-import
+  // mode the module calls them internally, so they are added un-exported; in the
+  // host-driven mode they are exported for the host to drive.
+  const exported = !importMode;
+  addControlFunction(
+    module,
+    ASYNCIFY_START_UNWIND,
+    dataParam,
+    [],
+    makeStartBody(State.Unwinding),
+    exported,
+  );
+  addControlFunction(module, ASYNCIFY_STOP_UNWIND, [], [], makeStopBody(), exported);
+  addControlFunction(
+    module,
+    ASYNCIFY_START_REWIND,
+    dataParam,
+    [],
+    makeStartBody(State.Rewinding),
+    exported,
+  );
+  addControlFunction(module, ASYNCIFY_STOP_REWIND, [], [], makeStopBody(), exported);
+  addControlFunction(
     module,
     ASYNCIFY_GET_STATE,
     [],
     [ValType.I32],
     makeGlobalGet(ASYNCIFY_STATE, ValType.I32),
+    exported,
   );
 }
 
-/** Add one function (internal name `$<hostName>`) and export it as `hostName`. */
-function addExportedFunction(
+/**
+ * Add one control function (internal name `$<hostName>`). When `exported`, also
+ * export it as `hostName` (host-driven mode); otherwise it stays internal, with
+ * its call sites being the redirected in-wasm asyncify-import calls.
+ */
+function addControlFunction(
   module: WasmModule,
   hostName: string,
   params: Local[],
   results: ValType[],
   body: Expression,
+  exported: boolean,
 ): void {
   const internalName = `$${hostName}`;
   module.functions.push({
@@ -354,7 +378,7 @@ function addExportedFunction(
     locals: [...params],
     body,
   });
-  module.exports.push({ name: hostName, value: internalName, kind: "function" });
+  if (exported) module.exports.push({ name: hostName, value: internalName, kind: "function" });
 }
 
 // ---------------------------------------------------------------------------
@@ -388,6 +412,81 @@ export interface AnalysisResult {
 const ASYNCIFY_IMPORT_MODULE = "asyncify";
 
 /**
+ * In-wasm asyncify-import mode (Asyncify.cpp 177-199, 582-712): a module — e.g.
+ * TinyGo's goroutine scheduler — may import control functions from the
+ * "asyncify" module and call them to drive its OWN unwind/rewind. Maps each
+ * import base name to the INTERNAL name of the control function this pass
+ * synthesizes. `wasm-opt --asyncify` removes those imports and redirects every
+ * call to them to the synthesized control function; this port now does the same.
+ */
+const ASYNCIFY_IMPORT_TO_CONTROL: Record<string, string> = {
+  start_unwind: `$${ASYNCIFY_START_UNWIND}`,
+  stop_unwind: `$${ASYNCIFY_STOP_UNWIND}`,
+  start_rewind: `$${ASYNCIFY_START_REWIND}`,
+  stop_rewind: `$${ASYNCIFY_STOP_REWIND}`,
+  get_state: `$${ASYNCIFY_GET_STATE}`,
+};
+
+/**
+ * Control-function internal names whose CALL begins an unwind/rewind — the
+ * caller "can change state" and is the top of the runtime (Asyncify.cpp
+ * 641-650: START_UNWIND / STOP_REWIND). Such a function is NOT itself
+ * instrumented (`needsInstrumentation = canChangeState && !isTopMostRuntime`).
+ */
+const ASYNCIFY_STATE_STARTERS = new Set([`$${ASYNCIFY_START_UNWIND}`, `$${ASYNCIFY_STOP_REWIND}`]);
+/**
+ * Control-function internal names whose CALL marks the bottom of the runtime
+ * (the resume boundary — STOP_UNWIND / START_REWIND); such a function does NOT
+ * change state and is not instrumented.
+ */
+const ASYNCIFY_RUNTIME_BOTTOM = new Set([`$${ASYNCIFY_STOP_UNWIND}`, `$${ASYNCIFY_START_REWIND}`]);
+
+/**
+ * Resolve in-wasm `asyncify.*` control imports. If the module imports control
+ * functions from the "asyncify" module, redirect every call to them to the
+ * (later-synthesized) internal control functions and remove the imports.
+ * Returns true iff the module was in import mode.
+ *
+ * Must run BEFORE {@link analyzeModule}. The control functions are created by
+ * {@link synthesizeRuntimeSupport} — in import mode as INTERNAL (un-exported)
+ * functions — after which the redirected call sites resolve. (Faithful to
+ * Asyncify.cpp's rename → analyze → removeImports → addFunctions sequence.)
+ */
+export function resolveAsyncifyImports(module: WasmModule): boolean {
+  const rename = new Map<string, string>();
+  for (const imp of module.imports) {
+    if (imp.kind !== "function" || imp.module !== ASYNCIFY_IMPORT_MODULE) continue;
+    const control = ASYNCIFY_IMPORT_TO_CONTROL[imp.base];
+    if (control === undefined) {
+      throw new Error(`asyncify: unidentified asyncify import "asyncify.${imp.base}".`);
+    }
+    rename.set(imp.name, control);
+  }
+  if (rename.size === 0) return false;
+
+  // Redirect every call targeting a control import to the synthesized control fn.
+  for (const func of module.functions) {
+    func.body = mapExpression(func.body, (e) => {
+      if (e.kind === ExpressionKind.Call) {
+        const c = e as CallExpr;
+        const to = rename.get(c.target);
+        if (to !== undefined) return { ...c, target: to };
+      }
+      return e;
+    });
+  }
+  // Remove the now-redirected control imports (splice in place — `imports` may be
+  // a builder-backed array, so don't reassign the property).
+  for (let i = module.imports.length - 1; i >= 0; i--) {
+    const imp = module.imports[i];
+    if (imp.kind === "function" && imp.module === ASYNCIFY_IMPORT_MODULE) {
+      module.imports.splice(i, 1);
+    }
+  }
+  return true;
+}
+
+/**
  * Translate a wildcard pattern (`*` matches any run of characters, as in the
  * upstream `String::wildcardMatch`) into an anchored RegExp and test it.
  */
@@ -414,17 +513,11 @@ export function analyzeModule(
   module: WasmModule,
   options: AsyncifyOptions,
 ): AnalysisResult {
-  // Unsupported advanced mode: in-wasm asyncify.* runtime imports.
-  const asyncifyImport = module.imports.find(
-    (i) => i.kind === "function" && i.module === ASYNCIFY_IMPORT_MODULE,
-  );
-  if (asyncifyImport) {
-    throw new Error(
-      `asyncify: importing from the "${ASYNCIFY_IMPORT_MODULE}" module ` +
-        `(in-wasm unwind/rewind runtime) is not yet supported by this port; ` +
-        `drive unwind/rewind from the host via the exported control functions.`,
-    );
-  }
+  // The in-wasm `asyncify.*` import mode is handled by `resolveAsyncifyImports`
+  // (called before this in `AsyncifyPass.run`): those imports are removed and
+  // their calls redirected to the synthesized control functions, which this
+  // scan then recognizes by internal name (ASYNCIFY_STATE_STARTERS /
+  // ASYNCIFY_RUNTIME_BOTTOM) to seed the top-/bottom-most-runtime flags.
 
   if (
     options.onlyList.length > 0 && (options.removeList.length > 0 || options.addList.length > 0)
@@ -500,16 +593,27 @@ export function analyzeModule(
     }
   }
 
+  // Functions at the runtime boundary in the in-wasm asyncify-import mode:
+  // topMost calls start_unwind/stop_rewind (begins an unwind/rewind — changes
+  // state but is NOT itself instrumented); bottomMost calls stop_unwind/
+  // start_rewind (the resume boundary — does NOT change state).
+  const topMost = new Set<string>();
+  const bottomMost = new Set<string>();
+
   // Initial scan of defined functions: build the call graph + seed from
   // indirect calls (direct-call-driven state change is added by propagation).
   for (const func of module.functions) {
     let indirect = false;
+    let isTop = false;
+    let isBottom = false;
     walkExpression(func.body, (e: Expression) => {
       if (e.kind === ExpressionKind.Call) {
         const call = e as CallExpr;
         if (call.isReturn) {
           throw new Error("asyncify: tail calls (return_call) are not yet supported.");
         }
+        if (ASYNCIFY_STATE_STARTERS.has(call.target)) isTop = true;
+        else if (ASYNCIFY_RUNTIME_BOTTOM.has(call.target)) isBottom = true;
         addEdge(call.target, func.name);
       } else if (e.kind === ExpressionKind.CallIndirect) {
         if ((e as CallIndirectExpr).isReturn) {
@@ -518,7 +622,14 @@ export function analyzeModule(
         indirect = true;
       }
     });
-    canChangeState.set(func.name, indirect && canIndirect);
+    if (isTop) topMost.add(func.name);
+    // Seed: a topMost func changes state (so its callers propagate); a bottomMost
+    // func does NOT (the resume boundary), overriding any indirect seeding.
+    canChangeState.set(func.name, isTop || (indirect && canIndirect));
+    if (isBottom) {
+      bottomMost.add(func.name);
+      canChangeState.set(func.name, false);
+    }
   }
 
   // remove-list: assumed not to change state (and a barrier to propagation).
@@ -577,11 +688,12 @@ export function analyzeModule(
   // added functions are instrumented but do not pull in their callers.
   if (!options.propagateAddList) applyAddList();
 
-  // needsInstrumentation(func) = canChangeState && !isTopMostRuntime. We reject
-  // the asyncify.* import mode above, so isTopMostRuntime is never set.
+  // needsInstrumentation(func) = canChangeState && !isTopMostRuntime
+  // (Asyncify.cpp 802-805): a top-of-runtime function begins the unwind/rewind
+  // and must not itself be instrumented.
   const instrumentedFuncs = new Set<string>();
   for (const func of module.functions) {
-    if (canChangeState.get(func.name)) instrumentedFuncs.add(func.name);
+    if (canChangeState.get(func.name) && !topMost.has(func.name)) instrumentedFuncs.add(func.name);
   }
 
   return { instrumentedFuncs, canChangeState, addedFromList };
@@ -1102,6 +1214,11 @@ export class AsyncifyPass implements Pass {
 
   run(module: WasmModule, options: PassOptions): void {
     const opts = parseAsyncifyOptions(options.passArgs);
+    // In-wasm asyncify-import mode (e.g. TinyGo goroutines): redirect calls to
+    // the `asyncify.*` control imports to the synthesized control functions and
+    // remove the imports. Must run before analysis so the redirected call
+    // targets seed the top-/bottom-most-runtime flags.
+    const importMode = resolveAsyncifyImports(module);
     // Analyze BEFORE any transform, so the newly-added runtime-support control
     // functions are never themselves considered for instrumentation.
     const analysis = analyzeModule(module, opts);
@@ -1124,8 +1241,9 @@ export class AsyncifyPass implements Pass {
       localsInstrumentFunction(func, flowCtx.fakeGlobals);
     }
 
-    // Globals + the 5 exported control functions.
-    synthesizeRuntimeSupport(module, opts);
+    // Globals + the 5 control functions (exported in host-driven mode; internal
+    // in the in-wasm asyncify-import mode).
+    synthesizeRuntimeSupport(module, opts, importMode);
   }
 }
 

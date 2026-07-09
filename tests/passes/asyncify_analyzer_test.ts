@@ -18,7 +18,11 @@
 import { assert, assertEquals } from "@std/assert";
 
 import { parseWat } from "../../src/parser/wat-parser.ts";
-import { analyzeModule, parseAsyncifyOptions } from "../../src/passes/asyncify.ts";
+import {
+  analyzeModule,
+  parseAsyncifyOptions,
+  resolveAsyncifyImports,
+} from "../../src/passes/asyncify.ts";
 
 // ---------------------------------------------------------------------------
 // Differential harness
@@ -160,18 +164,31 @@ Deno.test("analyzeModule — only-list restricts to exactly the listed functions
   assertEquals(s, new Set(["a"]));
 });
 
-Deno.test("analyzeModule — rejects the in-wasm asyncify.* import mode", () => {
+Deno.test("resolveAsyncifyImports — in-wasm asyncify.* import mode: topMost excluded, callers instrumented", () => {
+  // `$park` calls asyncify.start_unwind (top of the runtime — must NOT be
+  // instrumented); `$worker`/`$main` transitively call it and MUST be.
   const wat = `(module
     (import "asyncify" "start_unwind" (func $su (param i32)))
     (memory 1)
-    (func $foo (call $su (i32.const 0))))`;
-  let threw = false;
-  try {
-    analyzeModule(parseWat(wat), parseAsyncifyOptions({}));
-  } catch {
-    threw = true;
-  }
-  assert(threw, "expected analyzeModule to reject asyncify.* imports");
+    (func $park (call $su (i32.const 0)))
+    (func $worker (call $park))
+    (func $main (call $worker)))`;
+  const mod = parseWat(wat);
+  const importMode = resolveAsyncifyImports(mod);
+  assert(importMode, "should detect the in-wasm asyncify-import mode");
+  assert(
+    !mod.imports.some((i) => i.kind === "function" && i.module === "asyncify"),
+    "the asyncify.* import must be removed",
+  );
+  const res = analyzeModule(mod, parseAsyncifyOptions({}));
+  assert(!res.instrumentedFuncs.has("$park"), "park (topMost runtime) must NOT be instrumented");
+  assert(res.instrumentedFuncs.has("$worker"), "worker (calls park) must be instrumented");
+  assert(res.instrumentedFuncs.has("$main"), "main (transitive) must be instrumented");
+});
+
+Deno.test("resolveAsyncifyImports — returns false and no-ops when there are no asyncify imports", () => {
+  const mod = parseWat(TRANSITIVE);
+  assert(!resolveAsyncifyImports(mod), "no asyncify imports → host-driven mode");
 });
 
 // ---------------------------------------------------------------------------

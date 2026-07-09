@@ -155,12 +155,12 @@ rewrite).
   which functions can change state (transitive over the call graph; imports **default-can-unwind**
   unless `asyncify-imports`/`ignore-imports`; indirect calls default-can-unwind unless
   `ignore-indirect`; `add`/`remove`/`only` lists with backward propagation). Ported from
-  `Asyncify.cpp` 538-808. The in-wasm `asyncify.*` import runtime mode is **rejected with a clear
-  error** (not mis-analyzed) — TinyGo/host-driven pausing don't use it. **Differentially validated**
-  vs `wasm-opt --asyncify
-  --pass-arg=asyncify-verbose` v130 (parse the "[asyncify] X can change
-  the state" lines): all 6 cases match. **10 tests** in `tests/passes/asyncify_analyzer_test.ts`;
-  full suite **358/358**.
+  `Asyncify.cpp` 538-808. **The in-wasm `asyncify.*` import runtime mode is now SUPPORTED
+  (2026-07-08)** — see "In-wasm asyncify-import mode" below. **Differentially validated** vs
+  `wasm-opt --asyncify
+  --pass-arg=asyncify-verbose` v130 (parse the "[asyncify] X can change the
+  state" lines): all 6 cases match. **10 tests** in `tests/passes/asyncify_analyzer_test.ts`; full
+  suite **358/358**.
 - **Stage 3a ✅** (commit `2e30ea4`) — ported `flatten` (`src/passes/flatten.ts`, registered) from
   upstream `Flatten.cpp`. Rewrites each function into Flat IR: every value subexpr hoisted into its
   own `local.set`, operands trivial (`local.get`/const), control flow (block/if/loop) routes values
@@ -228,17 +228,44 @@ several option-parity gaps:
   (import-name → error, no-match → warning). Dead `hasIndirectCall` map removed;
   `materializeFakeGlobals` documented TEST-ONLY. +4 tests (`asyncify_test.ts`).
 
+### In-wasm asyncify-import mode ✅ (2026-07-08) — unblocks TinyGo goroutines
+
+TinyGo's goroutine scheduler compiles to a module that **imports** `asyncify.start_unwind` /
+`stop_unwind` / `start_rewind` / `stop_rewind` and calls them to drive its OWN unwind/rewind — the
+"manage everything inside wasm" mode (`Asyncify.cpp` 177-199, 582-712). `wasm-opt --asyncify`
+removes those imports and redirects the calls to the synthesized control functions; **this port now
+does the same** (previously it rejected the mode). Implementation (`asyncify.ts`):
+
+- **`resolveAsyncifyImports(module)`** (runs first in `run()`): maps each `asyncify.*` import to the
+  internal control-fn name (`$asyncify_start_unwind` …), redirects every `Call.target` to it, and
+  removes the imports. Returns `importMode`.
+- **`analyzeModule`**: the reject is gone; the scan now recognizes the redirected control-call
+  targets — a caller of `start_unwind`/`stop_rewind` is `topMost` (`canChangeState` seed but NOT
+  instrumented, `needsInstrumentation = canChangeState && !topMost`); a caller of
+  `stop_unwind`/`start_rewind` is `bottomMost` (`canChangeState=false`, the resume boundary).
+- **`synthesizeRuntimeSupport(module, opts, importMode)`**: in import mode the 5 control functions
+  are added **internal (un-exported)** via `addControlFunction`; host-driven mode still exports
+  them.
+- Flow/locals instrumentation is reused unchanged (instrumented functions call the _runtime_ funcs,
+  never the control functions directly — those are only called by the excluded topMost funcs).
+
+**Validated end-to-end on REAL TinyGo output:** a goroutine worker-pool (`go worker(...)` +
+channels) built `tinygo build -target=wasip1 -scheduler=asyncify` with a passthrough wasm-opt shim →
+the un-instrumented module → binaryen-ts Asyncify (import mode) + `-Oz` → **runs correctly
+(`sum: 30`)**. +2 tests (`asyncify_analyzer_test.ts` topMost/bottomMost; `asyncify_test.ts`
+imports-removed / control-fns-internal / validates). Suite 403/403.
+
 Known gaps / future work (none block TinyGo goroutine code): (1) **liveness-minimized local saving**
 — we save all original locals; upstream saves only the live set (smaller frames). (2) **wasm64** —
 throws a clear "not yet". (3) **EH / tuples / value-carrying branches** — flatten rejects them (out
-of scope for TinyGo). (4) the advanced **in-wasm `asyncify.*` import runtime mode** — rejected in
-`analyzeModule`. (5) **list options key on INTERNAL function names** — a binary-parsed module drops
-the name section (synthetic `$funcN`), so real-symbol lists (`--asyncify-onlylist@main`) won't match
-it and will warn; lists work against ModuleBuilder / named-WAT modules. Documented inline; needs
-name-section retention when asyncify is wired to binary-parsed input. (6) **Publish** binaryen-ts so
-wasmtk can consume the asyncify pass.
+of scope for TinyGo). (4) **list options key on INTERNAL function names** — a binary-parsed module
+drops the name section (synthetic `$funcN`), so real-symbol lists (`--asyncify-onlylist@main`) won't
+match it and will warn; lists work against ModuleBuilder / named-WAT modules. Documented inline;
+needs name-section retention when asyncify is wired to binary-parsed input. (5) **Publish**
+binaryen-ts so wasmtk can consume the import-mode pass.
 
 **Cross-project follow-up (wasmtk side, tracked in wasmtk `cmem/roadmap.md` #2):** wire this pass
-into wasmtk's `--lang=go` build to replace external `wasm-opt --asyncify`, with a real TinyGo-build
-goroutine e2e. binaryen-ts's job (the pass itself) is done; that integration lives in wasmtk.
+into wasmtk's `--lang=go` build to replace external `wasm-opt --asyncify` — the shim delegates
+`--asyncify -Oz` to binaryen-ts and `-scheduler=none` is dropped — with a real TinyGo-build
+goroutine e2e. The pass itself is done + validated; that integration lives in wasmtk.
 </content>

@@ -222,6 +222,51 @@ Deno.test("Asyncify Stage 1 — import-globals imports the two globals instead o
   );
 });
 
+Deno.test("Asyncify — in-wasm asyncify.* import mode: imports removed, control fns internal, validates", async () => {
+  // Mimics TinyGo's goroutine shape: the scheduler imports asyncify.* and calls
+  // them internally; `wasm-opt --asyncify` (and now this pass) removes those
+  // imports and wires the calls to the synthesized control functions.
+  const wat = `(module
+    (import "asyncify" "start_unwind" (func $su (param i32)))
+    (import "asyncify" "stop_unwind" (func $stu))
+    (import "asyncify" "start_rewind" (func $sr (param i32)))
+    (import "asyncify" "stop_rewind" (func $str))
+    (memory 1)
+    (global $buf (mut i32) (i32.const 16))
+    (func $park (call $su (global.get $buf)))
+    (func $worker (result i32) (call $park) (i32.const 42))
+    (func $main (export "main") (result i32) (call $worker)))`;
+  const { parseWat } = await import("../../src/parser/wat-parser.ts");
+  const m = parseWat(wat);
+  new AsyncifyPass().run(m, {
+    optimizeLevel: 2,
+    shrinkLevel: 0,
+    debugInfo: false,
+    closedWorld: false,
+    passArgs: {},
+    partialInliningIfs: 0,
+  });
+
+  // All asyncify.* imports are gone.
+  assert(
+    !m.imports.some((i) => i.kind === "function" && i.module === "asyncify"),
+    "asyncify.* imports must be removed",
+  );
+  // The control functions exist internally, keyed by internal name.
+  const fnNames = new Set(m.functions.map((f) => f.name));
+  assert(fnNames.has("$" + ASYNCIFY_START_UNWIND), "control fn start_unwind must be defined");
+  assert(fnNames.has("$" + ASYNCIFY_STOP_REWIND), "control fn stop_rewind must be defined");
+  // Import mode → the control functions are NOT exported (module drives itself).
+  const exportNames = new Set(m.exports.filter((e) => e.kind === "function").map((e) => e.name));
+  assert(!exportNames.has(ASYNCIFY_START_UNWIND), "import mode must not export the control fns");
+  assert(exportNames.has("main"), "the module's own export is preserved");
+  // The transformed module validates.
+  assert(
+    WebAssembly.validate(encodeWasm(m) as BufferSource),
+    "asyncified import-mode module must validate",
+  );
+});
+
 Deno.test("Asyncify Stage 1 — rejects multi-memory modules", () => {
   const m = moduleWithImport();
   m.memories.push({ name: "$mem2", initial: 1, max: null, shared: false, is64: false });
