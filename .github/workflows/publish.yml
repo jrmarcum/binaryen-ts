@@ -62,6 +62,18 @@ jobs:
       - name: Test
         run: deno task test
 
+      # Provenance requires a GitHub OIDC token. `deno publish` also AUTHENTICATES via
+      # OIDC when no token is supplied, so an unavailable token is not merely a lost
+      # attestation -- it fails the publish outright. This step names that cause instead
+      # of leaving `exit code 1`.
+      - name: Check OIDC availability
+        run: |
+          if [ -n "$ACTIONS_ID_TOKEN_REQUEST_URL" ] && [ -n "$ACTIONS_ID_TOKEN_REQUEST_TOKEN" ]; then
+            echo "OIDC token endpoint reachable."
+          else
+            echo "::warning::OIDC token NOT available (URL: ${ACTIONS_ID_TOKEN_REQUEST_URL:+yes}, TOKEN: ${ACTIONS_ID_TOKEN_REQUEST_TOKEN:+yes}). deno publish will fail to authenticate. Check org/enterprise Settings -> Actions -> General -> OIDC policy."
+          fi
+
       - name: Publish to JSR (with provenance)
         # `--allow-slow-types` is needed for `src/interop/binaryen-js.ts`
         # `BinaryenInterop.create`, which intentionally does `await import(path)`
