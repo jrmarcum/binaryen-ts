@@ -1,6 +1,6 @@
 {
   "name": "@jrmarcum/binaryen-ts",
-  "version": "1.5.0",
+  "version": "1.5.1",
   "license": "MIT",
   "exports": {
     ".": "./main.ts",
@@ -51,7 +51,11 @@
   "compilerOptions": {
     "strict": true,
     "noUncheckedIndexedAccess": true,
-    "lib": ["deno.ns", "esnext", "dom"]
+    "lib": [
+      "deno.ns",
+      "esnext",
+      "dom"
+    ]
   },
   "fmt": {
     "lineWidth": 100,
@@ -65,7 +69,11 @@
   },
   "lint": {
     "rules": {
-      "include": ["no-unused-vars", "no-explicit-any", "explicit-function-return-type"]
+      "include": [
+        "no-unused-vars",
+        "no-explicit-any",
+        "explicit-function-return-type"
+      ]
     },
     "exclude": [
       "upstream/",

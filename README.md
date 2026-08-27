@@ -1,5 +1,35 @@
 # binaryen-ts
 
+> ## ⚠️ This project has moved to [binaryang](https://github.com/jrmarcum/binaryang)
+>
+> **`@jrmarcum/binaryen-ts` is superseded by
+> [`@jrmarcum/binaryang`](https://jsr.io/@jrmarcum/binaryang)**, which merges `binaryen-ts` and
+> `wabt-ts` into one package. **1.5.1 is the final release here.**
+>
+> ### Migrating
+>
+> Change the package name; two subpaths also change, and everything else keeps its name.
+>
+> | was                                                                                                | now                                   |
+> | -------------------------------------------------------------------------------------------------- | ------------------------------------- |
+> | `@jrmarcum/binaryen-ts/compat`                                                                     | `@jrmarcum/binaryang/compat/binaryen` |
+> | `@jrmarcum/binaryen-ts/ir`                                                                         | `@jrmarcum/binaryang/ir/binaryen-ts`  |
+> | `./api` `./binary` `./encoder` `./passes` `./interop` `./wasm` `./wasm-runtime` `./tools/wasm-opt` | unchanged                             |
+>
+> There is deliberately **no `./ir`** in binaryang: with two IRs retained it would read as "the IR"
+> while meaning one of them, and an alias would resolve to one of the two silently.
+>
+> The CLI is now one entry point — `binaryang wasm-opt`, alongside `wat2wasm`, `wasm2wat`,
+> `wasm-validate`, `wasm-objdump`, `wasm-strip` — on Deno, Node 22.18+ and Bun 1.4+.
+>
+> See the
+> [binaryang migration guide](https://github.com/jrmarcum/binaryang#migrating-from-binaryen-ts-or-wabt-ts).
+>
+> ### Already using a pinned version?
+>
+> **Nothing breaks.** Every published version keeps resolving — JSR never deletes a version and
+> nothing here is yanked. This repository and package are archived, not withdrawn.
+
 [![JSR](https://jsr.io/badges/@jrmarcum/binaryen-ts)](https://jsr.io/@jrmarcum/binaryen-ts)
 [![JSR Score](https://jsr.io/badges/@jrmarcum/binaryen-ts/score)](https://jsr.io/@jrmarcum/binaryen-ts)
 [![CI](https://github.com/jrmarcum/binaryen-ts/actions/workflows/ci.yml/badge.svg)](https://github.com/jrmarcum/binaryen-ts/actions/workflows/ci.yml)

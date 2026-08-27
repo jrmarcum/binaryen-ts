@@ -86,7 +86,7 @@ import { main as wasmOptMain } from './src/tools/wasm-opt.ts';
  * which Node 18 does not have. Cross-runtime support is a published capability, so
  * the constant stays and the drift is closed by the bump script plus the test.
  */
-const VERSION = '1.5.0';
+const VERSION = '1.5.1';
 
 const COMMANDS: Record<string, (args: string[]) => Promise<void>> = {
   'wasm-opt': wasmOptMain,
